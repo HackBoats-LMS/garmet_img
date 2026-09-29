@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import prisma from '@/lib/prisma';
+import { syncOrderToPactERP } from '@/lib/pact-sync';
 
 export async function POST(request: Request) {
   try {
@@ -73,10 +74,21 @@ export async function POST(request: Request) {
       });
     }
 
-    // 4. Send the Order to PACT ERP (To deduct offline central stock and generate Invoice)
-    // We run this asynchronously so we can return a 200 to Shopify immediately
-    syncOrderToPactERP(order, lineItems, customer, shippingAddress).catch((err) => {
-      console.error('[PACT Sync Error] Failed to send Shopify order to PACT:', err);
+    // 4. Send the Order to PACT ERP to deduct local warehouse stock
+    const syncItems = lineItems.map((item: any) => ({
+      sku: item.sku,
+      quantity: parseInt(item.quantity, 10),
+      price: parseFloat(item.price || '0')
+    }));
+
+    syncOrderToPactERP({
+      source_channel: 'Shopify',
+      order_reference: `SHP-${order.order_number}`,
+      order_date: order.created_at || new Date().toISOString(),
+      customer_name: customer.first_name ? `${customer.first_name} ${customer.last_name || ''}` : '',
+      customer_phone: customer.phone || shippingAddress.phone || '',
+      items: syncItems,
+      total_price: parseFloat(order.total_price || '0')
     });
 
     return NextResponse.json({ status: 'success' }, { status: 200 });
@@ -85,61 +97,4 @@ export async function POST(request: Request) {
     console.error('[Shopify Webhook] Error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
-}
-
-/**
- * Helper function to send the Shopify Sale to PACT ERP's API
- */
-async function syncOrderToPactERP(order: any, lineItems: any[], customer: any, shippingAddress: any) {
-  const pactApiUrl = process.env.PACT_API_URL || 'https://api.pact-erp.com/v1/sales/invoice';
-  const pactApiToken = process.env.PACT_API_TOKEN;
-
-  if (!pactApiToken) {
-    console.warn('PACT_API_TOKEN is missing, skipping PACT sync.');
-    return;
-  }
-
-  // Build the payload as per the specifications we gave to the PACT team
-  const pactPayload = {
-    source_channel: 'Shopify',
-    order_reference: `SHOPIFY-${order.order_number}`,
-    order_date: order.created_at,
-    payment_status: 'Paid',
-    payment_method: order.gateway || 'Online',
-    customer_details: {
-      name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
-      phone: customer.phone || shippingAddress.phone || '',
-      email: customer.email || '',
-      billing_state: order.billing_address?.province || '',
-      shipping_state: shippingAddress.province || '',
-      gst_treatment: 'Consumer', // Defaulting to Consumer
-      reverse_charge: false
-    },
-    line_items: lineItems.map((item) => ({
-      sku: item.sku,
-      quantity: item.quantity,
-      unit_rate: parseFloat(item.price),
-      discount_amount: parseFloat(item.total_discount || '0'),
-      tax_percentage: 5 // Default for garments, or calculate based on Shopify tax lines
-    })),
-    shipping_charges: parseFloat(order.total_shipping_price_set?.shop_money?.amount || '0'),
-    total_invoice_value: parseFloat(order.total_price)
-  };
-
-  // Push to PACT
-  const response = await fetch(pactApiUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${pactApiToken}`
-    },
-    body: JSON.stringify(pactPayload)
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`PACT API responded with ${response.status}: ${errorText}`);
-  }
-
-  console.log(`[PACT Sync] Successfully pushed Shopify Order #${order.order_number} to PACT.`);
 }
