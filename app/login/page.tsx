@@ -263,10 +263,7 @@ export default function LoginPage() {
           </button>
 
           <p className="mt-8 text-center text-sm text-charcoal-muted">
-            Don&apos;t have an account?{' '}
-            <Link href="/signup" className="text-accent font-semibold hover:underline">
-              Create account
-            </Link>
+            This is an internal studio. Contact a super-admin for access.
           </p>
         </div>
       </div>
