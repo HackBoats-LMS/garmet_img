@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import crypto from 'crypto';
+import { syncOrderToPactERP } from '@/lib/pact-sync';
 
 // In-memory store for rate limiting (For production, use Redis/Upstash)
 const rateLimitMap = new Map<string, { count: number; lastReset: number }>();
@@ -148,6 +149,22 @@ export async function POST(request: Request) {
                         source: 'whatsapp'
                       }
                     });
+                  });
+                  
+                  // We need the product info to send to PACT, but the transaction closure means we need to query it or just use what we know.
+                  // Actually we can just fire it off:
+                  syncOrderToPactERP({
+                    source_channel: 'WhatsApp',
+                    order_reference: `WA-${Date.now()}`,
+                    order_date: new Date().toISOString(),
+                    customer_name: 'WhatsApp Customer',
+                    customer_phone: customerPhone,
+                    items: [{
+                      sku: stockCode,
+                      quantity: quantityOrdered,
+                      price: parseFloat(item.item_price || '0')
+                    }],
+                    total_price: parseFloat(item.item_price || '0') * quantityOrdered
                   });
                 }
               }
