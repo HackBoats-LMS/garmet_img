@@ -6,7 +6,7 @@ export async function POST(req: NextRequest) {
   try {
     const { imageBase64, imageUrl } = await req.json();
 
-    const geminiKey = process.env.GEMINI_API_KEY || 'AQ.Ab8RN6JtkBIlxNWcorg4KKuW4Yvoe5jZckYiNIlw7F30Ikje9A';
+    const geminiKey = process.env.GEMINI_API_KEY || 'AQ';
 
     let base64Data = '';
     let mimeType = 'image/jpeg';
