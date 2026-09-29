@@ -1,0 +1,471 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ─── ENUMS ───
+
+enum StockStatus {
+  ACTIVE
+  BILLED
+  ARCHIVED
+}
+
+enum ProductStatus {
+  ACTIVE
+  OUT_OF_STOCK
+  ARCHIVED
+  DRAFT
+}
+
+// ─── EXISTING MODELS (untouched — legacy) ───
+
+model StockItem {
+  id              String       @id @default(cuid())
+  stockCode       String       @unique
+  title           String
+  category        String       @default("saree")
+  price           Float?
+  mrp             Float?
+  rawDescription  String       @db.Text
+  status          StockStatus  @default(ACTIVE)
+  referenceImages Json         // Array of { slotId: string, url: string, notes: string }
+  poses           StockPose[]
+  whatsappCopy    String?      @db.Text
+  instagramCopy   String?      @db.Text
+  websiteCopy     String?      @db.Text
+  billedAt        DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([stockCode])
+  @@index([status])
+}
+
+model StockPose {
+  id          String    @id @default(cuid())
+  stockItemId String
+  stockItem   StockItem @relation(fields: [stockItemId], references: [id], onDelete: Cascade)
+  poseNumber  Int
+  poseName    String
+  imageUrl    String    @db.Text
+  prompt      String    @db.Text
+  createdAt   DateTime  @default(now())
+
+  @@index([stockItemId])
+}
+
+// ─── INVENTORY — CATEGORIES ───
+
+model Category {
+  id            String        @id @default(cuid())
+  name          String        @unique // e.g. "Saree", "Kurti", "Lehenga"
+  slug          String        @unique // e.g. "saree"
+  sortOrder     Int           @default(0)
+  subCategories SubCategory[]
+  products      Product[]
+  createdAt     DateTime      @default(now())
+}
+
+model SubCategory {
+  id         String    @id @default(cuid())
+  categoryId String
+  category   Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name       String    // e.g. "Silk", "Cotton", "Tussar"
+  slug       String    // e.g. "silk"
+  sortOrder  Int       @default(0)
+  products   Product[]
+  createdAt  DateTime  @default(now())
+
+  @@unique([categoryId, slug])
+  @@index([categoryId])
+}
+
+// ─── DESIGN GROUPS (one design → many stock codes) ───
+//
+// When the same physical design gets a new batch/restock, the new
+// arrival gets a NEW stock code (barcode) but is still the same
+// design. A ProductDesignGroup groups all those stock codes together.
+//
+model ProductDesignGroup {
+  id             String    @id @default(cuid())
+  designNumber   String    @unique  // e.g. "DES-2024-01" — the canonical design ID
+  title          String             // Shared design name / description
+  description    String?   @db.Text
+  coverImageUrl  String?   @db.Text
+
+  // Shared design attributes (inherited by all linked stock codes)
+  color          String?
+  clothType      String?
+  embroideryType String?
+  cutStyle       String?
+  border         String?
+  kurtaLength    String?
+  pantStyle      String?
+  tags           String[]
+
+  // Shared captions (can be overridden per-product)
+  whatsappRetail        String? @db.Text
+  whatsappWholesale     String? @db.Text
+  instagramCaption      String? @db.Text
+  facebookCaption       String? @db.Text
+  shopifyTitle          String? @db.Text
+  whatsappCatalogueTitle String? @db.Text
+
+  // All stock code entries that belong to this design
+  stockEntries   Product[]
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([designNumber])
+}
+
+// ─── INVENTORY — PRODUCTS ───
+
+model Product {
+  id               String        @id @default(cuid())
+
+  // Stock Codes (dual)
+  stockCode        String        @unique // 9+ digit barcode: "987654321"
+  friendlyCode     String?       @unique // short alias: "saree-03-red"
+
+  // Basic Details
+  title            String
+  description      String?       @db.Text
+  color            String?       // Primary colour e.g. "Deep Red"
+  tags             String[]      // Searchable tags
+
+  // ── DESIGN GROUP LINK ──
+  // When this product is a new batch of an existing design,
+  // link it here. designNumber is kept as a plain field too
+  // so ungrouped products can still carry it standalone.
+  designGroupId    String?
+  designGroup      ProductDesignGroup? @relation(fields: [designGroupId], references: [id])
+
+  // Classification
+  categoryId       String?
+  category         Category?     @relation(fields: [categoryId], references: [id])
+  subCategoryId    String?
+  subCategory      SubCategory?  @relation(fields: [subCategoryId], references: [id])
+  clothType        String?       // Fabric: "Silk", "Cotton", "Linen", "Georgette", etc.
+
+  // Pricing
+  price            Float?        // Selling price (retail)
+  mrp              Float?        // Maximum retail price
+  wholesalePrice   Float?        // WHOLESALE PRICE
+
+  // Stock Quantity
+  quantity         Int           @default(0)  // Total available
+  reservedQty      Int           @default(0)  // Locked by pending sales
+  soldQty          Int           @default(0)  // Total units sold
+
+  // Status
+  status           ProductStatus @default(ACTIVE)
+
+  // Media
+  referenceImages  Json?         // [{slotId, url, label, notes}] — uploaded swatches
+  generatedImages  Json?         // {poseId: {imageUrl, prompt}} — from AI photoshoot
+  coverImageUrl    String?       @db.Text // Thumbnail shown in list
+
+  // AI Photoshoot Link
+  linkedOrderId    String?       // CustomerOrder.id that produced generatedImages
+  aspectRatio      String?       @default("3:4")
+
+  // Platform Captions
+  captions         Json?         // {whatsapp, instagram, facebook, website}
+  websiteCopy      String?       @db.Text
+
+  // Sync / Integration
+  websiteProductId String?       // External product ID on website
+  syncedAt         DateTime?     // Last stock sync from website
+
+  // ── XLSX-MAPPED FIELDS (from Project.xlsx columns) ──
+  designNumber     String?       // DESIGN NUMBER
+  size             String?       // SIZE
+  location         String?       // LOCATION / storage shelf or rack
+  embroideryType   String?       // EMBROIDERY TYPE e.g. "Zari", "Thread", "Mirror"
+  cutStyle         String?       // CUT STYLE e.g. "A-Line", "Straight", "Anarkali"
+  border           String?       // BORDER details
+  kurtaLength      String?       // KURTA LENGTH e.g. "Long", "Mid", "Short"
+  pantStyle        String?       // PANT STYLE e.g. "Palazzo", "Straight", "Churidar"
+  whatsappRetail   String?       @db.Text // WHATSAPP RETAIL caption
+  whatsappWholesale String?      @db.Text // WHATSAPP WHOLESALE caption
+  instagramCaption String?       @db.Text // INSTAGRAM CAPTION AND #
+  facebookCaption  String?       @db.Text // FACEBOOK CAPTION AND TAGS
+  shopifyTitle     String?       @db.Text // SHOPIFY TITLE AND DESCRIPTION
+  whatsappCatalogueTitle String? @db.Text // WHATSAPP CATALOGUE TITLE AND DESCRIPTION
+
+  // ── USER-DEFINED CUSTOM COLUMNS ──
+  // Stored as { "columnKey": { label: string, value: string } }
+  customFields     Json?
+
+  // Log
+  inventoryLogs    InventoryLog[]
+
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([stockCode])
+  @@index([friendlyCode])
+  @@index([status])
+  @@index([categoryId])
+  @@index([subCategoryId])
+}
+
+// ─── INVENTORY LOG (audit trail) ───
+
+model InventoryLog {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  action      String   // "sale", "restock", "adjustment", "reserve", "release"
+  qtyChange   Int      // positive = added, negative = removed
+  qtyAfter    Int      // stock after this event
+  note        String?  // e.g. "Website order #123", "Manual adjustment by admin"
+  source      String   @default("admin") // "admin", "website", "whatsapp", "api"
+  createdAt   DateTime @default(now())
+
+  @@index([productId])
+}
+
+// ─── CALENDAR EVENTS (Brand Marketing Calendar) ───
+
+enum EventType {
+  KITTY_PARTY
+  PARENT_TEACHER_MEET
+  FESTIVAL
+  WEDDING
+  BIRTHDAY
+  ANNIVERSARY
+  OFFICE_EVENT
+  PUJA_CEREMONY
+  FAMILY_FUNCTION
+  OTHER
+}
+
+model CalendarEvent {
+  id                   String    @id @default(cuid())
+  title                String
+  eventType            EventType @default(OTHER)
+  eventDate            DateTime
+  endDate              DateTime?
+  description          String?   @db.Text
+  // Garment suggestions for this event
+  suggestedCategories  String[]  // e.g. ["saree", "kurti"]
+  suggestedOccasion    String?   // e.g. "festive", "casual", "formal"
+  // Messaging guidance
+  messagingTheme       String?   @db.Text
+  messagingNotes       String?   @db.Text
+  // Recurrence
+  isRecurring          Boolean   @default(false)
+  recurrenceRule       String?   // "yearly", "monthly"
+  isActive             Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([eventDate])
+  @@index([eventType])
+}
+
+model BrandStrategyConfig {
+  id                 String   @id @default(cuid())
+  brandName          String   @default("Myra Couture")
+  tone               String   @default("Royal South Indian Heritage & Modern Luxury")
+  brandKeywords      String[]
+  whatsappSignature  String   @db.Text
+  instagramHashtags  String   @db.Text
+  updatedAt          DateTime @updatedAt
+}
+
+// ─── AUTHENTICATION ───
+
+model User {
+  id            String          @id @default(cuid())
+  name          String?
+  email         String?         @unique
+  phone         String?         @unique
+  emailVerified DateTime?
+  passwordHash  String?
+  image         String?
+  role          String          @default("customer") // "customer" | "admin"
+  accounts      Account[]
+  sessions      Session[]
+  orders        CustomerOrder[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expires      DateTime
+}
+
+// ─── ADMIN-MANAGED TEMPLATES ───
+
+model GarmentTemplate {
+  id                   String            @id @default(cuid())
+  name                 String
+  slug                 String            @unique
+  tagline              String?
+  coverImage           String?           @db.Text
+  description          String?           @db.Text
+  systemPrompt         String?           @db.Text // Admin-only Master Prompt Formula
+  negativePrompt       String?           @db.Text // Negative prompt filters
+  cameraSettings       String?           @db.Text // Camera, Lens & Studio Lighting setup
+  isActive             Boolean           @default(true)
+  sortOrder            Int               @default(0)
+  allowModelSelection  Boolean           @default(true)
+  defaultModelId       String?
+  allowedModelIds      Json?             // Array of AIModel IDs accessible for this template
+  // Garment-specific fabric mapping instruction for the AI
+  // e.g. "map fabric to the saree body silk, border, pallu, and blouse piece"
+  garmentType          String?           @db.Text
+  imageSlots           ImageSlot[]
+  customOptions        TemplateOption[]
+  poses                PoseTemplate[]
+  orders               CustomerOrder[]
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+}
+
+model ImageSlot {
+  id          String          @id @default(cuid())
+  templateId  String
+  template    GarmentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  sortOrder   Int             @default(0)
+  isRequired  Boolean         @default(true)
+  sampleImageUrl String?      @db.Text
+
+  @@index([templateId])
+}
+
+model TemplateOption {
+  id         String          @id @default(cuid())
+  templateId String
+  template   GarmentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  label      String
+  optionType String          @default("radio") // "radio", "checkbox", "select"
+  choices    Json            // Array of strings: ["Plain", "Embroidery", "Contrast Border"]
+  sortOrder  Int             @default(0)
+
+  @@index([templateId])
+}
+
+model PoseTemplate {
+  id            String          @id @default(cuid())
+  templateId    String
+  template      GarmentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  name          String
+  description   String?
+  promptSnippet String          @db.Text  // AI pose direction (what the model is doing)
+  purpose       String?         @db.Text  // Why this pose exists: "Main hero image — full drape for WhatsApp/catalogue"
+  fabricFocus   String?         @db.Text  // Which garment part to highlight: "Pallu weave, border width, zari detail"
+  previewImage  String?         @db.Text  // Sample / reference preview image of this pose
+  category      String          @default("standing") // standing, drape, seated, detail
+  sortOrder     Int             @default(0)
+
+  @@index([templateId])
+}
+
+// ─── AI MODELS ───
+
+model AIModel {
+  id           String   @id @default(cuid())
+  name         String
+  tagline      String?
+  imageUrl     String?  @db.Text
+  skinTone     String?
+  features     String?  @db.Text
+  promptAnchor String   @db.Text
+  isActive     Boolean  @default(true)
+  isDefault    Boolean  @default(false)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model StudioConfig {
+  id                    String   @id @default("global_studio_config")
+  selectedEngine        String   @default("gpt-image-2-5-sunburst-image-to-image")
+  defaultResolution     String   @default("4k")
+  defaultAspectRatio    String   @default("3:4")
+  defaultModelPersonaId String?
+  globalSystemPrompt    String?  @db.Text
+  globalNegativePrompt  String?  @db.Text
+  updatedAt             DateTime @updatedAt
+}
+
+// ─── KIE.AI GENERATION MODELS ───
+
+model KieModel {
+  id              String   @id @default(cuid())
+  displayName     String                              // Human-friendly label shown in admin
+  modelId         String   @unique                   // Actual Kie.ai model slug sent to API
+  isImageToImage  Boolean  @default(true)            // true = requires input_urls, false = text-only
+  description     String?  @db.Text
+  isActive        Boolean  @default(true)
+  isDefault       Boolean  @default(false)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([isDefault])
+  @@index([isActive])
+}
+
+// ─── CUSTOMER ORDERS ───
+
+model CustomerOrder {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id])
+  templateId      String
+  template        GarmentTemplate @relation(fields: [templateId], references: [id])
+  productName     String?
+  stockCode       String?
+  description     String?         @db.Text
+  uploadedImages  Json?           // Array of { slotId: string, url: string }
+  icp             String?         // "home_ceo" | "professional"
+  occasion        String?
+  fabricType      String?
+  selectedModelId String?
+  selectedOptions Json?           // Object { optionId: choiceValue }
+  aspectRatio     String?         @default("3:4") // "1:1", "3:4", "9:16", "4:3", "16:9"
+  generatedImages Json?           // Array of { poseId: string, imageUrl: string, prompt: string }
+  captions        Json?           // { whatsapp: string, instagram: string, facebook: string, website: string }
+  status          String          @default("draft") // draft, generating, completed
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([templateId])
+  @@index([status])
+}
