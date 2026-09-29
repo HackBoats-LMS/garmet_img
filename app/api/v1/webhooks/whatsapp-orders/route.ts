@@ -105,11 +105,20 @@ export async function POST(request: Request) {
 
                   // 5. Transactional DB Updates
                   await prisma.$transaction(async (tx) => {
-                    const product = await tx.product.findUnique({ where: { stockCode } });
+                    // Try to find by any of the stable IDs exported to the catalog
+                    const product = await tx.product.findFirst({ 
+                      where: { 
+                        OR: [
+                          { friendlyCode: stockCode },
+                          { designNumber: stockCode },
+                          { stockCode: stockCode }
+                        ]
+                      } 
+                    });
                     
                     // Edge Case: Product Not Found
                     if (!product) {
-                      console.error(`[Edge Case] Webhook requested non-existent stockCode: ${stockCode}`);
+                      console.error(`[Edge Case] Webhook requested non-existent stable ID: ${stockCode}`);
                       return;
                     }
 
@@ -122,7 +131,7 @@ export async function POST(request: Request) {
 
                     // Proceed with stock deduction
                     await tx.product.update({
-                      where: { stockCode },
+                      where: { id: product.id },
                       data: {
                           quantity: product.quantity - quantityOrdered,
                           reservedQty: product.reservedQty + quantityOrdered 

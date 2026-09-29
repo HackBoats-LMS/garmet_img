@@ -32,15 +32,24 @@ export async function POST(request: Request) {
         continue;
       }
 
+      // Find the stable product by NEW_CODE_GENERATED (friendlyCode) OR DESIGN_NUMBER
+      let existingProduct = null;
+      if (newCodeGenerated) {
+        existingProduct = await prisma.product.findFirst({ where: { friendlyCode: newCodeGenerated } });
+      }
+      if (!existingProduct) {
+        existingProduct = await prisma.product.findFirst({ where: { designNumber: designNumber } });
+      }
+
       // If PACT is sending an offline sale deduction
       if (event_type === 'OFFLINE_SALE' || event_type === 'SALES_RETURN' || event_type === 'STOCK_ADJUSTMENT') {
         const qtyChange = parseInt(item.qty_change || '0', 10);
         
         await prisma.$transaction(async (tx) => {
-          const product = await tx.product.findUnique({ where: { stockCode } });
+          const product = existingProduct || await tx.product.findUnique({ where: { stockCode } });
           if (product) {
             await tx.product.update({
-              where: { stockCode },
+              where: { id: product.id },
               data: { quantity: product.quantity + qtyChange }
             });
 
@@ -59,67 +68,84 @@ export async function POST(request: Request) {
       } 
       else if (event_type === 'NEW_STOCK' || event_type === 'STOCK_UPDATE') {
         
-        // 1. Data strictly for CREATING a brand new product
-        const createData = {
-          stockCode: newCodeGenerated || stockCode, // Use the new code if provided
-          title: item.WHATSAPP_CATALOGUE_TITLE || item.SHOPIFY_TITLE || 'New Garment',
-          designNumber: designNumber,
-          size: item.SIZE || null,
-          color: item.COLOUR || null,
-          location: item.LOCATION || null,
-          price: parseFloat(item.RETAIL_PRICE) || 0,
-          wholesalePrice: parseFloat(item.WHOLESALE_PRICE) || 0,
-          mrp: parseFloat(item.UNIT_PRICE) || 0, 
-          description: item.PRODUCT_DESCRIPTION || null,
-          clothType: item.FABRIC || null,
-          embroideryType: item.EMBROIDERY_TYPE || null,
-          cutStyle: item.CUT_STYLE || null,
-          border: item.BORDER || null,
-          kurtaLength: item.KURTA_LENGTH || null,
-          pantStyle: item.PANT_STYLE || null,
-          whatsappRetail: item.WHATSAPP_RETAIL || null,
-          whatsappWholesale: item.WHATSAPP_WHOLESALE || null,
-          instagramCaption: item.INSTAGRAM_CAPTION || null,
-          facebookCaption: item.FACEBOOK_CAPTION || null,
-          whatsappCatalogueTitle: item.WHATSAPP_CATALOGUE_TITLE || null,
-          quantity: parseInt(item.current_stock || '1', 10)
-        };
+        const newQty = parseInt(item.current_stock || '1', 10);
 
-        // 2. Data strictly for UPDATING an existing product
-        // We carefully check if PACT actually sent the data. 
-        // If they left it blank (optional), we DO NOT overwrite our existing database with null!
-        const updateData: any = {};
-        
-        if (newCodeGenerated) updateData.stockCode = newCodeGenerated;
-        if (item.RETAIL_PRICE !== undefined) updateData.price = parseFloat(item.RETAIL_PRICE) || 0;
-        if (item.WHOLESALE_PRICE !== undefined) updateData.wholesalePrice = parseFloat(item.WHOLESALE_PRICE) || 0;
-        if (item.UNIT_PRICE !== undefined) updateData.mrp = parseFloat(item.UNIT_PRICE) || 0;
-        if (item.current_stock !== undefined) updateData.quantity = parseInt(item.current_stock, 10);
-        
-        // Only update text fields if PACT explicitly sent a non-empty string
-        if (item.LOCATION) updateData.location = item.LOCATION;
-        if (item.SIZE) updateData.size = item.SIZE;
-        if (item.COLOUR) updateData.color = item.COLOUR;
-        
-        // UPSERT: Update it if it exists (carefully), Create it if it is brand new
-        await prisma.product.upsert({
-          where: { stockCode },
-          update: updateData,
-          create: createData
-        });
+        if (existingProduct) {
+          // 1. UPDATE EXISTING STABLE PRODUCT (Add batch stock to it, update latest barcode)
+          const updateData: any = {
+            stockCode: stockCode, // The latest batch barcode
+            quantity: existingProduct.quantity + newQty, // Add new batch to existing quantity!
+          };
+          
+          if (newCodeGenerated) updateData.friendlyCode = newCodeGenerated;
+          if (item.RETAIL_PRICE !== undefined) updateData.price = parseFloat(item.RETAIL_PRICE) || 0;
+          if (item.WHOLESALE_PRICE !== undefined) updateData.wholesalePrice = parseFloat(item.WHOLESALE_PRICE) || 0;
+          if (item.UNIT_PRICE !== undefined) updateData.mrp = parseFloat(item.UNIT_PRICE) || 0;
+          
+          // Only update text fields if explicitly sent
+          if (item.LOCATION) updateData.location = item.LOCATION;
+          if (item.SIZE) updateData.size = item.SIZE;
+          if (item.COLOUR) updateData.color = item.COLOUR;
+          
+          await prisma.$transaction(async (tx) => {
+            await tx.product.update({
+              where: { id: existingProduct.id },
+              data: updateData
+            });
 
-        // Log the ingestion
-        const product = await prisma.product.findUnique({ where: { stockCode } });
-        if (product) {
-          await prisma.inventoryLog.create({
-            data: {
-              productId: product.id,
-              action: 'pact_ingestion',
-              qtyChange: createData.quantity,
-              qtyAfter: createData.quantity,
-              note: `PACT data imported/updated: ${document_reference || 'Manual Sync'}`,
-              source: 'pact_erp'
-            }
+            await tx.inventoryLog.create({
+              data: {
+                productId: existingProduct.id,
+                action: 'pact_ingestion',
+                qtyChange: newQty,
+                qtyAfter: existingProduct.quantity + newQty,
+                note: `PACT added batch ${stockCode} to stable design ${designNumber}.`,
+                source: 'pact_erp'
+              }
+            });
+          });
+
+        } else {
+          // 2. CREATE BRAND NEW STABLE PRODUCT
+          const createData = {
+            stockCode: stockCode,
+            friendlyCode: newCodeGenerated || null,
+            title: item.WHATSAPP_CATALOGUE_TITLE || item.SHOPIFY_TITLE || 'New Garment',
+            designNumber: designNumber,
+            size: item.SIZE || null,
+            color: item.COLOUR || null,
+            location: item.LOCATION || null,
+            price: parseFloat(item.RETAIL_PRICE) || 0,
+            wholesalePrice: parseFloat(item.WHOLESALE_PRICE) || 0,
+            mrp: parseFloat(item.UNIT_PRICE) || 0, 
+            description: item.PRODUCT_DESCRIPTION || null,
+            clothType: item.FABRIC || null,
+            embroideryType: item.EMBROIDERY_TYPE || null,
+            cutStyle: item.CUT_STYLE || null,
+            border: item.BORDER || null,
+            kurtaLength: item.KURTA_LENGTH || null,
+            pantStyle: item.PANT_STYLE || null,
+            whatsappRetail: item.WHATSAPP_RETAIL || null,
+            whatsappWholesale: item.WHATSAPP_WHOLESALE || null,
+            instagramCaption: item.INSTAGRAM_CAPTION || null,
+            facebookCaption: item.FACEBOOK_CAPTION || null,
+            whatsappCatalogueTitle: item.WHATSAPP_CATALOGUE_TITLE || null,
+            quantity: newQty
+          };
+
+          await prisma.$transaction(async (tx) => {
+            const product = await tx.product.create({ data: createData });
+
+            await tx.inventoryLog.create({
+              data: {
+                productId: product.id,
+                action: 'pact_ingestion',
+                qtyChange: newQty,
+                qtyAfter: newQty,
+                note: `PACT created new stable product: ${document_reference}`,
+                source: 'pact_erp'
+              }
+            });
           });
         }
       }
