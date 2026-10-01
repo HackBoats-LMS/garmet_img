@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import prisma from '@/lib/prisma';
 import { uploadAdminModelAsset, isCloudinaryConfigured } from '@/lib/cloudinary';
+import { auth } from '@/lib/auth';
 
 // Helper to save base64 locally if Cloudinary is unavailable
 function saveBase64Locally(base64Str: string, filenamePrefix: string): string {
@@ -30,6 +31,11 @@ function saveBase64Locally(base64Str: string, filenamePrefix: string): string {
 // PUT /api/admin/models/[id]
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { id } = await params;
     const body = await req.json();
     const { name, tagline, imageUrl, skinTone, features, promptAnchor, isActive, sortOrder } = body;
@@ -104,6 +110,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 // DELETE /api/admin/models/[id]
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { id } = await params;
     await prisma.aIModel.delete({ where: { id } });
     return NextResponse.json({ success: true });

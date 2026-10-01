@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { auth } from '@/lib/auth';
 
 // GET /api/admin/templates — List all templates
 export async function GET() {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const templates = await prisma.garmentTemplate.findMany({
       include: {
         imageSlots: { orderBy: { sortOrder: 'asc' } },
@@ -23,6 +29,11 @@ export async function GET() {
 // POST /api/admin/templates — Create a new template
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
       name,

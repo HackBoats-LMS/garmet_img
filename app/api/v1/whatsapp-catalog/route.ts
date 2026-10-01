@@ -55,6 +55,8 @@ export async function GET(request: Request) {
       },
       select: {
         stockCode: true,
+        friendlyCode: true,
+        designNumber: true,
         whatsappCatalogueTitle: true,
         title: true,
         whatsappRetail: true,
@@ -78,14 +80,16 @@ export async function GET(request: Request) {
          }
       }
 
+      const stableId = product.friendlyCode || product.designNumber || product.stockCode;
+
       return {
-        id: product.stockCode,
+        id: stableId,
         title: product.whatsappCatalogueTitle || product.title || 'Untitled Garment',
         description: product.whatsappRetail || 'Premium Garment',
         availability: product.quantity > 0 ? 'in stock' : 'out of stock',
         condition: 'new',
         price: `${product.price || 0} INR`,
-        link: `https://your-store.com/product/${product.stockCode}`,
+        link: `https://your-store.com/product/${stableId}`,
         image_link: primaryImageUrl || 'https://your-store.com/placeholder.jpg',
         brand: 'Myra Couture',
       };

@@ -235,7 +235,7 @@ export function ProductForm({ productId }: Props) {
 
   // Load categories
   useEffect(() => {
-    fetch('/api/admin/categories').then(r => r.json()).then(d => setCategories(d.categories || []));
+    fetch('/api/admin/categories').then(async r => { if (!r.ok) return { categories: [] }; const text = await r.text(); return text ? JSON.parse(text) : { categories: [] }; }).then(d => setCategories(d.categories || [])).catch(console.error);
   }, []);
 
   // Load product for edit
@@ -243,7 +243,7 @@ export function ProductForm({ productId }: Props) {
     if (!productId) return;
     setLoading(true);
     fetch(`/api/admin/products/${productId}`)
-      .then(r => r.json())
+      .then(async r => { if (!r.ok) return {}; const text = await r.text(); return text ? JSON.parse(text) : {}; })
       .then(d => {
         const p = d.product;
         if (p) {
@@ -961,11 +961,9 @@ export function ProductForm({ productId }: Props) {
                   ))}
                 </div>
                 <p className="text-[10px] text-charcoal-muted text-center">Auto-synced from AI photoshoot session</p>
-                {linkedOrderId && (
-                  <a href="/customer/gallery" className="text-[10px] text-accent hover:underline text-center block" target="_blank">
-                    View full session →
-                  </a>
-                )}
+                  <span className="text-[10px] text-charcoal-muted text-center block">
+                    Session Order ID: {linkedOrderId}
+                  </span>
               </>
             ) : (
               <div className="py-6 text-center space-y-3">

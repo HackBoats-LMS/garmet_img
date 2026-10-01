@@ -274,7 +274,7 @@ export const GenerationModal: React.FC<GenerationModalProps> = ({
                     <Download className="w-4 h-4" />
                     <span>Download 4K Catalog Image</span>
                   </button>
-
+{/* */}
                   <button
                     onClick={onClose}
                     className="px-4 py-3 rounded-xl font-medium text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
