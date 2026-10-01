@@ -26,12 +26,6 @@ export default function LandingPage() {
             >
               Sign In
             </Link>
-            <Link
-              href="/signup"
-              className="px-5 py-2.5 rounded-xl bg-accent text-white text-sm font-semibold hover:bg-accent-hover active:bg-accent-pressed transition-all shadow-sm hover:shadow-md"
-            >
-              Get Started
-            </Link>
           </div>
         </div>
       </header>
@@ -59,10 +53,10 @@ export default function LandingPage() {
 
             <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
               <Link
-                href="/signup"
+                href="/login"
                 className="w-full sm:w-auto px-8 py-4 rounded-xl bg-accent text-white text-base font-semibold hover:bg-accent-hover active:bg-accent-pressed transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2.5 group"
               >
-                <span>Start Creating</span>
+                <span>Sign In</span>
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </Link>
               <Link
