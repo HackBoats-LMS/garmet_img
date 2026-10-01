@@ -105,7 +105,11 @@ export default function AdminInventoryPage() {
   }, [search, categoryId, statusFilter, page]);
 
   useEffect(() => {
-    fetch('/api/admin/categories').then(r => r.json()).then(d => setCategories(d.categories || []));
+    fetch('/api/admin/categories').then(async r => {
+      if (!r.ok) return { categories: [] };
+      const text = await r.text();
+      return text ? JSON.parse(text) : { categories: [] };
+    }).then(d => setCategories(d.categories || [])).catch(console.error);
   }, []);
 
   useEffect(() => {

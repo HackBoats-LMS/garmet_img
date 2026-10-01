@@ -1,5 +1,5 @@
 import NextAuth from 'next-auth';
-import CredentialsProvider from 'next-auth/providers/credentials';
+
 import GoogleProvider from 'next-auth/providers/google';
 import { PrismaAdapter } from '@auth/prisma-adapter';
 import bcrypt from 'bcryptjs';
@@ -18,72 +18,33 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
       allowDangerousEmailAccountLinking: true,
     }),
-    CredentialsProvider({
-      id: 'credentials',
-      name: 'Email & Password',
-      credentials: {
-        email: { label: 'Email', type: 'email' },
-        password: { label: 'Password', type: 'password' },
-        phone: { label: 'Phone', type: 'text' },
-        isAdmin: { label: 'Admin', type: 'text' },
-      },
-      async authorize(credentials) {
-        if (!credentials) return null;
-
-        const { email, password, phone, isAdmin } = credentials as {
-          email?: string;
-          password?: string;
-          phone?: string;
-          isAdmin?: string;
-        };
-
-        // Phone login
-        if (phone && !email) {
-          const user = await prisma.user.findUnique({
-            where: { phone: phone as string },
-          });
-          if (!user) return null;
-          return {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            image: user.image,
-            role: user.role,
-          };
-        }
-
-        // Email + password login
-        if (!email || !password) return null;
-
-        const user = await prisma.user.findUnique({
-          where: { email: email as string },
-        });
-
-        if (!user || !user.passwordHash) return null;
-
-        const isValid = await bcrypt.compare(
-          password as string,
-          user.passwordHash
-        );
-        if (!isValid) return null;
-
-        // Admin route check
-        if (isAdmin === 'true' && user.role !== 'admin') return null;
-
-        return {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          image: user.image,
-          role: user.role,
-        };
-      },
-    }),
+    // CredentialsProvider removed for internal-tool Google-only enforcement
   ],
   callbacks: {
+    async signIn({ user }) {
+      if (!user.email) return false;
+      const email = user.email.toLowerCase();
+
+      // Check if email exists in the database with role 'admin'
+      try {
+        const dbUser = await prisma.user.findUnique({
+          where: { email }
+        });
+
+        if (dbUser && dbUser.role === 'admin') {
+          return true; // Allow DB-registered admins
+        }
+      } catch (err) {
+        console.error('Error checking admin user in DB:', err);
+      }
+
+      console.warn(`Denied access for unauthorized email: ${email}`);
+      return false;
+    },
     async jwt({ token, user }) {
       if (user) {
-        token.role = (user as any).role || 'customer';
+        // Internal tool: default all authenticated users to admin
+        token.role = 'admin';
         token.id = user.id;
       }
       return token;

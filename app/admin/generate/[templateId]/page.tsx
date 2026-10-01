@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useState, useRef, use } from 'react';
+import React, { useEffect, useState, useRef, use, Suspense } from 'react';
 import { createPortal } from 'react-dom';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
   ArrowLeft, ArrowRight, Upload, X, Sparkles, Download, Check, Camera, Layers,
@@ -41,10 +41,30 @@ interface AIModelData {
   isActive: boolean;
 }
 
-export default function CustomerOrderPage({ params }: { params: Promise<{ templateId: string }> }) {
+function AdminGenerateContent({ params }: { params: Promise<{ templateId: string }> }) {
   const { templateId } = use(params);
   const router = useRouter();
   const { data: session } = useSession();
+  const searchParams = useSearchParams();
+  const productId = searchParams.get('productId');
+  const [product, setProduct] = useState<any>(null);
+  useEffect(() => {
+    if (!productId) return;
+    fetch('/api/admin/products/' + productId)
+      .then(async r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const text = await r.text();
+        return text ? JSON.parse(text) : {};
+      })
+      .then(d => {
+      if (!d.product) return;
+      setProduct(d.product);
+      setProductName(d.product.title || '');
+      setStockCode(d.product.stockCode || '');
+      setDescription(d.product.description || '');
+    }).catch(console.error);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productId]);
 
   const [template, setTemplate] = useState<TemplateData | null>(null);
   const [models, setModels] = useState<AIModelData[]>([]);
@@ -170,8 +190,17 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ templa
       fetch(`/api/admin/templates/${templateId}`),
       fetch('/api/admin/models'),
     ]);
-    const tData = await tRes.json();
-    const mData = await mRes.json();
+    
+    let tData: any = {};
+    let mData: any = {};
+    
+    try { 
+      if (tRes.ok) tData = JSON.parse(await tRes.text() || '{}'); 
+    } catch(e) { console.error('Error parsing template data:', e); }
+    
+    try { 
+      if (mRes.ok) mData = JSON.parse(await mRes.text() || '{}'); 
+    } catch(e) { console.error('Error parsing models data:', e); }
 
     setTemplate(tData.template || null);
     const activeModels = (mData.models || []).filter((m: AIModelData) => m.isActive);
@@ -688,7 +717,7 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ templa
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <Input label="Product Name" value={productName} onChange={e => { setProductName(e.target.value); setValidationError(null); }} placeholder="e.g. Royal Emerald Kanchipuram" required />
-              <Input label="SKU / Stock Code (optional)" value={stockCode} onChange={e => setStockCode(e.target.value)} placeholder="e.g. MYRA-KAN-101" />
+              <Input label="SKU / Stock Code (optional)" value={stockCode} onChange={e => setStockCode(e.target.value)} placeholder="e.g. RGJ-001" />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
@@ -1461,7 +1490,7 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ templa
               <Button
                 onClick={() => {
                   handleSaveOrder();
-                  router.push('/customer/gallery');
+                  router.push(productId ? `/admin/inventory/${productId}` : '/admin/inventory');
                 }}
                 variant="secondary"
                 size="lg"
@@ -1666,5 +1695,13 @@ export default function CustomerOrderPage({ params }: { params: Promise<{ templa
         </div>
       )}
     </div>
+  );
+}
+
+export default function AdminGeneratePage({ params }: { params: Promise<{ templateId: string }> }) {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center py-32"><div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" /></div>}>
+      <AdminGenerateContent params={params} />
+    </Suspense>
   );
 }

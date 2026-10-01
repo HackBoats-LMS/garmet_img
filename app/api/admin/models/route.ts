@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { auth } from '@/lib/auth';
 
 const DEFAULT_SEED_MODELS = [
   {
@@ -61,6 +62,11 @@ async function ensureAIModelTable() {
 // GET /api/admin/models — List all AI models
 export async function GET() {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     await ensureAIModelTable();
 
     let models: any[] = [];
@@ -130,6 +136,11 @@ export async function GET() {
 // POST /api/admin/models — Create a new AI model
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await req.json();
     const { name, tagline, imageUrl, skinTone, features, promptAnchor, isActive } = body;
 

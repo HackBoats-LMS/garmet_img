@@ -3,17 +3,17 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutGrid, Layers, Users, Cpu, LogOut, ChevronRight, Package, Tag, CalendarDays } from 'lucide-react';
+import { LayoutGrid, Layers, Users, Cpu, LogOut, ChevronRight, Package, Tag, CalendarDays, ShieldCheck } from 'lucide-react';
 import { signOut } from 'next-auth/react';
 
 const NAV_ITEMS = [
   { href: '/admin', label: 'Dashboard', icon: LayoutGrid },
   { href: '/admin/inventory', label: 'Inventory', icon: Package },
   { href: '/admin/categories', label: 'Categories', icon: Tag },
-  { href: '/admin/calendar', label: 'Marketing Calendar', icon: CalendarDays },
   { href: '/admin/templates', label: 'Templates', icon: Layers },
   { href: '/admin/model-selection', label: 'AI Engine & Models', icon: Cpu },
   { href: '/admin/models', label: 'Model Personas', icon: Users },
+  { href: '/admin/admins', label: 'Admins', icon: ShieldCheck },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
