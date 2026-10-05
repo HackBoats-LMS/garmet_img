@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
+import { pushToPickyAssist, mapProductToPickyAssistPayload } from '@/lib/picky-assist-push';
 
 // GET /api/admin/products/[id]
 export async function GET(
@@ -164,6 +165,8 @@ export async function PATCH(
       await prisma.inventoryLog.createMany({ data: logsToCreate });
     }
 
+    pushToPickyAssist('update_product', mapProductToPickyAssistPayload(updated)).catch(console.error);
+
     return NextResponse.json({ product: updated });
   } catch (error: any) {
     if (error.code === 'P2002') {
@@ -186,7 +189,13 @@ export async function DELETE(
     }
 
     const { id } = await params;
-    await prisma.product.delete({ where: { id } });
+    const existing = await prisma.product.findUnique({ where: { id } });
+    
+    if (existing) {
+      await prisma.product.delete({ where: { id } });
+      pushToPickyAssist('delete_product', mapProductToPickyAssistPayload(existing)).catch(console.error);
+    }
+    
     return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

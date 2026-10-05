@@ -385,9 +385,9 @@ export async function POST(req: NextRequest) {
 
     console.log(`[Kie.ai] Task ID: ${taskId}. Polling for completion...`);
 
-    // Poll task status (up to 3 attempts x 2.5s = ~7.5s) to catch fast Flux models and avoid Vercel timeouts
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 2500));
+    // Poll task status (up to 40 attempts x 3s = ~120s / 2 minutes) to ensure it finishes and saves even if the browser is closed
+    for (let attempt = 1; attempt <= 40; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
 
       const checkRes = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${taskId}`, {
         headers: {

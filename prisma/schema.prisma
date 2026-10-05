@@ -274,7 +274,7 @@ model CalendarEvent {
 
 model BrandStrategyConfig {
   id                 String   @id @default(cuid())
-  brandName          String   @default("Myra Couture")
+  brandName          String   @default("rgjdass Couture")
   tone               String   @default("Royal South Indian Heritage & Modern Luxury")
   brandKeywords      String[]
   whatsappSignature  String   @db.Text

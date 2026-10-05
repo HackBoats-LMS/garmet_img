@@ -13,6 +13,8 @@ import { Input, Textarea } from '@/app/components/ui/Input';
 import { Card } from '@/app/components/ui/Card';
 import { Badge } from '@/app/components/ui/Badge';
 import { StepIndicator } from '@/app/components/ui/StepIndicator';
+import { CldUploadWidget } from 'next-cloudinary';
+import useDrivePicker from 'react-google-drive-picker';
 
 interface TemplateData {
   id: string;
@@ -186,40 +188,57 @@ function AdminGenerateContent({ params }: { params: Promise<{ templateId: string
 
   const fetchData = async () => {
     setLoading(true);
-    const [tRes, mRes] = await Promise.all([
-      fetch(`/api/admin/templates/${templateId}`),
-      fetch('/api/admin/models'),
-    ]);
-    
-    let tData: any = {};
-    let mData: any = {};
-    
-    try { 
-      if (tRes.ok) tData = JSON.parse(await tRes.text() || '{}'); 
-    } catch(e) { console.error('Error parsing template data:', e); }
-    
-    try { 
-      if (mRes.ok) mData = JSON.parse(await mRes.text() || '{}'); 
-    } catch(e) { console.error('Error parsing models data:', e); }
+    try {
+      // Fetch template and models independently so one failure doesn't block the other
+      let tData: any = {};
+      let mData: any = {};
 
-    setTemplate(tData.template || null);
-    const activeModels = (mData.models || []).filter((m: AIModelData) => m.isActive);
+      // Fetch template data
+      try {
+        const tRes = await fetch(`/api/admin/templates/${templateId}`);
+        if (tRes.ok) {
+          tData = JSON.parse(await tRes.text() || '{}');
+        } else {
+          console.error('Template fetch failed with status:', tRes.status);
+        }
+      } catch (e) {
+        console.error('Error fetching template data:', e);
+      }
 
-    // Filter models accessible for this garment template
-    let accessibleModels = activeModels;
-    if (Array.isArray(tData.template?.allowedModelIds) && tData.template.allowedModelIds.length > 0) {
-      accessibleModels = activeModels.filter((m: AIModelData) => tData.template.allowedModelIds.includes(m.id));
+      // Fetch models data (non-blocking — page can work without models)
+      try {
+        const mRes = await fetch('/api/admin/models');
+        if (mRes.ok) {
+          mData = JSON.parse(await mRes.text() || '{}');
+        } else {
+          console.error('Models fetch failed with status:', mRes.status);
+        }
+      } catch (e) {
+        console.error('Error fetching models data:', e);
+      }
+
+      setTemplate(tData.template || null);
+      const activeModels = (mData.models || []).filter((m: AIModelData) => m.isActive);
+
+      // Filter models accessible for this garment template
+      let accessibleModels = activeModels;
+      if (Array.isArray(tData.template?.allowedModelIds) && tData.template.allowedModelIds.length > 0) {
+        accessibleModels = activeModels.filter((m: AIModelData) => tData.template.allowedModelIds.includes(m.id));
+      }
+      setModels(accessibleModels);
+
+      // Auto-select default model or first accessible model
+      const preferredDefault = tData.template?.defaultModelId;
+      const initialModel = accessibleModels.find((m: AIModelData) => m.id === preferredDefault)?.id || accessibleModels[0]?.id || '';
+      if (initialModel) {
+        setSelectedModelId(initialModel);
+      }
+    } catch (err) {
+      console.error('fetchData unexpected error:', err);
+    } finally {
+      // ALWAYS stop loading — even if everything fails, show the UI
+      setLoading(false);
     }
-    setModels(accessibleModels);
-
-    // Auto-select default model or first accessible model
-    const preferredDefault = tData.template?.defaultModelId;
-    const initialModel = accessibleModels.find((m: AIModelData) => m.id === preferredDefault)?.id || accessibleModels[0]?.id || '';
-    if (initialModel) {
-      setSelectedModelId(initialModel);
-    }
-
-    setLoading(false);
   };
 
   // Dynamic steps based on template config
@@ -254,9 +273,51 @@ function AdminGenerateContent({ params }: { params: Promise<{ templateId: string
   };
 
   const currentContent = getStepContent();
-
   // Drag & Drop State
   const [dragActiveSlot, setDragActiveSlot] = useState<string | null>(null);
+  const [openPicker, authResponse] = useDrivePicker();
+
+  const handleOpenGooglePicker = (slotId: string) => {
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
+    const fallbackAppId = clientId.split('-')[0];
+    const token = (session?.user as any)?.accessToken || '';
+
+    openPicker({
+      token: token,
+      clientId: clientId,
+      developerKey: process.env.NEXT_PUBLIC_GOOGLE_API_KEY || '',
+      appId: process.env.NEXT_PUBLIC_GOOGLE_APP_ID || fallbackAppId,
+      viewId: "DOCS_IMAGES",
+      showUploadView: true,
+      showUploadFolders: true,
+      supportDrives: true,
+      multiselect: false,
+      callbackFunction: async (data: any) => {
+        if (data.action === 'picked') {
+          const doc = data.docs[0];
+          const token = (authResponse as any)?.access_token || data.oauthToken;
+          
+          if (doc.id) {
+            try {
+              const res = await fetch(`https://www.googleapis.com/drive/v3/files/${doc.id}?alt=media`, {
+                headers: { Authorization: `Bearer ${token}` }
+              });
+              if (res.ok) {
+                const blob = await res.blob();
+                processImageFile(slotId, new File([blob], doc.name || "google_photo.jpg", { type: blob.type }));
+                return;
+              }
+            } catch (err) {
+              console.warn("Drive v3 download failed", err);
+            }
+          }
+          if (doc.url) {
+            processImageUrl(slotId, doc.url);
+          }
+        }
+      }
+    });
+  };
   const [analyzingSwatch, setAnalyzingSwatch] = useState(false);
   const [swatchAnalysis, setSwatchAnalysis] = useState<{
     title?: string;
@@ -317,6 +378,55 @@ function AdminGenerateContent({ params }: { params: Promise<{ templateId: string
       img.src = ev.target?.result as string;
     };
     reader.readAsDataURL(file);
+  };
+
+  const processImageUrl = async (slotId: string, url: string) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = async () => {
+      const canvas = document.createElement('canvas');
+      const MAX_DIM = 1024;
+      let w = img.width, h = img.height;
+      if (w > MAX_DIM || h > MAX_DIM) {
+        if (w > h) { h = Math.round(h * MAX_DIM / w); w = MAX_DIM; }
+        else { w = Math.round(w * MAX_DIM / h); h = MAX_DIM; }
+      }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d')?.drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+      setUploadedImages(prev => ({ ...prev, [slotId]: dataUrl }));
+      setValidationError(null);
+
+      // Trigger AI Swatch Vision Analysis for rich micro-textile details
+      try {
+        setAnalyzingSwatch(true);
+        const anRes = await fetch('/api/analyze-swatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageBase64: dataUrl }),
+        });
+        if (anRes.ok) {
+          const anData = await anRes.json();
+          if (anData?.analysis) {
+            setSwatchAnalysis(anData.analysis);
+            if (!productName && anData.analysis.title) {
+              setProductName(anData.analysis.title);
+            }
+            if (!description && anData.analysis.fabricNotes) {
+              setDescription(anData.analysis.fabricNotes);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[Swatch Analysis] Error:', err);
+      } finally {
+        setAnalyzingSwatch(false);
+      }
+    };
+    img.onerror = () => {
+      console.error('Failed to load image from URL:', url);
+    };
+    img.src = url;
   };
 
   const handleImageUpload = (slotId: string, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -673,11 +783,22 @@ function AdminGenerateContent({ params }: { params: Promise<{ templateId: string
     }
   };
 
-  if (loading || !template) {
+  if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-40">
         <div className="w-10 h-10 border-3 border-accent border-t-transparent rounded-full animate-spin mb-4" />
         <p className="text-sm font-medium text-charcoal-muted">Loading photoshoot wizard...</p>
+      </div>
+    );
+  }
+
+  if (!template) {
+    return (
+      <div className="flex flex-col items-center justify-center py-40 gap-4">
+        <AlertCircle className="w-10 h-10 text-red-500" />
+        <p className="text-sm font-medium text-charcoal">Failed to load template data</p>
+        <p className="text-xs text-charcoal-muted">Please check your connection and try again.</p>
+        <Button onClick={() => fetchData()} variant="primary">Retry</Button>
       </div>
     );
   }
@@ -854,20 +975,39 @@ function AdminGenerateContent({ params }: { params: Promise<{ templateId: string
                       <p className="text-[11px] text-charcoal-muted leading-tight">{slot.description}</p>
                     )}
 
-                    <div
-                      onClick={() => {
-                        if (!isUploaded) fileInputRefs.current[slot.id]?.click();
+                    <CldUploadWidget
+                      signatureEndpoint="/api/cloudinary/sign"
+                      options={{
+                        sources: ['local', 'google_drive', 'dropbox', 'camera'],
+                        multiple: false,
+                        maxFiles: 1,
+                        clientAllowedFormats: ['png', 'jpeg', 'webp', 'jpg'],
+                        maxFileSize: 10485760 // 10MB
                       }}
-                      onDragOver={(e) => handleDragOver(slot.id, e)}
-                      onDragEnter={(e) => handleDragOver(slot.id, e)}
-                      onDragLeave={(e) => handleDragLeave(slot.id, e)}
-                      onDrop={(e) => handleDrop(slot.id, e)}
-                      className={`
-                        relative aspect-square rounded-2xl border-2 border-dashed flex flex-col items-center justify-center overflow-hidden transition-all group shadow-xs
-                        ${isUploaded ? 'border-cream-border bg-white' : 'cursor-pointer hover:border-accent hover:bg-cream'}
-                        ${dragActiveSlot === slot.id ? 'border-accent bg-accent-bg scale-[1.02] ring-4 ring-accent/20' : 'bg-cream-light'}
-                      `}
+                      onSuccess={(result: any) => {
+                        if (result?.info?.secure_url) {
+                          processImageUrl(slot.id, result.info.secure_url);
+                        }
+                      }}
                     >
+                      {({ open }) => (
+                        <div
+                          onClick={(e) => {
+                            if (!isUploaded) {
+                              e.preventDefault();
+                              open();
+                            }
+                          }}
+                          onDragOver={(e) => handleDragOver(slot.id, e)}
+                          onDragEnter={(e) => handleDragOver(slot.id, e)}
+                          onDragLeave={(e) => handleDragLeave(slot.id, e)}
+                          onDrop={(e) => handleDrop(slot.id, e)}
+                          className={`
+                            relative aspect-square rounded-2xl border-2 border-dashed flex flex-col items-center justify-center overflow-hidden transition-all group shadow-xs
+                            ${isUploaded ? 'border-cream-border bg-white' : 'cursor-pointer hover:border-accent hover:bg-cream'}
+                            ${dragActiveSlot === slot.id ? 'border-accent bg-accent-bg scale-[1.02] ring-4 ring-accent/20' : 'bg-cream-light'}
+                          `}
+                        >
                       {isUploaded ? (
                         <>
                           {/* Image preview with click to zoom */}
@@ -949,7 +1089,8 @@ function AdminGenerateContent({ params }: { params: Promise<{ templateId: string
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  fileInputRefs.current[slot.id]?.click();
+                                  e.preventDefault();
+                                  open();
                                 }}
                                 className="p-1.5 rounded-xl bg-white/90 text-charcoal hover:bg-white text-xs font-bold shadow-md transition-colors cursor-pointer"
                                 title="Replace Photo"
@@ -982,7 +1123,22 @@ function AdminGenerateContent({ params }: { params: Promise<{ templateId: string
                         onChange={(e) => handleImageUpload(slot.id, e)}
                       />
                     </div>
+                  )}
+                </CldUploadWidget>
 
+                    {!isUploaded && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleOpenGooglePicker(slot.id);
+                        }}
+                        className="mt-1.5 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-bold transition-colors border border-blue-200 cursor-pointer shadow-xs"
+                      >
+                        <ImageIcon className="w-3.5 h-3.5" />
+                        Select from Google Drive
+                      </button>
+                    )}
                     {/* Quick Slot Management Controls (When Uploaded) */}
                     {isUploaded && (
                       <div className="flex items-center justify-between gap-1.5 pt-1 text-xs">

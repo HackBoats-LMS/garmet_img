@@ -24,7 +24,7 @@ export async function syncOrderToPactERP(orderData: {
     order_reference: orderData.order_reference,
     order_date: orderData.order_date,
     payment_status: 'Paid',
-    payment_method: 'Online',
+    payment_method: orderData.source_channel === 'WhatsApp' ? 'RAZORPAY' : 'Online',
     customer_details: {
       name: orderData.customer_name || 'Online Customer',
       phone: orderData.customer_phone || '',

@@ -91,7 +91,7 @@ export async function GET(request: Request) {
         price: `${product.price || 0} INR`,
         link: `https://your-store.com/product/${stableId}`,
         image_link: primaryImageUrl || 'https://your-store.com/placeholder.jpg',
-        brand: 'Myra Couture',
+        brand: 'rgjdass Couture',
       };
     });
 

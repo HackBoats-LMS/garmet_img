@@ -1,7 +1,7 @@
 import { BrandStrategyRules, StockItemData } from '@/app/types/stock';
 
 export const DEFAULT_BRAND_STRATEGY: BrandStrategyRules = {
-  brandName: 'Myra Heritage & Couture',
+  brandName: 'rgjdass Heritage & Couture',
   tagline: 'Timeless Handcrafted Silks & Haute Couture',
   tone: 'Royal, Exquisite, Artisanal & Highly Trustworthy',
   keyPhrases: [
@@ -19,7 +19,7 @@ export const DEFAULT_BRAND_STRATEGY: BrandStrategyRules = {
   ],
   whatsappSignature: '📲 To Reserve / Inquire: Reply with Stock Code or Tap WhatsApp Link\n✨ Worldwide Express Shipping | Custom Maggam Blouse Stitching Available',
   instagramHashtags: [
-    '#MyraCouture',
+    '#rgjdassCouture',
     '#KanchipuramSilk',
     '#PurePattuSaree',
     '#HandloomSilk',
