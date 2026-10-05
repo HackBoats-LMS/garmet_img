@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef, use, Suspense } from 'react';
 import { createPortal } from 'react-dom';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams, useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
   ArrowLeft, ArrowRight, Upload, X, Sparkles, Download, Check, Camera, Layers,
