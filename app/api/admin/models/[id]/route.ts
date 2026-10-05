@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import path from 'path';
 import fs from 'fs';
 import prisma from '@/lib/prisma';
-import { uploadAdminModelAsset, isCloudinaryConfigured } from '@/lib/cloudinary';
+import { uploadAdminModelAsset, isStorageConfigured } from '@/lib/storage';
 import { auth } from '@/lib/auth';
 
 // Helper to save base64 locally if Cloudinary is unavailable
@@ -42,7 +42,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     let finalImageUrl = imageUrl;
     if (imageUrl && typeof imageUrl === 'string' && imageUrl.startsWith('data:image/')) {
-      if (isCloudinaryConfigured()) {
+      if (isStorageConfigured()) {
         try {
           finalImageUrl = await uploadAdminModelAsset(imageUrl, name || id);
         } catch (cErr) {
