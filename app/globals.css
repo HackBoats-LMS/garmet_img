@@ -90,3 +90,22 @@ body {
 .animate-slide-in {
   animation: slideInRight 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* ─── FIX GOOGLE PICKER SCROLLING BUG ─── */
+/* Google Picker injects elements that use absolute positioning. If the page is scrolled, it renders out of view at the top of the body. */
+.picker-dialog-bg {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  z-index: 99998 !important;
+}
+
+.picker-dialog {
+  position: fixed !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  z-index: 99999 !important;
+}

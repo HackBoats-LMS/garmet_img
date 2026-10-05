@@ -81,6 +81,7 @@ export async function POST(request: Request) {
           if (item.RETAIL_PRICE !== undefined) updateData.price = parseFloat(item.RETAIL_PRICE) || 0;
           if (item.WHOLESALE_PRICE !== undefined) updateData.wholesalePrice = parseFloat(item.WHOLESALE_PRICE) || 0;
           if (item.UNIT_PRICE !== undefined) updateData.mrp = parseFloat(item.UNIT_PRICE) || 0;
+          if (item.PRODUCT_NAME) updateData.title = item.PRODUCT_NAME;
           
           // Only update text fields if explicitly sent
           if (item.LOCATION) updateData.location = item.LOCATION;
@@ -110,7 +111,7 @@ export async function POST(request: Request) {
           const createData = {
             stockCode: stockCode,
             friendlyCode: newCodeGenerated || null,
-            title: item.WHATSAPP_CATALOGUE_TITLE || item.SHOPIFY_TITLE || 'New Garment',
+            title: item.PRODUCT_NAME || item.WHATSAPP_CATALOGUE_TITLE || item.SHOPIFY_TITLE || 'New Garment',
             designNumber: designNumber,
             size: item.SIZE || null,
             color: item.COLOUR || null,

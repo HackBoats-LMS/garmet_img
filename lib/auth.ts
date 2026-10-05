@@ -16,7 +16,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID ?? '',
       clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-      allowDangerousEmailAccountLinking: true,
+      authorization: {
+        params: {
+          prompt: "consent",
+          access_type: "offline",
+          response_type: "code",
+          scope: "openid email profile https://www.googleapis.com/auth/drive.readonly"
+        }
+      }
     }),
     // CredentialsProvider removed for internal-tool Google-only enforcement
   ],
@@ -41,7 +48,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       console.warn(`Denied access for unauthorized email: ${email}`);
       return false;
     },
-    async jwt({ token, user }) {
+    async jwt({ token, user, account }) {
+      // account is only passed on the initial sign-in
+      if (account) {
+        console.log("GOOGLE GRANTED SCOPES:", account.scope);
+        token.accessToken = account.access_token;
+      }
       if (user) {
         // Internal tool: default all authenticated users to admin
         token.role = 'admin';
@@ -53,6 +65,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (session.user) {
         (session.user as any).role = token.role;
         (session.user as any).id = token.id;
+        (session.user as any).accessToken = token.accessToken;
       }
       return session;
     },

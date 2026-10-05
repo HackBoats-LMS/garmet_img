@@ -13,6 +13,8 @@ interface Props {
 export function BrandCopyGenerator({ stockItem, onUpdateCopies }: Props) {
   const [activePlatform, setActivePlatform] = useState<'whatsapp' | 'instagram' | 'website'>('whatsapp');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [isGeneratingAI, setIsGeneratingAI] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const defaultCopies = React.useMemo(() => {
     return generateAllPlatformCopies(stockItem);
@@ -56,6 +58,33 @@ export function BrandCopyGenerator({ stockItem, onUpdateCopies }: Props) {
     window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
   };
 
+  const handleAIGenerate = async () => {
+    setIsGeneratingAI(true);
+    setAiError(null);
+    try {
+      const response = await fetch('/api/generate-caption', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stockItem }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to generate AI captions');
+      }
+      const data = await response.json();
+      const fresh = {
+        whatsapp: data.whatsapp || copies.whatsapp,
+        instagram: data.instagram || copies.instagram,
+        website: data.website || copies.website,
+      };
+      setCopies(fresh);
+      if (onUpdateCopies) onUpdateCopies(fresh);
+    } catch (err: any) {
+      setAiError(err.message);
+    } finally {
+      setIsGeneratingAI(false);
+    }
+  };
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4 shadow-xs">
       {/* Header */}
@@ -72,15 +101,33 @@ export function BrandCopyGenerator({ stockItem, onUpdateCopies }: Props) {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={handleRegenerateFromBrand}
-          className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-colors shrink-0 cursor-pointer font-medium"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span>Reset to Default Text</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleAIGenerate}
+            disabled={isGeneratingAI}
+            className="text-xs text-white bg-indigo-600 hover:bg-indigo-700 flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-colors shrink-0 cursor-pointer font-medium disabled:opacity-50"
+          >
+            {isGeneratingAI ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            <span>AI Enhance Copy</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleRegenerateFromBrand}
+            className="text-xs text-slate-600 hover:text-slate-900 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-colors shrink-0 cursor-pointer font-medium"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Reset</span>
+          </button>
+        </div>
       </div>
+
+      {aiError && (
+        <div className="text-xs text-red-600 bg-red-50 p-2 rounded-lg border border-red-200">
+          Error: {aiError}
+        </div>
+      )}
 
       {/* Platform Switcher Tabs */}
       <div className="flex flex-wrap gap-2">

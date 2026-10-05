@@ -184,7 +184,7 @@ export function WhatsAppTemplateBuilder({ stockItem, availablePoses }: Props) {
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 20px monospace';
       ctx.textAlign = 'left';
-      ctx.fillText(`CODE: ${stockItem.stockCode || 'MYRA-01'}`, 65, footerY + 60);
+      ctx.fillText(`CODE: ${stockItem.stockCode || 'RGJDASS-01'}`, 65, footerY + 60);
 
       // Price Tag
       ctx.fillStyle = '#10b981'; // Emerald
@@ -206,7 +206,7 @@ export function WhatsAppTemplateBuilder({ stockItem, availablePoses }: Props) {
       ctx.fillStyle = '#d4af37';
       ctx.font = 'bold 22px serif';
       ctx.textAlign = 'right';
-      ctx.fillText('MYRA COUTURE', width - 50, footerY + 65);
+      ctx.fillText('RGJDASS COUTURE', width - 50, footerY + 65);
       ctx.font = '14px sans-serif';
       ctx.fillStyle = '#737373';
       ctx.fillText('Handcrafted Luxury', width - 50, footerY + 95);

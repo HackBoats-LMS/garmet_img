@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     const challenge = url.searchParams.get('hub.challenge');
 
     if (mode && token) {
-      if (mode === 'subscribe' && token === (process.env.WHATSAPP_VERIFY_TOKEN || 'WTKN_myra_couture_catalog_2024')) {
+      if (mode === 'subscribe' && token === (process.env.WHATSAPP_VERIFY_TOKEN || 'WTKN_rgjdass_couture_catalog_2024')) {
         return new NextResponse(challenge, { status: 200 });
       }
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });

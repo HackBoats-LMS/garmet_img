@@ -61,76 +61,114 @@ async function ensureAIModelTable() {
 
 // GET /api/admin/models — List all AI models
 export async function GET() {
-  try {
-    const session = await auth();
-    if ((session?.user as any)?.role !== 'admin') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  // Timeout wrapper: never let the client wait more than 15 seconds
+  const timeoutMs = 15_000;
+  const timeoutPromise = new Promise<NextResponse>((resolve) =>
+    setTimeout(() => {
+      console.warn('[Admin Models GET] Timed out after 15s — returning defaults');
+      resolve(NextResponse.json({
+        models: DEFAULT_SEED_MODELS.map((m, idx) => ({ id: `default_${idx}`, ...m })),
+      }));
+    }, timeoutMs)
+  );
 
-    await ensureAIModelTable();
-
-    let models: any[] = [];
+  const fetchModels = async (): Promise<NextResponse> => {
     try {
-      models = await prisma.$queryRawUnsafe(`
-        SELECT * FROM "AIModel" ORDER BY "sortOrder" ASC, "createdAt" ASC;
-      `);
-    } catch (queryErr) {
-      console.warn('[Admin Models GET Fallback to Prisma]:', queryErr);
-      try {
-        models = await (prisma.aIModel || (prisma as any).aiModel).findMany({
-          orderBy: { sortOrder: 'asc' },
-        });
-      } catch (pErr) {
-        console.error('[Prisma findMany failed]:', pErr);
-      }
-    }
-
-    // Auto-seed if empty
-    if (!models || models.length === 0) {
-      console.log('[Admin Models] Table empty. Auto-seeding default AI models...');
-      for (const m of DEFAULT_SEED_MODELS) {
-        try {
-          await prisma.$executeRawUnsafe(
-            `
-            INSERT INTO "AIModel" ("id", "name", "tagline", "imageUrl", "skinTone", "features", "promptAnchor", "isActive", "sortOrder", "createdAt", "updatedAt")
-            VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW());
-            `,
-            m.name,
-            m.tagline,
-            m.imageUrl,
-            m.skinTone,
-            m.features,
-            m.promptAnchor,
-            m.isActive,
-            m.sortOrder
-          );
-        } catch (seedErr) {
-          console.warn('[Seed Model Item Error]:', seedErr);
-        }
+      const session = await auth();
+      if ((session?.user as any)?.role !== 'admin') {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       }
 
-      // Re-fetch after seeding
+      // Force reconnect to avoid stale Neon connections (P1017)
+      try { await prisma.$connect(); } catch (e) {
+        console.warn('[Admin Models] $connect failed:', e);
+      }
+
+      await ensureAIModelTable();
+
+      let models: any[] = [];
       try {
         models = await prisma.$queryRawUnsafe(`
           SELECT * FROM "AIModel" ORDER BY "sortOrder" ASC, "createdAt" ASC;
         `);
-      } catch (e) {
+      } catch (queryErr: any) {
+        console.warn('[Admin Models GET query error]:', queryErr?.code, queryErr?.message);
+        
+        // If connection died, try reconnecting once
+        if (queryErr?.code === 'P1017' || queryErr?.code === 'P2010') {
+          try {
+            await prisma.$disconnect();
+            await prisma.$connect();
+            models = await prisma.$queryRawUnsafe(`
+              SELECT * FROM "AIModel" ORDER BY "sortOrder" ASC, "createdAt" ASC;
+            `);
+          } catch (retryErr) {
+            console.warn('[Admin Models GET retry also failed]:', retryErr);
+          }
+        }
+        
+        // Fallback to Prisma client
+        if (!models || models.length === 0) {
+          try {
+            models = await (prisma.aIModel || (prisma as any).aiModel).findMany({
+              orderBy: { sortOrder: 'asc' },
+            });
+          } catch (pErr) {
+            console.error('[Prisma findMany failed]:', pErr);
+          }
+        }
+      }
+
+      // Auto-seed if empty
+      if (!models || models.length === 0) {
+        console.log('[Admin Models] Table empty. Auto-seeding default AI models...');
+        for (const m of DEFAULT_SEED_MODELS) {
+          try {
+            await prisma.$executeRawUnsafe(
+              `
+              INSERT INTO "AIModel" ("id", "name", "tagline", "imageUrl", "skinTone", "features", "promptAnchor", "isActive", "sortOrder", "createdAt", "updatedAt")
+              VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW());
+              `,
+              m.name,
+              m.tagline,
+              m.imageUrl,
+              m.skinTone,
+              m.features,
+              m.promptAnchor,
+              m.isActive,
+              m.sortOrder
+            );
+          } catch (seedErr) {
+            console.warn('[Seed Model Item Error]:', seedErr);
+          }
+        }
+
+        // Re-fetch after seeding
+        try {
+          models = await prisma.$queryRawUnsafe(`
+            SELECT * FROM "AIModel" ORDER BY "sortOrder" ASC, "createdAt" ASC;
+          `);
+        } catch (e) {
+          models = DEFAULT_SEED_MODELS.map((m, idx) => ({ id: `default_${idx}`, ...m }));
+        }
+      }
+
+      // If still empty due to any DB connection glitch, return defaults so UI always works
+      if (!models || models.length === 0) {
         models = DEFAULT_SEED_MODELS.map((m, idx) => ({ id: `default_${idx}`, ...m }));
       }
-    }
 
-    // If still empty due to any DB connection glitch, return defaults so UI always works
-    if (!models || models.length === 0) {
-      models = DEFAULT_SEED_MODELS.map((m, idx) => ({ id: `default_${idx}`, ...m }));
+      return NextResponse.json({ models });
+    } catch (error: any) {
+      console.error('[GET /api/admin/models error]:', error);
+      return NextResponse.json({
+        models: DEFAULT_SEED_MODELS.map((m, idx) => ({ id: `default_${idx}`, ...m })),
+      });
     }
+  };
 
-    return NextResponse.json({ models });
-  } catch (error: any) {
-    console.error('[GET /api/admin/models error]:', error);
-    return NextResponse.json({
-      models: DEFAULT_SEED_MODELS.map((m, idx) => ({ id: `default_${idx}`, ...m })),
-    });
-  }
+  // Race: return whichever finishes first — real data or timeout fallback
+  return Promise.race([fetchModels(), timeoutPromise]);
 }
 
 // POST /api/admin/models — Create a new AI model

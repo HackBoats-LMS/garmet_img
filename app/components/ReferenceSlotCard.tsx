@@ -3,7 +3,8 @@
 import React, { useRef } from 'react';
 import { ReferenceSlot, UploadedReference } from '../types';
 import { FABRIC_PRESETS, COLOR_PALETTES } from '../utils/constants';
-import { Upload, X, Sparkles, Sliders, Palette, Layers, HelpCircle, Check } from 'lucide-react';
+import { Upload, X, Sparkles, Sliders, Palette, Layers, HelpCircle, Check, Cloud } from 'lucide-react';
+import { useGooglePicker } from '../hooks/useGooglePicker';
 
 interface ReferenceSlotCardProps {
   slot: ReferenceSlot;
@@ -29,6 +30,16 @@ export const ReferenceSlotCard: React.FC<ReferenceSlotCardProps> = ({
     customNotes: '',
     aspectImportance: 'strict',
   };
+
+  const onFileSelectFromDrive = (file: File, previewUrl: string) => {
+    onChange(slot.id, {
+      ...currentRef,
+      file,
+      previewUrl,
+    });
+  };
+
+  const { openPicker } = useGooglePicker(onFileSelectFromDrive);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -133,19 +144,29 @@ export const ReferenceSlotCard: React.FC<ReferenceSlotCardProps> = ({
               </div>
             </div>
           ) : (
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-amber-500 dark:hover:border-amber-400 bg-zinc-50/70 dark:bg-zinc-800/40 hover:bg-amber-50/30 dark:hover:bg-amber-950/10 rounded-xl p-4 aspect-[4/3] flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200"
-            >
-              <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-300 flex items-center justify-center mb-2 shadow-inner">
-                <Upload className="w-5 h-5" />
+            <div className="flex flex-col gap-2">
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-amber-500 dark:hover:border-amber-400 bg-zinc-50/70 dark:bg-zinc-800/40 hover:bg-amber-50/30 dark:hover:bg-amber-950/10 rounded-xl p-4 aspect-[4/3] flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-200"
+              >
+                <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-300 flex items-center justify-center mb-2 shadow-inner">
+                  <Upload className="w-5 h-5" />
+                </div>
+                <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
+                  Click or Drop {slot.shortLabel} Photo
+                </p>
+                <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-0.5">
+                  PNG, JPG, WebP up to 10MB
+                </p>
               </div>
-              <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">
-                Click or Drop {slot.shortLabel} Photo
-              </p>
-              <p className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-0.5">
-                PNG, JPG, WebP up to 10MB
-              </p>
+              <button
+                type="button"
+                onClick={openPicker}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-700/50 transition-colors shadow-sm"
+              >
+                <Cloud className="w-4 h-4 text-blue-500" />
+                Select from Google Drive
+              </button>
             </div>
           )}
 
