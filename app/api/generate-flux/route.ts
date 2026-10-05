@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
-import { uploadGeneratedAsset, uploadToCloudinary, isCloudinaryConfigured } from '@/lib/cloudinary';
+import { uploadGeneratedAsset, uploadToStorage, isStorageConfigured } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -385,8 +385,8 @@ export async function POST(req: NextRequest) {
 
     console.log(`[Kie.ai] Task ID: ${taskId}. Polling for completion...`);
 
-    // Poll task status (up to 40 attempts x 3s = ~120s / 2 minutes) to ensure it finishes and saves even if the browser is closed
-    for (let attempt = 1; attempt <= 40; attempt++) {
+    // Poll task status (up to 80 attempts x 3s = ~240s / 4 minutes) to ensure it finishes and saves
+    for (let attempt = 1; attempt <= 80; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 3000));
 
       const checkRes = await fetch(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${taskId}`, {
@@ -484,16 +484,16 @@ export async function POST(req: NextRequest) {
 
           // Upscaling removed as per user request
 
-          // Upload to Cloudinary for permanent storage
+          // Upload to Cloudflare R2 for permanent storage
           let permanentUrl = finalImageUrl;
-          if (isCloudinaryConfigured()) {
+          if (isStorageConfigured()) {
             try {
               const uId = userId || 'customer';
               const oId = orderId || 'order';
               const pId = poseId || taskId;
               permanentUrl = await uploadGeneratedAsset(finalImageUrl, uId, oId, pId);
             } catch (cloudErr) {
-              console.warn('[Cloudinary] Failed to upload generated asset, falling back to direct URL:', cloudErr);
+              console.warn('[Storage] Failed to upload generated asset, falling back to direct URL:', cloudErr);
             }
           }
 
@@ -639,6 +639,25 @@ async function saveGeneratedOrder(params: {
           },
         });
         console.log(`[DB AutoSave] Updated CustomerOrder ${activeOrderId} with pose ${currentPoseKey}`);
+        
+        // Auto-link to Product inventory
+        if (stockCode) {
+          const product = await prisma.product.findFirst({
+            where: { OR: [{ stockCode }, { friendlyCode: stockCode }] },
+          });
+          if (product) {
+            const firstImage = Object.values(updatedGenImages as Record<string, {imageUrl: string}>)[0];
+            await prisma.product.update({
+              where: { id: product.id },
+              data: {
+                generatedImages: updatedGenImages as any,
+                linkedOrderId: activeOrderId,
+                coverImageUrl: firstImage?.imageUrl || product.coverImageUrl,
+              },
+            });
+            console.log(`[DB AutoSave] Synced CustomerOrder ${activeOrderId} to Product ${product.id}`);
+          }
+        }
       } else {
         await prisma.customerOrder.create({
           data: {
@@ -656,6 +675,25 @@ async function saveGeneratedOrder(params: {
           },
         });
         console.log(`[DB AutoSave] Created CustomerOrder ${activeOrderId} with pose ${currentPoseKey}`);
+        
+        // Auto-link to Product inventory
+        if (stockCode) {
+          const product = await prisma.product.findFirst({
+            where: { OR: [{ stockCode }, { friendlyCode: stockCode }] },
+          });
+          if (product) {
+            const firstImage = Object.values(updatedGenImages as Record<string, {imageUrl: string}>)[0];
+            await prisma.product.update({
+              where: { id: product.id },
+              data: {
+                generatedImages: updatedGenImages as any,
+                linkedOrderId: activeOrderId,
+                coverImageUrl: firstImage?.imageUrl || product.coverImageUrl,
+              },
+            });
+            console.log(`[DB AutoSave] Synced CustomerOrder ${activeOrderId} to Product ${product.id}`);
+          }
+        }
       }
     } catch (dbErr) {
       console.error('[DB AutoSave Error]:', dbErr);

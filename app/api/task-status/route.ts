@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { uploadGeneratedAsset, isCloudinaryConfigured } from '@/lib/cloudinary';
+import { uploadGeneratedAsset, isStorageConfigured } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -126,7 +126,7 @@ export async function GET(req: NextRequest) {
 
           if (finalImageUrl) {
             let permanentUrl = finalImageUrl;
-            if (isCloudinaryConfigured()) {
+            if (isStorageConfigured()) {
               try {
                 permanentUrl = await uploadGeneratedAsset(finalImageUrl, userId, orderId, poseId);
               } catch (cErr) {
@@ -234,7 +234,7 @@ export async function GET(req: NextRequest) {
 
                 if (imageUrl) {
                   let permanentUrl = imageUrl;
-                  if (isCloudinaryConfigured()) {
+                  if (isStorageConfigured()) {
                     try {
                       permanentUrl = await uploadGeneratedAsset(imageUrl, userId, orderId, poseId);
                     } catch (cErr) {
@@ -319,7 +319,7 @@ export async function GET(req: NextRequest) {
       }
 
       let permanentUrl = imageUrl;
-      if (imageUrl && isCloudinaryConfigured()) {
+      if (imageUrl && isStorageConfigured()) {
         try {
           permanentUrl = await uploadGeneratedAsset(imageUrl, userId, orderId, poseId);
         } catch (cErr) {

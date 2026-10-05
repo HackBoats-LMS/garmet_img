@@ -5,8 +5,8 @@ import {
   uploadAdminModelAsset,
   uploadCustomerSwatchAsset,
   uploadGeneratedAsset,
-  uploadToCloudinary,
-} from '@/lib/cloudinary';
+  uploadToStorage,
+} from '@/lib/storage';
 
 export async function POST(req: NextRequest) {
   try {
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
 
       default:
         const folder = customFolder || (userRole === 'admin' ? 'coutureai/admin/uploads' : `coutureai/users/${userId}/general`);
-        const result = await uploadToCloudinary(file, { folder });
+        const result = await uploadToStorage(file, { folder });
         secureUrl = result.url;
         break;
     }
