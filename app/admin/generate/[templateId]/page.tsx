@@ -43,8 +43,7 @@ interface AIModelData {
   isActive: boolean;
 }
 
-function AdminGenerateContent({ params }: { params: Promise<{ templateId: string }> }) {
-  const { templateId } = use(params);
+function AdminGenerateContent({ templateId }: { templateId: string }) {
   const router = useRouter();
   const { data: session } = useSession();
   const searchParams = useSearchParams();
@@ -1854,10 +1853,12 @@ function AdminGenerateContent({ params }: { params: Promise<{ templateId: string
   );
 }
 
-export default function AdminGeneratePage({ params }: { params: Promise<{ templateId: string }> }) {
+export default function AdminGeneratePage() {
+  const routeParams = useParams();
+  const templateId = routeParams?.templateId as string || '';
   return (
     <Suspense fallback={<div className="flex items-center justify-center py-32"><div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" /></div>}>
-      <AdminGenerateContent params={params} />
+      <AdminGenerateContent templateId={templateId} />
     </Suspense>
   );
 }
