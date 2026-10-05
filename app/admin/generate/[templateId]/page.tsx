@@ -457,7 +457,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     }
   };
 
-  // Compress image for API transmission (512px max, 60% JPEG quality to avoid 413 payload errors)
+  // Compress image for API transmission (1024px max, 85% JPEG quality for better clarity)
   const compressImageForAPI = (dataUrl: string): Promise<string> => {
     return new Promise((resolve) => {
       try {
@@ -466,7 +466,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         img.onload = () => {
           try {
             const canvas = document.createElement('canvas');
-            const MAX_DIM = 512;
+            const MAX_DIM = 1024;
             let w = img.width, h = img.height;
             if (w > MAX_DIM || h > MAX_DIM) {
               if (w > h) { h = Math.round(h * MAX_DIM / w); w = MAX_DIM; }
@@ -474,7 +474,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
             }
             canvas.width = w; canvas.height = h;
             canvas.getContext('2d')?.drawImage(img, 0, 0, w, h);
-            resolve(canvas.toDataURL('image/jpeg', 0.6));
+            resolve(canvas.toDataURL('image/jpeg', 0.85));
           } catch (e) {
             console.warn('[Compress] Canvas tainted or error:', e);
             resolve(dataUrl); // Fallback to raw if compression fails

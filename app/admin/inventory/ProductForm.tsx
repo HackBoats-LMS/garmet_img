@@ -352,6 +352,33 @@ export function ProductForm({ productId }: Props) {
     setCustomFields(prev => prev.filter(f => f.key !== key));
   };
 
+  const moveImage = (poseId: string, direction: 'up' | 'down') => {
+    if (!generatedImages) return;
+    const entries = Object.entries(generatedImages);
+    const index = entries.findIndex(([id]) => id === poseId);
+    if (index < 0) return;
+    if (direction === 'up' && index > 0) {
+      const temp = entries[index];
+      entries[index] = entries[index - 1];
+      entries[index - 1] = temp;
+    } else if (direction === 'down' && index < entries.length - 1) {
+      const temp = entries[index];
+      entries[index] = entries[index + 1];
+      entries[index + 1] = temp;
+    } else {
+      return;
+    }
+    const newObj = Object.fromEntries(entries);
+    setGeneratedImages(newObj);
+  };
+
+  const deleteImage = (poseId: string) => {
+    if (!generatedImages) return;
+    const newObj = { ...generatedImages };
+    delete newObj[poseId];
+    setGeneratedImages(newObj);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true); setError(null);
@@ -370,6 +397,7 @@ export function ProductForm({ productId }: Props) {
         wholesalePrice: form.wholesalePrice ? parseFloat(form.wholesalePrice) : null,
         quantity: parseInt(form.quantity) || 0,
         customFields: Object.keys(customFieldsJson).length > 0 ? customFieldsJson : null,
+        generatedImages,
       };
 
       if (isEdit && qtyAdjustment) {
@@ -954,9 +982,20 @@ export function ProductForm({ productId }: Props) {
             {generatedImages && Object.keys(generatedImages).length > 0 ? (
               <>
                 <div className="grid grid-cols-2 gap-2">
-                  {Object.entries(generatedImages).map(([poseId, img]) => (
+                  {Object.entries(generatedImages).map(([poseId, img], idx, arr) => (
                     <div key={poseId} className="aspect-[3/4] rounded-xl overflow-hidden border border-cream-border bg-cream-light group relative">
                       <img src={img.imageUrl} alt="Generated" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button type="button" onClick={() => moveImage(poseId, 'up')} disabled={idx === 0} className="p-1.5 bg-white/80 rounded hover:bg-white text-charcoal disabled:opacity-50">
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                        </button>
+                        <button type="button" onClick={() => moveImage(poseId, 'down')} disabled={idx === arr.length - 1} className="p-1.5 bg-white/80 rounded hover:bg-white text-charcoal disabled:opacity-50">
+                          <ArrowLeft className="w-3.5 h-3.5 rotate-180" />
+                        </button>
+                        <button type="button" onClick={() => deleteImage(poseId)} className="p-1.5 bg-white/80 rounded hover:bg-red-50 text-red-600">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
