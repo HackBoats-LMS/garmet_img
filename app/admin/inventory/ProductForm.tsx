@@ -6,7 +6,7 @@ import {
   Save, Package, Tag, ArrowLeft, Sparkles, Image as ImageIcon,
   Plus, X, Info, RefreshCw, AlertCircle, CheckCircle2,
   ChevronDown, ChevronUp, Trash2, Settings2, MessageSquare,
-  ShoppingBag, Share2, ThumbsUp, Globe, Smartphone
+  ShoppingBag, Share2, ThumbsUp, Globe, Smartphone, Upload, Loader2
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
@@ -377,6 +377,66 @@ export function ProductForm({ productId }: Props) {
     const newObj = { ...generatedImages };
     delete newObj[poseId];
     setGeneratedImages(newObj);
+  };
+
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const handleUploadCoverImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingCover(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64 = event.target?.result as string;
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file: base64, type: 'default' }),
+        });
+        const data = await res.json();
+        if (data.url) {
+          set('coverImageUrl', data.url);
+        }
+      } catch (err) {
+        console.error('Failed to upload cover image', err);
+      } finally {
+        setUploadingCover(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const [uploadingCatalogue, setUploadingCatalogue] = useState(false);
+  const handleUploadCataloguePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingCatalogue(true);
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64 = event.target?.result as string;
+      try {
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file: base64, type: 'generated', orderId: productId || 'manual' }),
+        });
+        const data = await res.json();
+        if (data.url) {
+          const newPoseId = 'uploaded_' + Date.now();
+          setGeneratedImages(prev => ({
+            ...(prev || {}),
+            [newPoseId]: { imageUrl: data.url, prompt: 'Manually uploaded' }
+          }));
+        }
+      } catch (err) {
+        console.error('Failed to upload catalogue photo', err);
+      } finally {
+        setUploadingCatalogue(false);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -955,8 +1015,31 @@ export function ProductForm({ productId }: Props) {
           {/* Cover Image */}
           <Card className="p-6 space-y-3">
             <h2 className="font-display text-base font-bold text-charcoal">Thumbnail</h2>
-            <Input label="Cover Image URL" value={form.coverImageUrl}
-              onChange={e => set('coverImageUrl', e.target.value)} placeholder="https://..." />
+            
+            <div className="flex gap-3 items-end">
+              <div className="flex-1">
+                <Input label="Cover Image URL" value={form.coverImageUrl}
+                  onChange={e => set('coverImageUrl', e.target.value)} placeholder="https://..." />
+              </div>
+              <div className="relative">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleUploadCoverImage}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  disabled={uploadingCover}
+                />
+                <button
+                  type="button"
+                  disabled={uploadingCover}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-cream-border bg-white hover:bg-cream-light text-sm font-semibold text-charcoal transition-colors disabled:opacity-50"
+                >
+                  {uploadingCover ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4 text-accent" />}
+                  Upload
+                </button>
+              </div>
+            </div>
+
             {form.coverImageUrl && (
               <div className="aspect-square rounded-xl overflow-hidden border border-cream-border bg-cream-light">
                 <img src={form.coverImageUrl} alt="Cover" className="w-full h-full object-cover" />
@@ -971,11 +1054,30 @@ export function ProductForm({ productId }: Props) {
                 <Sparkles className="w-4 h-4 text-accent" /> AI Catalogue Photos
               </h2>
               {isEdit && (
-                <a href={`/customer/order?productId=${productId}`}
-                  className="text-[10px] px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold hover:bg-accent/90 transition-all flex items-center gap-1"
-                  target="_blank" rel="noreferrer">
-                  <ImageIcon className="w-3 h-3" /> Generate Photos
-                </a>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleUploadCataloguePhoto}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      disabled={uploadingCatalogue}
+                    />
+                    <button
+                      type="button"
+                      disabled={uploadingCatalogue}
+                      className="text-[10px] px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-charcoal font-bold hover:bg-cream-light transition-all flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {uploadingCatalogue ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+                      Upload Photo
+                    </button>
+                  </div>
+                  <a href={`/customer/order?productId=${productId}`}
+                    className="text-[10px] px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold hover:bg-accent/90 transition-all flex items-center gap-1"
+                    target="_blank" rel="noreferrer">
+                    <ImageIcon className="w-3 h-3" /> Generate Photos
+                  </a>
+                </div>
               )}
             </div>
 

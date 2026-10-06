@@ -4,8 +4,7 @@ import fs from 'fs';
 import prisma from '@/lib/prisma';
 import { uploadAdminModelAsset, isStorageConfigured } from '@/lib/storage';
 import { auth } from '@/lib/auth';
-
-// Helper to save base64 locally if Cloudinary is unavailable
+// Helper to save base64 locally if Storage is unavailable
 function saveBase64Locally(base64Str: string, filenamePrefix: string): string {
   try {
     const matches = base64Str.match(/^data:image\/([a-zA-Z0-9]+);base64,(.+)$/);

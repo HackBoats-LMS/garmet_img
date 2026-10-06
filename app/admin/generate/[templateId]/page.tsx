@@ -13,7 +13,6 @@ import { Input, Textarea } from '@/app/components/ui/Input';
 import { Card } from '@/app/components/ui/Card';
 import { Badge } from '@/app/components/ui/Badge';
 import { StepIndicator } from '@/app/components/ui/StepIndicator';
-import { CldUploadWidget } from 'next-cloudinary';
 import useDrivePicker from 'react-google-drive-picker';
 
 interface TemplateData {
@@ -974,27 +973,11 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                       <p className="text-[11px] text-charcoal-muted leading-tight">{slot.description}</p>
                     )}
 
-                    <CldUploadWidget
-                      signatureEndpoint="/api/cloudinary/sign"
-                      options={{
-                        sources: ['local', 'google_drive', 'dropbox', 'camera'],
-                        multiple: false,
-                        maxFiles: 1,
-                        clientAllowedFormats: ['png', 'jpeg', 'webp', 'jpg'],
-                        maxFileSize: 10485760 // 10MB
-                      }}
-                      onSuccess={(result: any) => {
-                        if (result?.info?.secure_url) {
-                          processImageUrl(slot.id, result.info.secure_url);
-                        }
-                      }}
-                    >
-                      {({ open }) => (
                         <div
                           onClick={(e) => {
                             if (!isUploaded) {
                               e.preventDefault();
-                              open();
+                              fileInputRefs.current[slot.id]?.click();
                             }
                           }}
                           onDragOver={(e) => handleDragOver(slot.id, e)}
@@ -1089,7 +1072,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   e.preventDefault();
-                                  open();
+                                  fileInputRefs.current[slot.id]?.click();
                                 }}
                                 className="p-1.5 rounded-xl bg-white/90 text-charcoal hover:bg-white text-xs font-bold shadow-md transition-colors cursor-pointer"
                                 title="Replace Photo"
@@ -1122,8 +1105,6 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                         onChange={(e) => handleImageUpload(slot.id, e)}
                       />
                     </div>
-                  )}
-                </CldUploadWidget>
 
                     {!isUploaded && (
                       <button
