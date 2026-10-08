@@ -33,6 +33,16 @@ const DEFAULT_SEED_MODELS = [
     isActive: true,
     sortOrder: 2,
   },
+  {
+    name: 'Priyanka',
+    tagline: 'Modern Everyday Muse',
+    imageUrl: '/model_divya.jpg',
+    skinTone: 'Warm Wheatish',
+    features: 'Large expressive brown eyes, long wavy brown hair, natural skin texture, serene confident expression',
+    promptAnchor: 'Consistent identity: Priyanka, a 35-year-old Indian female fashion model, warm wheatish skin tone with natural texture, large brown eyes, long wavy brown hair, serene confident expression, modern elegance',
+    isActive: true,
+    sortOrder: 3,
+  },
 ];
 
 // Ensure AIModel table exists

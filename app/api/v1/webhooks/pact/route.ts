@@ -23,22 +23,22 @@ export async function POST(request: Request) {
     // 3. Process Each Item from PACT
     for (const item of items) {
       const stockCode = item.STOCK_CODE ? String(item.STOCK_CODE) : null;
-      const designNumber = item.DESIGN_NUMBER ? String(item.DESIGN_NUMBER) : null;
+      const productCode = item.DESIGN_NUMBER ? String(item.DESIGN_NUMBER) : null;
       const newCodeGenerated = item.NEW_CODE_GENERATED ? String(item.NEW_CODE_GENERATED) : null;
 
       // Ensure mandatory fields exist
-      if (!stockCode || !designNumber) {
+      if (!stockCode || !productCode) {
         console.warn('[PACT Webhook] Item skipped: missing mandatory STOCK_CODE or DESIGN_NUMBER');
         continue;
       }
 
-      // Find the stable product by NEW_CODE_GENERATED (friendlyCode) OR DESIGN_NUMBER
+      // Find the stable product by NEW_CODE_GENERATED (code1) OR DESIGN_NUMBER
       let existingProduct = null;
       if (newCodeGenerated) {
-        existingProduct = await prisma.product.findFirst({ where: { friendlyCode: newCodeGenerated } });
+        existingProduct = await prisma.product.findFirst({ where: { code1: newCodeGenerated } });
       }
       if (!existingProduct) {
-        existingProduct = await prisma.product.findFirst({ where: { designNumber: designNumber } });
+        existingProduct = await prisma.product.findFirst({ where: { productCode: productCode } });
       }
 
       // If PACT is sending an offline sale deduction
@@ -77,11 +77,11 @@ export async function POST(request: Request) {
             quantity: existingProduct.quantity + newQty, // Add new batch to existing quantity!
           };
           
-          if (newCodeGenerated) updateData.friendlyCode = newCodeGenerated;
-          if (item.RETAIL_PRICE !== undefined) updateData.price = parseFloat(item.RETAIL_PRICE) || 0;
+          if (newCodeGenerated) updateData.code1 = newCodeGenerated;
+          if (item.RETAIL_PRICE !== undefined) updateData.unitPrice = parseFloat(item.RETAIL_PRICE) || 0;
           if (item.WHOLESALE_PRICE !== undefined) updateData.wholesalePrice = parseFloat(item.WHOLESALE_PRICE) || 0;
           if (item.UNIT_PRICE !== undefined) updateData.mrp = parseFloat(item.UNIT_PRICE) || 0;
-          if (item.PRODUCT_NAME) updateData.title = item.PRODUCT_NAME;
+          if (item.PRODUCT_NAME) updateData.productName = item.PRODUCT_NAME;
           
           // Only update text fields if explicitly sent
           if (item.LOCATION) updateData.location = item.LOCATION;
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
                 action: 'pact_ingestion',
                 qtyChange: newQty,
                 qtyAfter: existingProduct.quantity + newQty,
-                note: `PACT added batch ${stockCode} to stable design ${designNumber}.`,
+                note: `PACT added batch ${stockCode} to stable design ${productCode}.`,
                 source: 'pact_erp'
               }
             });
@@ -110,13 +110,13 @@ export async function POST(request: Request) {
           // 2. CREATE BRAND NEW STABLE PRODUCT
           const createData = {
             stockCode: stockCode,
-            friendlyCode: newCodeGenerated || null,
-            title: item.PRODUCT_NAME || item.WHATSAPP_CATALOGUE_TITLE || item.SHOPIFY_TITLE || 'New Garment',
-            designNumber: designNumber,
+            code1: newCodeGenerated || null,
+            productName: item.PRODUCT_NAME || item.WHATSAPP_CATALOGUE_TITLE || item.SHOPIFY_TITLE || 'New Garment',
+            productCode: productCode,
             size: item.SIZE || null,
             color: item.COLOUR || null,
             location: item.LOCATION || null,
-            price: parseFloat(item.RETAIL_PRICE) || 0,
+            unitPrice: parseFloat(item.RETAIL_PRICE) || 0,
             wholesalePrice: parseFloat(item.WHOLESALE_PRICE) || 0,
             mrp: parseFloat(item.UNIT_PRICE) || 0, 
             description: item.PRODUCT_DESCRIPTION || null,

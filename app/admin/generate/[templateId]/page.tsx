@@ -607,7 +607,18 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     if (isSaree) {
       dynamicStyling = optStr ? `Blouse & Custom Styling: Fitted designer blouse with ${optStr}.` : 'Blouse: Perfectly fitted matching designer blouse.';
     } else if (isKurti) {
-      dynamicStyling = optStr ? `Kurti Styling Details: ${optStr}.` : 'Styling: Perfectly matching bottom wear and gracefully draped dupatta (if applicable).';
+      let kurtiDetails = '';
+      const hasPant = !!uploadedImages['kurti_pant'] || !!uploadedImages['bottom_pant'];
+      const hasDupatta = !!uploadedImages['kurti_dupatta'];
+
+      if (hasPant && hasDupatta) {
+        kurtiDetails = 'Styling: Perfectly matching bottom pant and gracefully draped dupatta matching the provided fabric images.';
+      } else if (hasPant) {
+        kurtiDetails = 'Styling: Perfectly matching bottom pant matching the provided fabric image, without any dupatta.';
+      } else {
+        kurtiDetails = 'Styling: Perfectly matching complementary bottom pant designed to match the kurti body, without any dupatta.';
+      }
+      dynamicStyling = optStr ? `${kurtiDetails} Custom Details: ${optStr}.` : kurtiDetails;
     } else if (isLehenga) {
       dynamicStyling = optStr ? `Lehenga Styling: ${optStr}.` : 'Styling: Perfectly matching choli and gracefully draped dupatta.';
     } else {
@@ -688,7 +699,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         for (let i = 0; i < 150; i++) {
           const uId = (session?.user as any)?.id || 'customer';
           const oId = orderId || 'order';
-          const check = await fetch(`/api/task-status?taskId=${data.taskId}&userId=${uId}&orderId=${oId}&poseId=${pose.id}${providerParam}`);
+          const pIdParam = productId ? `&productId=${productId}` : '';
+          const check = await fetch(`/api/task-status?taskId=${data.taskId}&userId=${uId}&orderId=${oId}&poseId=${pose.id}${providerParam}${pIdParam}`);
           if (check.ok) {
             const cd = await check.json();
             if (cd.status === 'completed' && cd.imageUrl) {

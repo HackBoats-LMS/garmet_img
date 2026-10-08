@@ -40,3 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 files
+# Picky Assist Local Test Pages
+app/admin/picky-test/
+app/api/admin/picky-test/

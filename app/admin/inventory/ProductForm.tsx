@@ -2,6 +2,8 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import useDrivePicker from 'react-google-drive-picker';
 import {
   Save, Package, Tag, ArrowLeft, Sparkles, Image as ImageIcon,
   Plus, X, Info, RefreshCw, AlertCircle, CheckCircle2,
@@ -130,6 +132,8 @@ const emptyForm = (): ProductFormData => ({
 
 export function ProductForm({ productId }: Props) {
   const router = useRouter();
+  const { data: session } = useSession();
+  const [openPicker, authResponse] = useDrivePicker();
   const isEdit = !!productId;
 
   const [categories, setCategories] = useState<Category[]>([]);
@@ -408,10 +412,8 @@ export function ProductForm({ productId }: Props) {
   };
 
   const [uploadingCatalogue, setUploadingCatalogue] = useState(false);
-  const handleUploadCataloguePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  
+  const uploadCatalogueFile = async (file: File) => {
     setUploadingCatalogue(true);
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -437,6 +439,50 @@ export function ProductForm({ productId }: Props) {
       }
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleUploadCataloguePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) uploadCatalogueFile(file);
+  };
+
+  const handleOpenGooglePicker = () => {
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
+    const fallbackAppId = clientId.split('-')[0];
+    const token = (session?.user as any)?.accessToken || '';
+
+    openPicker({
+      token: token,
+      clientId: clientId,
+      developerKey: process.env.NEXT_PUBLIC_GOOGLE_API_KEY || '',
+      appId: process.env.NEXT_PUBLIC_GOOGLE_APP_ID || fallbackAppId,
+      viewId: "DOCS_IMAGES",
+      showUploadView: true,
+      showUploadFolders: true,
+      supportDrives: true,
+      multiselect: false,
+      callbackFunction: async (data: any) => {
+        if (data.action === 'picked') {
+          const doc = data.docs[0];
+          const token = (authResponse as any)?.access_token || data.oauthToken;
+          
+          if (doc.id) {
+            try {
+              const res = await fetch(`https://www.googleapis.com/drive/v3/files/${doc.id}?alt=media`, {
+                headers: { Authorization: `Bearer ${token}` }
+              });
+              if (res.ok) {
+                const blob = await res.blob();
+                uploadCatalogueFile(new File([blob], doc.name || "google_photo.jpg", { type: blob.type }));
+                return;
+              }
+            } catch (err) {
+              console.warn("Drive v3 download failed", err);
+            }
+          }
+        }
+      }
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1069,9 +1115,22 @@ export function ProductForm({ productId }: Props) {
                       className="text-[10px] px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-charcoal font-bold hover:bg-cream-light transition-all flex items-center gap-1 disabled:opacity-50"
                     >
                       {uploadingCatalogue ? <Loader2 className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
-                      Upload Photo
+                      Upload Local
                     </button>
                   </div>
+                  <button
+                    type="button"
+                    onClick={handleOpenGooglePicker}
+                    disabled={uploadingCatalogue}
+                    className="text-[10px] px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-charcoal font-bold hover:bg-cream-light transition-all flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <svg viewBox="0 0 48 48" className="w-3 h-3">
+                      <path fill="#FFC107" d="M17 7.5L31 7.5 45 31.5 31 31.5z"></path>
+                      <path fill="#1976D2" d="M3.1 31.5L10.1 43.5 38.1 43.5 31.1 31.5z"></path>
+                      <path fill="#4CAF50" d="M17 7.5L3.1 31.5 10.1 43.5 24 19.5z"></path>
+                    </svg>
+                    Drive
+                  </button>
                   <a href={`/customer/order?productId=${productId}`}
                     className="text-[10px] px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold hover:bg-accent/90 transition-all flex items-center gap-1"
                     target="_blank" rel="noreferrer">

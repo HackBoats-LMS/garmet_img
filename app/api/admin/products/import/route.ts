@@ -7,16 +7,16 @@ import * as XLSX from 'xlsx';
 // Based on Project.xlsx columns
 const COL_MAP: Record<string, string> = {
   'STOCK CODE':                                          'stockCode',
-  'NEW CODE GENERATED':                                  'friendlyCode',
-  'DESIGN NUMBER':                                       'designNumber',
-  'SIZE':                                                'size',
-  'SIZE ':                                               'size',       // trailing space variant
+  'NEW CODE GENERATED':                                  'code1',
+  'DESIGN NUMBER':                                       'productCode',
+  'SIZE':                                                'length_Size',
+  'SIZE ':                                               'length_Size',       // trailing space variant
   'COLOUR':                                              'color',
   'LOCATION':                                            'location',
-  'UNIT PRICE':                                          'price',
-  'WHOLESALE PRICE':                                     'wholesalePrice',
-  'RETAIL PRICE':                                        'mrp',
-  'PRODUCT DESCRIPTION - TO BE USED FOR FURTHER GENERATIONS OF CAPTIONS': 'description',
+  'UNIT PRICE':                                          'unitPrice',
+  'WHOLESALE PRICE':                                     'dealerPrice',
+  'RETAIL PRICE':                                        'retailPrice',
+  'PRODUCT DESCRIPTION - TO BE USED FOR FURTHER GENERATIONS OF CAPTIONS': 'productDescription',
   'FABRIC':                                              'clothType',
   'EMBROIDERY TYPE':                                     'embroideryType',
   'CUT STYLE':                                           'cutStyle',
@@ -78,21 +78,21 @@ export async function POST(req: NextRequest) {
       }
 
       // Build title from description or stock code
-      const title = mapped.description
-        ? String(mapped.description).substring(0, 80)
+      const title = mapped.productDescription
+        ? String(mapped.productDescription).substring(0, 80)
         : `Product ${stockCode}`;
 
       const data: any = {
-        title,
-        description: mapped.description ? String(mapped.description) : null,
+        productName: title,
+        productDescription: mapped.productDescription ? String(mapped.productDescription) : null,
         color: mapped.color ? String(mapped.color) : null,
         clothType: mapped.clothType ? String(mapped.clothType) : null,
-        price: mapped.price ? parseFloat(mapped.price) : null,
-        mrp: mapped.mrp ? parseFloat(mapped.mrp) : null,
-        wholesalePrice: mapped.wholesalePrice ? parseFloat(mapped.wholesalePrice) : null,
-        friendlyCode: mapped.friendlyCode ? String(mapped.friendlyCode).trim() || null : null,
-        designNumber: mapped.designNumber ? String(mapped.designNumber) : null,
-        size: mapped.size ? String(mapped.size) : null,
+        unitPrice: mapped.unitPrice ? parseFloat(mapped.unitPrice) : null,
+        retailPrice: mapped.retailPrice ? parseFloat(mapped.retailPrice) : null,
+        dealerPrice: mapped.dealerPrice ? parseFloat(mapped.dealerPrice) : null,
+        code1: mapped.code1 ? String(mapped.code1).trim() || null : null,
+        productCode: mapped.productCode ? String(mapped.productCode) : null,
+        length_Size: mapped.length_Size ? String(mapped.length_Size) : null,
         location: mapped.location ? String(mapped.location) : null,
         embroideryType: mapped.embroideryType ? String(mapped.embroideryType) : null,
         cutStyle: mapped.cutStyle ? String(mapped.cutStyle) : null,
@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
         }
 
         // Auto-link to design group if design number present
-        const dn = mapped.designNumber ? String(mapped.designNumber).trim() : '';
+        const dn = mapped.productCode ? String(mapped.productCode).trim() : '';
         if (dn) {
           let group = await prisma.productDesignGroup.findUnique({ where: { designNumber: dn } });
           if (!group) {
@@ -127,7 +127,7 @@ export async function POST(req: NextRequest) {
               data: {
                 designNumber: dn,
                 title: title.substring(0, 120),
-                description: mapped.description ? String(mapped.description) : null,
+                description: mapped.productDescription ? String(mapped.productDescription) : null,
                 color: mapped.color ? String(mapped.color) : null,
                 clothType: mapped.clothType ? String(mapped.clothType) : null,
                 tags: [],

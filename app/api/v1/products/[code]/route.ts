@@ -8,7 +8,7 @@ function checkApiKey(req: NextRequest): boolean {
 
 /**
  * GET /api/v1/products/[code]
- * Lookup product by stockCode OR friendlyCode.
+ * Lookup product by stockCode OR code1.
  * Also returns generated catalogue images.
  */
 export async function GET(
@@ -26,7 +26,7 @@ export async function GET(
       where: {
         OR: [
           { stockCode: code },
-          { friendlyCode: code },
+          { code1: code },
           { id: code },
         ],
       },
@@ -65,7 +65,7 @@ export async function PATCH(
     const { quantity, adjustment, note } = body;
 
     const product = await prisma.product.findFirst({
-      where: { OR: [{ stockCode: code }, { friendlyCode: code }] },
+      where: { OR: [{ stockCode: code }, { code1: code }] },
     });
 
     if (!product) {

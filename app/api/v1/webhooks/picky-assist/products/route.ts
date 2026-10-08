@@ -125,7 +125,7 @@ export async function POST(request: Request) {
       const data = buildProductData(product);
 
       // Ensure title is always present for create (required by Prisma schema)
-      const titleForCreate: string = (data.title as string | undefined) || product.title || stockCode;
+      const titleForCreate: string = (data.productName as string | undefined) || product.productName || stockCode;
 
       await prisma.$transaction(async (tx) => {
         let targetId: string;
@@ -136,7 +136,7 @@ export async function POST(request: Request) {
         } else {
           // Spread data but override title to guarantee a non-undefined string
           const created = await tx.product.create({
-            data: { stockCode, ...data, title: titleForCreate },
+            data: { stockCode, ...data, productName: titleForCreate },
           });
           targetId = created.id;
         }
@@ -244,23 +244,23 @@ export async function POST(request: Request) {
 // When partialOnly=true, only fields explicitly present in the payload are included.
 function buildProductData(product: Record<string, any>, partialOnly = false): Record<string, any> {
   const fieldMap: Record<string, string> = {
-    title:            'title',
-    description:      'description',
-    price:            'price',
-    mrp:              'mrp',
-    quantity:         'quantity',
-    color:            'color',
-    cloth_type:       'clothType',
-    cover_image_url:  'coverImageUrl',
-    tags:             'tags',
-    size:             'size',
-    location:         'location',
-    friendly_code:    'friendlyCode',
-    design_number:    'designNumber',
-    whatsapp_retail:  'whatsappRetail',
-    whatsapp_catalogue_title: 'whatsappCatalogueTitle',
+    productName: 'title',
+    description: 'description',
+    unitPrice: 'price',
+    mrp: 'mrp',
+    quantity: 'quantity',
+    color: 'color',
+    cloth_type: 'clothType',
+    cover_image_url: 'coverImageUrl',
+    tags: 'tags',
+    size: 'size',
+    location: 'location',
+    friendly_code: 'code1',
+    design_number: 'productCode',
+    whatsapp_retail: 'whatsappRetail',
+    whatsapp_catalogue_productName: 'whatsappCatalogueTitle',
     instagram_caption: 'instagramCaption',
-    status:           'status',
+    status: 'status',
   };
 
   const data: Record<string, any> = {};
@@ -280,7 +280,7 @@ function buildProductData(product: Record<string, any>, partialOnly = false): Re
   }
 
   // Numeric coercions
-  if (data.price !== undefined) data.price = parseFloat(data.price) || 0;
+  if (data.unitPrice !== undefined) data.unitPrice = parseFloat(data.unitPrice) || 0;
   if (data.mrp !== undefined) data.mrp = parseFloat(data.mrp) || 0;
   if (data.quantity !== undefined) data.quantity = parseInt(data.quantity, 10) || 0;
 

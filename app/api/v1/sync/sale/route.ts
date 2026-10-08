@@ -12,8 +12,8 @@ function checkApiKey(req: NextRequest): boolean {
  *
  * Body:
  * {
- *   stockCode: "987654321",       // required (or friendlyCode)
- *   friendlyCode: "saree-03-red", // alternative lookup
+ *   stockCode: "987654321",       // required (or code1)
+ *   code1: "saree-03-red", // alternative lookup
  *   qtySold: 1,
  *   orderId: "WEB-12345",         // website's order ID for tracking
  *   note: "Customer purchase via website"
@@ -26,10 +26,10 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { stockCode, friendlyCode, qtySold, orderId, note } = body;
+    const { stockCode, code1, qtySold, orderId, note } = body;
 
-    if (!stockCode && !friendlyCode) {
-      return NextResponse.json({ error: 'stockCode or friendlyCode required' }, { status: 400 });
+    if (!stockCode && !code1) {
+      return NextResponse.json({ error: 'stockCode or code1 required' }, { status: 400 });
     }
     if (!qtySold || qtySold < 1) {
       return NextResponse.json({ error: 'qtySold must be >= 1' }, { status: 400 });
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       where: {
         OR: [
           ...(stockCode ? [{ stockCode }] : []),
-          ...(friendlyCode ? [{ friendlyCode }] : []),
+          ...(code1 ? [{ code1 }] : []),
         ],
       },
     });
@@ -94,8 +94,8 @@ export async function POST(req: NextRequest) {
       product: {
         id: updated.id,
         stockCode: updated.stockCode,
-        friendlyCode: updated.friendlyCode,
-        title: updated.title,
+        code1: updated.code1,
+        productName: updated.productName,
         quantityBefore: product.quantity,
         quantityAfter: newQty,
         totalSold: newSold,

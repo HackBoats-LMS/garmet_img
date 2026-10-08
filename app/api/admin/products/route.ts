@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
+import { addPickyProduct } from '@/lib/picky-assist-push';
 
 function generateFriendlyCode(categorySlug: string, color: string | null | undefined, seq: number) {
   const parts = [categorySlug || 'item'];
@@ -30,11 +31,11 @@ export async function GET(req: NextRequest) {
     if (search) {
       where.OR = [
         { stockCode: { contains: search, mode: 'insensitive' } },
-        { friendlyCode: { contains: search, mode: 'insensitive' } },
-        { title: { contains: search, mode: 'insensitive' } },
+        { code1: { contains: search, mode: 'insensitive' } },
+        { productName: { contains: search, mode: 'insensitive' } },
         { color: { contains: search, mode: 'insensitive' } },
         { clothType: { contains: search, mode: 'insensitive' } },
-        { designNumber: { contains: search, mode: 'insensitive' } },
+        { productCode: { contains: search, mode: 'insensitive' } },
         { tags: { has: search } },
       ];
     }
@@ -89,7 +90,7 @@ export async function POST(req: NextRequest) {
     } = body;
 
     if (!stockCode || !title) {
-      return NextResponse.json({ error: 'stockCode and title are required' }, { status: 400 });
+      return NextResponse.json({ error: 'stockCode and productName are required' }, { status: 400 });
     }
 
     let finalFriendlyCode = friendlyCode || null;
@@ -102,17 +103,17 @@ export async function POST(req: NextRequest) {
     const product = await prisma.product.create({
       data: {
         stockCode: stockCode.trim(),
-        friendlyCode: finalFriendlyCode || null,
-        title,
-        description: description || null,
+        code1: finalFriendlyCode || null,
+        productName: title,
+        productDescription: description || null,
         color: color || null,
         tags: tags || [],
         categoryId: categoryId || null,
         subCategoryId: subCategoryId || null,
         clothType: clothType || null,
-        price: price ? parseFloat(price) : null,
-        mrp: mrp ? parseFloat(mrp) : null,
-        wholesalePrice: wholesalePrice ? parseFloat(wholesalePrice) : null,
+        unitPrice: price ? parseFloat(price) : null,
+        retailPrice: mrp ? parseFloat(mrp) : null,
+        dealerPrice: wholesalePrice ? parseFloat(wholesalePrice) : null,
         quantity: quantity ? parseInt(quantity) : 0,
         status: status || 'ACTIVE',
         referenceImages: referenceImages || null,
@@ -121,8 +122,8 @@ export async function POST(req: NextRequest) {
         websiteCopy: websiteCopy || null,
         websiteProductId: websiteProductId || null,
         // XLSX fields
-        designNumber: designNumber || null,
-        size: size || null,
+        productCode: designNumber || null,
+        length_Size: size || null,
         location: location || null,
         embroideryType: embroideryType || null,
         cutStyle: cutStyle || null,
@@ -152,6 +153,8 @@ export async function POST(req: NextRequest) {
         },
       });
     }
+
+    addPickyProduct(product).catch(console.error);
 
     return NextResponse.json({ product }, { status: 201 });
   } catch (error: any) {

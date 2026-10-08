@@ -13,6 +13,7 @@ export async function GET(req: NextRequest) {
     const explicitProvider = searchParams.get('provider');
     const userId = searchParams.get('userId') || 'customer';
     const orderId = searchParams.get('orderId') || 'order';
+    const productId = searchParams.get('productId') || null;
     const poseId = searchParams.get('poseId') || taskId || 'pose';
 
     if (!taskId) {
@@ -152,6 +153,27 @@ export async function GET(req: NextRequest) {
                 }
               } catch (dbErr) {
                 console.error('[task-status DB save error]:', dbErr);
+              }
+            }
+
+            if (productId) {
+              try {
+                const existingProduct = await prisma.product.findUnique({ where: { id: productId } });
+                if (existingProduct) {
+                  const currentGen = (existingProduct.generatedImages as any) || {};
+                  await prisma.product.update({
+                    where: { id: productId },
+                    data: {
+                      generatedImages: {
+                        ...currentGen,
+                        [poseId]: { imageUrl: permanentUrl, generatedAt: new Date().toISOString() },
+                      },
+                      linkedOrderId: orderId !== 'order' ? orderId : existingProduct.linkedOrderId,
+                    }
+                  });
+                }
+              } catch (productDbErr) {
+                console.error('[task-status Product DB save error]:', productDbErr);
               }
             }
 
