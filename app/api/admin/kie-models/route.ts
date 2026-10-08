@@ -10,7 +10,7 @@ const DEFAULT_KIE_MODELS = [
     isImageToImage: true,
     description: 'Best for garment photoshoots with fabric reference images. Accepts input_urls. Highest realism.',
     isActive: true,
-    isDefault: true,
+    isDefault: false,
     sortOrder: 0,
   },
   {
@@ -21,6 +21,24 @@ const DEFAULT_KIE_MODELS = [
     isActive: true,
     isDefault: false,
     sortOrder: 1,
+  },
+  {
+    displayName: 'Flux 2 Pro — Image-to-Image',
+    modelId: 'flux-2/pro-image-to-image',
+    isImageToImage: true,
+    description: 'High-end Flux Pro model for reference image processing and extreme photorealism.',
+    isActive: true,
+    isDefault: true,
+    sortOrder: 2,
+  },
+  {
+    displayName: 'Nano Banana 2.1 (2k)',
+    modelId: 'nano-banana-2-1 2k',
+    isImageToImage: true,
+    description: 'High-speed image generation model.',
+    isActive: true,
+    isDefault: false,
+    sortOrder: 3,
   },
 ];
 

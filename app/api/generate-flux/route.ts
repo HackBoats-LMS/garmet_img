@@ -321,25 +321,37 @@ export async function POST(req: NextRequest) {
     if (finalKieModel === 'flux-2/pro-image-to-image') {
       finalKieModel = 'flux-2/pro-image-to-image';
     }
+    
+    let actualModelStr = finalKieModel;
+    let isNanoBanana = finalKieModel.toLowerCase().includes('nano-banana');
+    if (isNanoBanana) {
+      actualModelStr = 'nano-banana-2-1';
+    }
 
     const kieRequestBody: any = {
-      model: finalKieModel,
+      model: actualModelStr,
       input: {
         prompt: fluxPrompt,
         aspect_ratio: aspectRatio || '3:4',
-        resolution: '1K',
+        resolution: isNanoBanana ? '2K' : '1K',
       },
     };
 
     // Flux models reject unknown parameters like negative_prompt and background, but want nsfw_checker
-    if (finalKieModel.toLowerCase().includes('flux')) {
+    if (finalKieModel.toLowerCase().includes('flux') || isNanoBanana) {
       kieRequestBody.input.nsfw_checker = false;
     } else {
       kieRequestBody.input.negative_prompt = negPrompt;
     }
 
     if (inputUrls.length > 0) {
-      kieRequestBody.input.input_urls = inputUrls;
+      if (isNanoBanana) {
+        kieRequestBody.input.image_input = inputUrls;
+        // output format for nano-banana
+        kieRequestBody.input.output_format = "png";
+      } else {
+        kieRequestBody.input.input_urls = inputUrls;
+      }
     }
 
     const endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
@@ -413,6 +425,13 @@ export async function POST(req: NextRequest) {
       }
 
       const status = checkData?.data?.state || checkData?.state || checkData?.data?.status || checkData?.status;
+
+      if (status === 'fail' || status === 'failed' || status === 'error') {
+        return NextResponse.json(
+          { error: `Kie.ai generation failed: ${checkData?.data?.error || checkData?.msg || 'Unknown error'}` },
+          { status: 500 }
+        );
+      }
 
       if (status === 'completed' || status === 'success') {
         const output = checkData?.data?.result || checkData?.data?.output || checkData?.result || checkData?.output || checkData?.data?.url || checkData?.data?.images || checkData?.data;
@@ -643,7 +662,7 @@ async function saveGeneratedOrder(params: {
         // Auto-link to Product inventory
         if (stockCode) {
           const product = await prisma.product.findFirst({
-            where: { OR: [{ stockCode }, { friendlyCode: stockCode }] },
+            where: { OR: [{ stockCode }, { code1: stockCode }] },
           });
           if (product) {
             const firstImage = Object.values(updatedGenImages as Record<string, {imageUrl: string}>)[0];
@@ -679,7 +698,7 @@ async function saveGeneratedOrder(params: {
         // Auto-link to Product inventory
         if (stockCode) {
           const product = await prisma.product.findFirst({
-            where: { OR: [{ stockCode }, { friendlyCode: stockCode }] },
+            where: { OR: [{ stockCode }, { code1: stockCode }] },
           });
           if (product) {
             const firstImage = Object.values(updatedGenImages as Record<string, {imageUrl: string}>)[0];

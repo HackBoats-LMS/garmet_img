@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
       // Auto-link: if order has stockCode + generatedImages, attach to Product
       if (stockCode && generatedImages && Object.keys(generatedImages).length > 0) {
         const product = await prisma.product.findFirst({
-          where: { OR: [{ stockCode }, { friendlyCode: stockCode }] },
+          where: { OR: [{ stockCode }, { code1: stockCode }] },
         });
         if (product) {
           const firstImage = Object.values(generatedImages as Record<string, {imageUrl: string}>)[0];

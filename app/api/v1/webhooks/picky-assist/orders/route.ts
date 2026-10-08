@@ -115,8 +115,8 @@ export async function POST(request: Request) {
           where: {
             OR: [
               { stockCode },
-              { friendlyCode: stockCode },
-              { designNumber: stockCode },
+              { code1: stockCode },
+              { productCode: stockCode },
             ],
           },
         });

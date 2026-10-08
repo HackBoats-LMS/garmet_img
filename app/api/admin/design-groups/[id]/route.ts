@@ -107,8 +107,8 @@ export async function GET(
       include: {
         stockEntries: {
           select: {
-            id: true, stockCode: true, friendlyCode: true,
-            quantity: true, status: true, price: true,
+            id: true, stockCode: true, code1: true,
+            quantity: true, status: true, unitPrice: true,
             location: true, coverImageUrl: true, createdAt: true,
           },
           orderBy: { createdAt: 'asc' },

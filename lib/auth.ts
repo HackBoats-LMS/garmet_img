@@ -23,7 +23,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           response_type: "code",
           scope: "openid email profile https://www.googleapis.com/auth/drive.readonly"
         }
-      }
+      },
+      allowDangerousEmailAccountLinking: true,
     }),
     // CredentialsProvider removed for internal-tool Google-only enforcement
   ],

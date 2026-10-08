@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 
-// GET /api/admin/design-groups?designNumber=DES-01
+// GET /api/admin/design-groups?productCode=DES-01
 // Returns design group + all linked stock codes for a given design number
 export async function GET(req: NextRequest) {
   try {
@@ -12,22 +12,22 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = req.nextUrl;
-    const designNumber = searchParams.get('designNumber') || '';
+    const productCode = searchParams.get('productCode') || '';
     const search = searchParams.get('search') || '';
 
-    if (designNumber) {
+    if (productCode) {
       // Look up a specific design group by design number
       const group = await prisma.productDesignGroup.findUnique({
-        where: { designNumber },
+        where: { designNumber: productCode },
         include: {
           stockEntries: {
             select: {
               id: true,
               stockCode: true,
-              friendlyCode: true,
+              code1: true,
               quantity: true,
               status: true,
-              price: true,
+              unitPrice: true,
               location: true,
               coverImageUrl: true,
               createdAt: true,
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json();
     const {
-      designNumber, title, description, coverImageUrl,
+      productCode, title, description, coverImageUrl,
       color, clothType, embroideryType, cutStyle, border,
       kurtaLength, pantStyle, tags,
       whatsappRetail, whatsappWholesale, instagramCaption,
@@ -92,13 +92,13 @@ export async function POST(req: NextRequest) {
       productIds,
     } = body;
 
-    if (!designNumber || !title) {
-      return NextResponse.json({ error: 'designNumber and title are required' }, { status: 400 });
+    if (!productCode || !title) {
+      return NextResponse.json({ error: 'productCode and title are required' }, { status: 400 });
     }
 
     const group = await prisma.productDesignGroup.create({
       data: {
-        designNumber: designNumber.trim(),
+        designNumber: productCode.trim(),
         title,
         description: description || null,
         coverImageUrl: coverImageUrl || null,

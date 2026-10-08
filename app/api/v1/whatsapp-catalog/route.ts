@@ -55,12 +55,12 @@ export async function GET(request: Request) {
       },
       select: {
         stockCode: true,
-        friendlyCode: true,
-        designNumber: true,
+        code1: true,
+        productCode: true,
         whatsappCatalogueTitle: true,
-        title: true,
+        productName: true,
         whatsappRetail: true,
-        price: true,
+        unitPrice: true,
         quantity: true,
         generatedImages: true,
       },
@@ -80,15 +80,15 @@ export async function GET(request: Request) {
          }
       }
 
-      const stableId = product.friendlyCode || product.designNumber || product.stockCode;
+      const stableId = product.code1 || product.productCode || product.stockCode;
 
       return {
         id: stableId,
-        title: product.whatsappCatalogueTitle || product.title || 'Untitled Garment',
+        productName: product.whatsappCatalogueTitle || product.productName || 'Untitled Garment',
         description: product.whatsappRetail || 'Premium Garment',
         availability: product.quantity > 0 ? 'in stock' : 'out of stock',
         condition: 'new',
-        price: `${product.price || 0} INR`,
+        unitPrice: `${product.unitPrice || 0} INR`,
         link: `https://your-store.com/product/${stableId}`,
         image_link: primaryImageUrl || 'https://your-store.com/placeholder.jpg',
         brand: 'rgjdass Couture',

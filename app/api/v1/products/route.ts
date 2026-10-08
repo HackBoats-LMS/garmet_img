@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
     if (search) {
       where.OR = [
         { stockCode: { contains: search, mode: 'insensitive' } },
-        { friendlyCode: { contains: search, mode: 'insensitive' } },
+        { code1: { contains: search, mode: 'insensitive' } },
         { title: { contains: search, mode: 'insensitive' } },
         { tags: { has: search } },
       ];
@@ -61,13 +61,13 @@ export async function GET(req: NextRequest) {
         select: {
           id: true,
           stockCode: true,
-          friendlyCode: true,
-          title: true,
-          description: true,
+          code1: true,
+          productName: true,
+          productDescription: true,
           color: true,
           clothType: true,
-          price: true,
-          mrp: true,
+          unitPrice: true,
+          retailPrice: true,
           quantity: true,
           reservedQty: true,
           soldQty: true,

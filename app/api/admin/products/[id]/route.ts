@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
-import { pushToPickyAssist, mapProductToPickyAssistPayload } from '@/lib/picky-assist-push';
+import { updatePickyProduct } from '@/lib/picky-assist-push';
 
 // GET /api/admin/products/[id]
 export async function GET(
@@ -116,17 +116,17 @@ export async function PATCH(
       where: { id },
       data: {
         stockCode: stockCode ?? undefined,
-        friendlyCode: friendlyCode ?? undefined,
-        title: title ?? undefined,
-        description: description ?? undefined,
+        code1: friendlyCode ?? undefined,
+        productName: title ?? undefined,
+        productDescription: description ?? undefined,
         color: color ?? undefined,
         tags: tags ?? undefined,
         categoryId: categoryId ?? undefined,
         subCategoryId: subCategoryId ?? undefined,
         clothType: clothType ?? undefined,
-        price: price !== undefined ? parseFloat(price) : undefined,
-        mrp: mrp !== undefined ? parseFloat(mrp) : undefined,
-        wholesalePrice: wholesalePrice !== undefined ? parseFloat(wholesalePrice) : undefined,
+        unitPrice: price !== undefined ? parseFloat(price) : undefined,
+        retailPrice: mrp !== undefined ? parseFloat(mrp) : undefined,
+        dealerPrice: wholesalePrice !== undefined ? parseFloat(wholesalePrice) : undefined,
         quantity: newQty,
         status: autoStatus ?? undefined,
         referenceImages: referenceImages ?? undefined,
@@ -138,8 +138,8 @@ export async function PATCH(
         websiteCopy: websiteCopy ?? undefined,
         websiteProductId: websiteProductId ?? undefined,
         // XLSX-mapped fields
-        designNumber: designNumber ?? undefined,
-        size: size ?? undefined,
+        productCode: designNumber ?? undefined,
+        length_Size: size ?? undefined,
         location: location ?? undefined,
         embroideryType: embroideryType ?? undefined,
         cutStyle: cutStyle ?? undefined,
@@ -165,7 +165,7 @@ export async function PATCH(
       await prisma.inventoryLog.createMany({ data: logsToCreate });
     }
 
-    pushToPickyAssist('update_product', mapProductToPickyAssistPayload(updated)).catch(console.error);
+    updatePickyProduct(updated).catch(console.error);
 
     return NextResponse.json({ product: updated });
   } catch (error: any) {
@@ -193,7 +193,6 @@ export async function DELETE(
     
     if (existing) {
       await prisma.product.delete({ where: { id } });
-      pushToPickyAssist('delete_product', mapProductToPickyAssistPayload(existing)).catch(console.error);
     }
     
     return NextResponse.json({ success: true });

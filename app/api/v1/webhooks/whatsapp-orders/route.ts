@@ -110,8 +110,8 @@ export async function POST(request: Request) {
                     const product = await tx.product.findFirst({ 
                       where: { 
                         OR: [
-                          { friendlyCode: stockCode },
-                          { designNumber: stockCode },
+                          { code1: stockCode },
+                          { productCode: stockCode },
                           { stockCode: stockCode }
                         ]
                       } 
