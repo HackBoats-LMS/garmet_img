@@ -132,29 +132,38 @@ export default function AdminDashboardPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             {templates.slice(0, 4).map((template) => (
               <Link key={template.id} href={`/admin/templates/${template.id}`}>
-                <Card className="p-6 hover:border-accent/40 hover:shadow-md transition-all duration-200 group flex items-start gap-4">
-                  <div className="w-14 h-14 rounded-xl bg-cream-dark/60 flex items-center justify-center shrink-0 overflow-hidden">
+                <Card className="p-5 hover:border-accent/40 hover:shadow-md transition-all duration-200 group flex items-start gap-4">
+                  <div className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl bg-cream-dark/60 flex items-center justify-center shrink-0 overflow-hidden border border-cream-border relative shadow-xs">
                     {template.coverImage ? (
-                      <img src={template.coverImage} alt={template.name} className="w-full h-full object-cover" />
+                      <img 
+                        src={template.coverImage} 
+                        alt={template.name} 
+                        className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-300"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }} 
+                      />
                     ) : (
-                      <span className="font-display text-xl font-bold text-charcoal/20">{template.name?.charAt(0)}</span>
+                      <span className="font-display text-2xl font-bold text-charcoal/20">{template.name?.charAt(0)}</span>
                     )}
                   </div>
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 pt-1">
                     <div className="flex items-center gap-2">
                       <h3 className="text-base font-bold text-charcoal truncate">{template.name}</h3>
                       <Badge variant={template.isActive ? 'success' : 'muted'}>
                         {template.isActive ? 'Active' : 'Draft'}
                       </Badge>
                     </div>
-                    <p className="text-xs text-charcoal-muted mt-1 truncate">{template.tagline || 'No tagline'}</p>
-                    <div className="mt-3 flex items-center gap-3 text-xs text-charcoal-light font-medium">
-                      <span>{template.imageSlots?.length || 0} Slots</span>
-                      <span>•</span>
-                      <span>{template.poses?.length || 0} Poses</span>
-                      <span>•</span>
-                      <span className={template.allowModelSelection ? 'text-accent' : 'text-charcoal-muted'}>
-                        {template.allowModelSelection ? 'Model Selection ON' : 'Model Selection OFF'}
+                    <p className="text-xs text-charcoal-muted mt-1 line-clamp-2">{template.tagline || 'No tagline'}</p>
+                    <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-charcoal-light font-medium">
+                      <span className="bg-cream px-2 py-0.5 rounded-md border border-cream-border/60">{template.imageSlots?.length || 0} Slots</span>
+                      <span className="bg-cream px-2 py-0.5 rounded-md border border-cream-border/60">{template.poses?.length || 0} Poses</span>
+                      <span className={`px-2 py-0.5 rounded-md border text-[11px] font-semibold ${
+                        template.allowModelSelection 
+                          ? 'bg-accent-bg text-accent border-accent-border' 
+                          : 'bg-cream text-charcoal-muted border-cream-border/60'
+                      }`}>
+                        {template.allowModelSelection ? 'Model Pick ON' : 'Model Pick OFF'}
                       </span>
                     </div>
                   </div>

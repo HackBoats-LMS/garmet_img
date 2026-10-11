@@ -103,9 +103,16 @@ export default function AdminTemplatesPage() {
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-5">
                 {/* Left: Info */}
                 <div className="flex items-center gap-5">
-                  <div className="w-16 h-16 rounded-2xl bg-cream-dark/60 flex items-center justify-center shrink-0 overflow-hidden border border-cream-border">
+                  <div className="w-24 h-28 sm:w-28 sm:h-32 rounded-2xl bg-cream-dark/60 flex items-center justify-center shrink-0 overflow-hidden border border-cream-border relative shadow-xs">
                     {template.coverImage ? (
-                      <img src={template.coverImage} alt={template.name} className="w-full h-full object-cover" />
+                      <img 
+                        src={template.coverImage} 
+                        alt={template.name} 
+                        className="w-full h-full object-cover object-top hover:scale-105 transition-transform duration-300"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }} 
+                      />
                     ) : (
                       <span className="font-display text-2xl font-bold text-charcoal/20">
                         {template.name?.charAt(0)}

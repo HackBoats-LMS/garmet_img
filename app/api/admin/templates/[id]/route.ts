@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
+import { uploadToStorage } from '@/lib/storage';
 
 // GET /api/admin/templates/[id]
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -58,11 +59,53 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       poses,
     } = body;
 
+    let finalCoverImage = coverImage;
+    if (coverImage && coverImage.startsWith('data:image/')) {
+      const uploaded = await uploadToStorage(coverImage, { 
+        bucket: 'images',
+        folder: 'templates', 
+        publicId: `template_${id}_cover_${Date.now()}`
+      });
+      finalCoverImage = uploaded.url;
+    }
+
+    let finalPoses = poses;
+    if (poses && Array.isArray(poses)) {
+      finalPoses = await Promise.all(poses.map(async (pose: any, i: number) => {
+        let finalPreview = pose.previewImage;
+        if (finalPreview && finalPreview.startsWith('data:image/')) {
+          const uploaded = await uploadToStorage(finalPreview, {
+            bucket: 'images',
+            folder: 'poses',
+            publicId: `template_${id}_pose_${i}_${Date.now()}`
+          });
+          finalPreview = uploaded.url;
+        }
+        return { ...pose, previewImage: finalPreview };
+      }));
+    }
+
+    let finalImageSlots = imageSlots;
+    if (imageSlots && Array.isArray(imageSlots)) {
+      finalImageSlots = await Promise.all(imageSlots.map(async (slot: any, i: number) => {
+        let finalSample = slot.sampleImageUrl;
+        if (finalSample && finalSample.startsWith('data:image/')) {
+          const uploaded = await uploadToStorage(finalSample, {
+            bucket: 'images',
+            folder: 'slots',
+            publicId: `template_${id}_slot_${i}_${Date.now()}`
+          });
+          finalSample = uploaded.url;
+        }
+        return { ...slot, sampleImageUrl: finalSample };
+      }));
+    }
+
     // Update main template fields
     const updateData: any = {};
     if (name !== undefined) updateData.name = name;
     if (tagline !== undefined) updateData.tagline = tagline;
-    if (coverImage !== undefined) updateData.coverImage = coverImage;
+    if (finalCoverImage !== undefined) updateData.coverImage = finalCoverImage;
     if (description !== undefined) updateData.description = description;
     if (garmentType !== undefined) updateData.garmentType = garmentType;
     if (systemPrompt !== undefined) updateData.systemPrompt = systemPrompt;
@@ -80,11 +123,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     });
 
     // Replace image slots if provided
-    if (imageSlots !== undefined) {
+    if (finalImageSlots !== undefined) {
       await prisma.imageSlot.deleteMany({ where: { templateId: id } });
-      if (imageSlots.length > 0) {
+      if (finalImageSlots.length > 0) {
         await prisma.imageSlot.createMany({
-          data: imageSlots.map((slot: any, i: number) => ({
+          data: finalImageSlots.map((slot: any, i: number) => ({
             templateId: id,
             name: slot.name,
             description: slot.description || null,
@@ -113,11 +156,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
 
     // Replace poses if provided
-    if (poses !== undefined) {
+    if (finalPoses !== undefined) {
       await prisma.poseTemplate.deleteMany({ where: { templateId: id } });
-      if (poses.length > 0) {
+      if (finalPoses.length > 0) {
         await prisma.poseTemplate.createMany({
-          data: poses.map((pose: any, i: number) => ({
+          data: finalPoses.map((pose: any, i: number) => ({
             templateId: id,
             name: pose.name,
             description: pose.description || null,
