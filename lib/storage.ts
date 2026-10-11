@@ -31,6 +31,7 @@ export interface UploadOptions {
   publicId?: string;
   tags?: string[];
   preserveQuality?: boolean;
+  bucket?: string;
 }
 
 /**
@@ -82,19 +83,26 @@ export async function uploadToStorage(
     const { buffer, mime, ext } = await getImageBuffer(fileInput);
     const fileName = options.publicId ? `${options.publicId}.${ext}` : `${Date.now()}.${ext}`;
     const objectKey = options.folder ? `${options.folder}/${fileName}` : fileName;
+    const targetBucket = options.bucket || R2_BUCKET_NAME;
 
     await s3Client.send(
       new PutObjectCommand({
-        Bucket: R2_BUCKET_NAME,
+        Bucket: targetBucket,
         Key: objectKey,
         Body: buffer,
         ContentType: mime,
       })
     );
 
-    // Ensure R2_PUBLIC_URL has no trailing slash before combining
-    const baseUrl = R2_PUBLIC_URL.replace(/\/$/, '');
-    const fileUrl = `${baseUrl}/${objectKey}`;
+    let fileUrl: string;
+    if (targetBucket === 'images') {
+      const publicImagesBase = process.env.R2_IMAGES_PUBLIC_URL?.replace(/\/$/, '');
+      fileUrl = publicImagesBase ? `${publicImagesBase}/${objectKey}` : `/api/images/${objectKey}`;
+    } else {
+      // Default generatedimages bucket public dev URL
+      const baseUrl = R2_PUBLIC_URL.replace(/\/$/, '');
+      fileUrl = `${baseUrl}/${objectKey}`;
+    }
 
     return {
       url: fileUrl,
@@ -109,7 +117,7 @@ export async function uploadToStorage(
 
 /**
  * Helper: Upload Admin Template Cover & Pose Previews
- * Stored under: coutureai/admin/templates/{templateSlug}
+ * Stored under Cloudflare R2 bucket: images
  */
 export async function uploadAdminTemplateAsset(
   fileInput: string,
@@ -117,7 +125,8 @@ export async function uploadAdminTemplateAsset(
   assetName: string
 ): Promise<string> {
   const res = await uploadToStorage(fileInput, {
-    folder: `coutureai/admin/templates/${templateSlug}`,
+    bucket: process.env.R2_IMAGES_BUCKET || 'images',
+    folder: `templates/${templateSlug}`,
     publicId: assetName.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
   });
   return res.url;

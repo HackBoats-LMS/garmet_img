@@ -4,8 +4,9 @@ import { auth } from '@/lib/auth';
 import * as XLSX from 'xlsx';
 
 // XLSX column → Product field mapping
-// Based on Project.xlsx columns
+// Based on Project.xlsx columns and Trial Code Report columns
 const COL_MAP: Record<string, string> = {
+  // Legacy / Master sheet columns
   'STOCK CODE':                                          'stockCode',
   'NEW CODE GENERATED':                                  'code1',
   'DESIGN NUMBER':                                       'productCode',
@@ -32,6 +33,17 @@ const COL_MAP: Record<string, string> = {
   'SHOPIFY TITLE AND DESCRIPTION':                       'shopifyTitle',
   'WHATSAPP CATALOUGE TITLE AND DESCRIPTION':            'whatsappCatalogueTitle',
   'WHATSAPP CATALOGUE TITLE AND DESCRIPTION':            'whatsappCatalogueTitle',
+  
+  // Trial Code Report columns aliases
+  'StockCode':                                           'stockCode',
+  'Code1':                                               'code1',
+  'Product Code':                                        'productCode',
+  'Product Name':                                        'productName',
+  'Length_Size':                                         'length_Size',
+  'Qty':                                                 'quantity',
+  'Dealer Price':                                        'dealerPrice',
+  'RetailPrice':                                         'retailPrice',
+  'UnitPrice':                                           'unitPrice',
 };
 
 // POST /api/admin/products/import
@@ -77,10 +89,12 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      // Build title from description or stock code
-      const title = mapped.productDescription
-        ? String(mapped.productDescription).substring(0, 80)
-        : `Product ${stockCode}`;
+      // Build title from productName, description, or stock code
+      const title = mapped.productName 
+        ? String(mapped.productName).substring(0, 120)
+        : mapped.productDescription
+          ? String(mapped.productDescription).substring(0, 80)
+          : `Product ${stockCode}`;
 
       const data: any = {
         productName: title,
@@ -107,14 +121,26 @@ export async function POST(req: NextRequest) {
         whatsappCatalogueTitle: mapped.whatsappCatalogueTitle ? String(mapped.whatsappCatalogueTitle) : null,
       };
 
+      if (mapped.quantity !== undefined && mapped.quantity !== null) {
+        data.quantity = parseInt(mapped.quantity, 10) || 0;
+      }
+
       try {
-        const existing = await prisma.product.findUnique({ where: { stockCode } });
+        const orConditions: any[] = [{ stockCode }];
+        if (data.code1) {
+          orConditions.push({ code1: data.code1 });
+        }
+
+        const existing = await prisma.product.findFirst({ 
+          where: { OR: orConditions } 
+        });
+
         let product: any;
         if (existing) {
-          product = await prisma.product.update({ where: { stockCode }, data });
+          product = await prisma.product.update({ where: { id: existing.id }, data });
           results.updated++;
         } else {
-          product = await prisma.product.create({ data: { ...data, stockCode, quantity: 0, tags: [] } });
+          product = await prisma.product.create({ data: { ...data, stockCode, quantity: data.quantity ?? 0, tags: [] } });
           results.created++;
         }
 

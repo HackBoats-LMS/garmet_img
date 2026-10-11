@@ -29,7 +29,7 @@ interface TemplateData {
   allowedModelIds?: string[] | null;
   imageSlots: { id: string; name: string; description: string | null; isRequired: boolean; sampleImageUrl?: string | null; }[];
   customOptions: { id: string; label: string; optionType: string; choices: string[] }[];
-  poses: { id: string; name: string; description: string | null; promptSnippet: string; previewImage?: string | null; category: string }[];
+  poses: { id: string; name: string; description: string | null; promptSnippet: string; previewImage?: string | null; category: string; purpose?: string | null; fabricFocus?: string | null; }[];
 }
 
 interface AIModelData {
@@ -59,9 +59,9 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       .then(d => {
       if (!d.product) return;
       setProduct(d.product);
-      setProductName(d.product.title || '');
-      setStockCode(d.product.stockCode || '');
-      setDescription(d.product.description || '');
+      setProductName(d.product.productName || d.product.title || '');
+      setStockCode(d.product.code1 || d.product.stockCode || '');
+      setDescription(d.product.productDescription || d.product.description || '');
     }).catch(console.error);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId]);
@@ -78,6 +78,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const [description, setDescription] = useState('');
   const [uploadedImages, setUploadedImages] = useState<Record<string, string>>({});
   const [zoomModal, setZoomModal] = useState<{ slotId: string; title: string; url: string; zoom: number } | null>(null);
+  const [poseModal, setPoseModal] = useState<{ name: string; url: string; description: string; purpose?: string; fabricFocus?: string; promptSnippet?: string } | null>(null);
   const [swapDropdownSlot, setSwapDropdownSlot] = useState<string | null>(null);
   const [rotationToast, setRotationToast] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -173,6 +174,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const [generatedImages, setGeneratedImages] = useState<Record<string, { imageUrl: string; prompt: string }>>({});
   const [generatingPose, setGeneratingPose] = useState<string | null>(null);
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
+  const [isGeneratingSelected, setIsGeneratingSelected] = useState(false);
+  const [selectedPoses, setSelectedPoses] = useState<Set<string>>(new Set());
   const [genStatus, setGenStatus] = useState<string | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
 
@@ -605,7 +608,16 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     
     let dynamicStyling = '';
     if (isSaree) {
-      dynamicStyling = optStr ? `Blouse & Custom Styling: Fitted designer blouse with ${optStr}.` : 'Blouse: Perfectly fitted matching designer blouse.';
+      const hasBlouseImage = Object.keys(uploadedImages).some(slotId => {
+        const slot = template?.imageSlots.find(s => s.id === slotId);
+        return slot && slot.name.toLowerCase().includes('blouse');
+      });
+
+      if (hasBlouseImage) {
+        dynamicStyling = optStr ? `Blouse & Custom Styling: Fitted designer blouse accurately matching the provided blouse fabric image with ${optStr}.` : 'Blouse: Perfectly fitted designer blouse accurately matching the provided blouse fabric image.';
+      } else {
+        dynamicStyling = optStr ? `Blouse & Custom Styling: Automatically generated fitted matching designer blouse complementing the saree body and border with ${optStr}.` : 'Blouse: Automatically generated perfectly fitted matching designer blouse complementing the saree body and border.';
+      }
     } else if (isKurti) {
       let kurtiDetails = '';
       const hasPant = !!uploadedImages['kurti_pant'] || !!uploadedImages['bottom_pant'];
@@ -628,11 +640,21 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     const backgroundSetting = selectedBackground ? `Background Setting: ${selectedBackground}.` : 'Background Setting: high-end luxury fashion studio.';
 
     const garmentDrapeDetails = isSaree 
-      ? 'Natural fabric texture, authentic crisp pleated folds, and graceful shoulder pallu drape matching the photographed textile swatches.' 
-      : 'Natural fabric texture, authentic crisp folds, and graceful drape matching the photographed textile swatches.';
+      ? 'CRITICAL INSTRUCTION: You MUST strictly replicate the EXACT geometric patterns, motif scale, shapes, and border placements shown in the provided reference fabric images. Do NOT invent generic patterns. Do NOT mix or blend the patterns from the different uploaded images; keep the pallu (shoulder drape) design strictly separate from the main body design. The final garment must perfectly match the visual texture and layout of the uploaded fabric swatches. The fabric must be fully opaque and flawlessly continuous—absolutely NO skin showing through the fabric, no sheer patches, no rips, and no distorted blending artifacts. Natural fabric texture, authentic crisp pleated folds, and graceful shoulder pallu drape.' 
+      : 'CRITICAL INSTRUCTION: You MUST strictly replicate the EXACT patterns, motif scale, shapes, and border placements shown in the provided reference fabric images. Do NOT invent generic patterns. Do NOT mix or blend the patterns from the different uploaded images. The fabric must be fully opaque and flawlessly continuous—absolutely NO skin showing through the fabric, no sheer patches, and no blending artifacts. Natural fabric texture, authentic crisp folds, and graceful drape.';
+
+    const isMirrorPose = pose.name.toLowerCase().includes('mirror') || (pose.promptSnippet && pose.promptSnippet.toLowerCase().includes('mirror'));
+
+    const mirrorPhysicsGuidance = isMirrorPose
+      ? ' CRITICAL OPTICAL PHYSICS & RAY-TRACED MIRROR ACCURACY: Camera is positioned over-the-shoulder 45 degrees behind the model looking into the dressing mirror. The mirror reflection must obey real-world optical physics: the reflection cleanly shows the model looking directly into her own eyes in the glass with a calm, composed expression. Her raised hand adjusting her shoulder pallu pin must geometrically and symmetrically mirror her true physical 3D position in the foreground with matching directional lighting, ambient shadows, and jewelry. Coherent single human identity, realistic reflection depth, zero optical distortion, and zero warped limbs.'
+      : '';
+
+    const mirrorNegative = isMirrorPose
+      ? ', broken mirror physics, distorted reflection, impossible reflection angle, reflection looking at camera while body faces away, double faces, duplicate limbs, floating hands, misaligned reflections, uncanny valley reflection, two different people in mirror, warped glass'
+      : '';
 
     // Construct full photorealistic photoshoot prompt: Subject -> Wearing Garment -> Pose -> Styling -> Lighting & Camera
-    const prompt = `Authentic raw commercial catalogue fashion photography of ${modelSubject} elegantly dressed in an authentic luxury ${productName || template.name}. ${backgroundSetting} Pose & Angle: ${pose.name} — ${pose.promptSnippet}. Garment & Draping: ${textileDetails ? `${textileDetails}. ` : ''}${dynamicStyling} ${garmentDrapeDetails} Photography & Aesthetics: Shot on Hasselblad H6D-100c with HC 100mm f/2.2 lens, softbox key lighting, soft natural ambient shadows, photorealistic skin with natural pores and subtle skin texture, realistic hands and fingers, 8k UHD editorial Vogue India fashion catalogue, zero CGI, zero plastic skin, authentic human realism.`;
+    const prompt = `Authentic raw commercial catalogue fashion photography of ${modelSubject} elegantly dressed in an authentic luxury ${productName || template.name}. ${backgroundSetting} Pose & Angle: ${pose.name} — ${pose.promptSnippet}.${mirrorPhysicsGuidance} Garment & Draping: ${garmentDrapeDetails} ${textileDetails ? `${textileDetails}. ` : ''}${dynamicStyling} Photography & Aesthetics: Shot on Hasselblad H6D-100c with HC 100mm f/2.2 lens, softbox key lighting, soft natural ambient shadows, photorealistic skin with natural pores and subtle skin texture, realistic hands and fingers, 8k UHD editorial Vogue India fashion catalogue, zero CGI, zero plastic skin, authentic human realism.`;
 
     // Compress model face if it's a data URL
     let compressedModelFace = model?.imageUrl || null;
@@ -658,7 +680,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          negativePrompt: 'doll, plastic skin, barbie doll, mannequin, porcelain face, 3d render, CGI, digital illustration, cartoon, anime, airbrushed, wax figure, fake eyes, artificial skin, smooth skin filter, oversaturated, blurry, flat fabric swatch, cloth only, fabric texture without person, textile pattern sample, no human, no person, bad anatomy, deformed limbs, deformed fingers, extra limbs, mutated hands, asymmetric eyes, distorted fabric patterns, watermark, signature, blurry text, cropped head, unnatural poses',
+          negativePrompt: `doll, plastic skin, barbie doll, mannequin, porcelain face, 3d render, CGI, digital illustration, cartoon, anime, airbrushed, wax figure, fake eyes, artificial skin, smooth skin filter, oversaturated, blurry, flat fabric swatch, cloth only, fabric texture without person, textile pattern sample, no human, no person, bad anatomy, deformed limbs, deformed fingers, extra limbs, mutated hands, asymmetric eyes, distorted fabric patterns, watermark, signature, blurry text, cropped head, unnatural poses${mirrorNegative}`,
           referenceImageUrl: rawGarmentRef,
           modelFaceUrl: compressedModelFace,
           posePreviewUrl: pose.previewImage || null,
@@ -716,8 +738,9 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       if (finalUrl) {
         finalUrl = finalUrl.trim().replace(/[\\'";,\s]+$/, '').replace(/%5C$/i, '');
         
-        // Create the updated images object
-        const updatedImages = { ...generatedImages, [poseId]: { imageUrl: finalUrl, prompt } };
+        // Create the updated images object with a unique timestamp key to allow multiple generations of the same pose
+        const uniqueKey = `${poseId}_${Date.now()}`;
+        const updatedImages = { ...generatedImages, [uniqueKey]: { imageUrl: finalUrl, prompt } };
         setGeneratedImages(updatedImages);
         
         // Auto-save immediately so the image shows up in the gallery
@@ -744,6 +767,16 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       await handleGeneratePose(pose.id);
     }
     setIsGeneratingAll(false);
+  };
+
+  // Generate selected poses
+  const handleGenerateSelected = async () => {
+    if (selectedPoses.size === 0) return;
+    setIsGeneratingSelected(true);
+    for (const poseId of Array.from(selectedPoses)) {
+      await handleGeneratePose(poseId);
+    }
+    setIsGeneratingSelected(false);
   };
 
   // Save order
@@ -848,7 +881,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <Input label="Product Name" value={productName} onChange={e => { setProductName(e.target.value); setValidationError(null); }} placeholder="e.g. Royal Emerald Kanchipuram" required />
-              <Input label="SKU / Stock Code (optional)" value={stockCode} onChange={e => setStockCode(e.target.value)} placeholder="e.g. RGJ-001" />
+              <Input label="Code1 (optional)" value={stockCode} onChange={e => setStockCode(e.target.value)} placeholder="e.g. saree-03-red" />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
@@ -1522,37 +1555,79 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               <h2 className="font-display text-lg font-bold text-charcoal">
                 Studio Poses ({template.poses.length})
               </h2>
-              <p className="text-xs text-charcoal-muted mt-1">Generate poses individually or all together</p>
+              <p className="text-xs text-charcoal-muted mt-1">Generate poses individually, select multiple, or all together</p>
             </div>
-            <Button onClick={handleGenerateAll} loading={isGeneratingAll} disabled={isGeneratingAll} size="lg">
-              <Sparkles className="w-4 h-4" />
-              Generate All Poses
-            </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button 
+                onClick={handleGenerateSelected} 
+                loading={isGeneratingSelected} 
+                disabled={isGeneratingSelected || isGeneratingAll || selectedPoses.size === 0} 
+                variant="ghost"
+                size="lg"
+              >
+                <Layers className="w-4 h-4" />
+                Generate Selected ({selectedPoses.size})
+              </Button>
+              <Button onClick={handleGenerateAll} loading={isGeneratingAll} disabled={isGeneratingAll || isGeneratingSelected} size="lg">
+                <Sparkles className="w-4 h-4" />
+                Generate All Poses
+              </Button>
+            </div>
           </div>
 
           {/* Pose Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             {template.poses.map(pose => {
-              const generated = generatedImages[pose.id];
+              const genKeys = Object.keys(generatedImages).filter(k => k === pose.id || k.startsWith(`${pose.id}_`));
+              const generated = genKeys.length > 0 ? generatedImages[genKeys[genKeys.length - 1]] : null;
               const cleanImageUrl = generated?.imageUrl ? generated.imageUrl.trim().replace(/[\\'";,\s]+$/, '').replace(/%5C$/i, '') : '';
               const isGenerating = generatingPose === pose.id;
 
               // Fallback map if pose.previewImage is not yet set in DB
               const defaultPoseMap: Record<string, string> = {
-                '1. Full Standing Front': '/pose_1_standing.jpg',
-                '2. Grand Pallu Spread': '/saree_pallu.jpg',
-                '3. Royal Seated Haveli': '/saree_body.jpg',
-                '4. Blouse Back & Maggam Work': '/saree_blouse.jpg',
+                '1. The Mirror Moment': '/poses/saree_pose_mirror.jpg',
+                '2. The Classic Front Stand': '/poses/saree_pose_front.jpg',
+                '3. The Confident Walk-In': '/poses/saree_pose_2.jpg',
+                '4. The Verandah Hostess': '/poses/saree_pose_3.jpg',
+                '5. The Glance': '/poses/saree_pose_4.jpg',
+                '6. The Pallu Cascade': '/poses/saree_pose_5.jpg',
+                '1. Professional Stride': '/poses/kurti_pose_1.jpg',
+                '2. Courtyard Festive Walk': '/poses/kurti_pose_2.jpg',
+                '3. Boardroom & Lounge Seated': '/poses/kurti_pose_3.jpg',
+                '4. Neckline & Embroidery Detail': '/poses/kurti_pose_4.jpg',
               };
-              const previewImgSrc = pose.previewImage || defaultPoseMap[pose.name] || '/saree_model_4k.jpg';
+              const previewImgSrc = pose.previewImage || defaultPoseMap[pose.name] || '/poses/saree_pose_front.jpg';
+              const isMirrorPose = pose.name.toLowerCase().includes('mirror') || (pose.promptSnippet && pose.promptSnippet.toLowerCase().includes('mirror'));
 
               return (
-                <Card key={pose.id} className="overflow-hidden border border-cream-border flex flex-col group hover:border-accent/40 transition-all duration-300 shadow-xs hover:shadow-md">
+                <Card 
+                  key={pose.id} 
+                  className={`relative overflow-hidden flex flex-col group transition-all duration-300 shadow-xs hover:shadow-md cursor-pointer
+                    ${selectedPoses.has(pose.id) 
+                      ? 'border-2 border-accent ring-2 ring-accent/20' 
+                      : 'border border-cream-border hover:border-accent/40'
+                    }`}
+                  onClick={() => {
+                    const newSet = new Set(selectedPoses);
+                    if (newSet.has(pose.id)) newSet.delete(pose.id);
+                    else newSet.add(pose.id);
+                    setSelectedPoses(newSet);
+                  }}
+                >
+                  {/* Selection Checkbox */}
+                  <div className="absolute top-3 right-3 z-20">
+                    <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors shadow-sm
+                      ${selectedPoses.has(pose.id) ? 'bg-accent border-accent text-white' : 'bg-white/80 border-charcoal-light backdrop-blur-sm group-hover:border-accent'}
+                    `}>
+                      {selectedPoses.has(pose.id) && <Check className="w-3.5 h-3.5" strokeWidth={3} />}
+                    </div>
+                  </div>
+
                   <div className="aspect-square bg-cream-light relative flex items-center justify-center overflow-hidden">
                     {cleanImageUrl ? (
                       <>
                         <img src={cleanImageUrl} alt={pose.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                        <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-charcoal/85 backdrop-blur-sm text-[10px] font-bold text-white flex items-center gap-1.5 shadow-md border border-white/10">
+                        <div className="absolute top-3 left-3 px-3 py-1 z-10 rounded-full bg-charcoal/85 backdrop-blur-sm text-[10px] font-bold text-white flex items-center gap-1.5 shadow-md border border-white/10">
                           <Sparkles className="w-3 h-3 text-accent" />
                           <span>✨ AI Generated</span>
                         </div>
@@ -1569,19 +1644,57 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                         </div>
                       </div>
                     ) : previewImgSrc ? (
-                      <div className="relative w-full h-full overflow-hidden">
+                      <div 
+                        className="relative w-full h-full overflow-hidden cursor-pointer"
+                        onClick={() => setPoseModal({
+                          name: pose.name,
+                          url: previewImgSrc,
+                          description: pose.description || '',
+                          purpose: pose.purpose || undefined,
+                          fabricFocus: pose.fabricFocus || undefined,
+                          promptSnippet: pose.promptSnippet,
+                        })}
+                      >
                         <img
                           src={previewImgSrc}
                           alt={pose.name}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                         />
-                        <div className="absolute inset-0 bg-gradient-to-t from-charcoal/80 via-transparent to-black/30" />
-                        <div className="absolute top-3 left-3 px-3 py-1 rounded-full bg-charcoal/75 backdrop-blur-md text-[10px] font-semibold text-white/95 border border-white/15 flex items-center gap-1.5 shadow-sm">
-                          <Camera className="w-3.5 h-3.5 text-accent" />
-                          <span>Sample Angle Reference</span>
+                        <div className="absolute inset-0 bg-gradient-to-t from-charcoal/85 via-black/20 to-black/30" />
+                        <div className="absolute top-3 left-3 flex flex-wrap items-center gap-1.5">
+                          <div className="px-3 py-1 rounded-full bg-charcoal/80 backdrop-blur-md text-[10px] font-semibold text-white/95 border border-white/15 flex items-center gap-1.5 shadow-sm">
+                            <Camera className="w-3.5 h-3.5 text-accent" />
+                            <span>Sample Angle Reference</span>
+                          </div>
+                          {isMirrorPose && (
+                            <div className="px-2.5 py-1 rounded-full bg-purple-600/90 backdrop-blur-md text-[10px] font-bold text-white shadow-sm flex items-center gap-1 border border-purple-400/30">
+                              <span>🪞 Optical Physics</span>
+                            </div>
+                          )}
                         </div>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPoseModal({
+                              name: pose.name,
+                              url: previewImgSrc,
+                              description: pose.description || '',
+                              purpose: pose.purpose || undefined,
+                              fabricFocus: pose.fabricFocus || undefined,
+                              promptSnippet: pose.promptSnippet,
+                            });
+                          }}
+                          className="absolute top-3 right-3 px-2.5 py-1 rounded-full bg-black/60 hover:bg-black/90 backdrop-blur-sm text-white text-[10px] font-semibold flex items-center gap-1 transition-all border border-white/20 shadow-sm cursor-pointer"
+                          title="Click to view full reference angle & optical details"
+                        >
+                          <Eye className="w-3 h-3 text-accent" />
+                          <span>Inspect</span>
+                        </button>
+
                         <div className="absolute bottom-3 left-3 right-3 text-left">
-                          <p className="text-xs text-white/90 font-medium line-clamp-1 drop-shadow-sm">
+                          <p className="text-xs text-white/95 font-medium line-clamp-2 drop-shadow-sm leading-relaxed">
                             {pose.description || 'Target catalog angle & drape posture'}
                           </p>
                         </div>
@@ -1593,27 +1706,60 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                       </div>
                     )}
                   </div>
-                  <div className="p-5 flex items-center justify-between bg-white border-t border-cream-border/60">
-                    <div>
-                      <p className="text-sm font-bold text-charcoal">{pose.name}</p>
-                      <span className="inline-block text-[10px] font-semibold uppercase tracking-wider text-charcoal-light mt-0.5">
-                        {pose.category}
-                      </span>
+                  <div className="p-4 bg-white border-t border-cream-border/60 flex flex-col justify-between gap-3 flex-1">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-bold text-charcoal">{pose.name}</p>
+                        <span className="inline-block text-[10px] font-bold uppercase tracking-wider text-charcoal-light px-2 py-0.5 rounded-md bg-cream-light border border-cream-border">
+                          {pose.category}
+                        </span>
+                      </div>
+                      {pose.purpose && (
+                        <p className="text-[11px] text-charcoal-muted line-clamp-1 italic">
+                          🎯 {pose.purpose}
+                        </p>
+                      )}
+                      {pose.fabricFocus && (
+                        <p className="text-[10px] text-accent line-clamp-1 font-medium">
+                          ✨ Focus: {pose.fabricFocus}
+                        </p>
+                      )}
                     </div>
-                    {!cleanImageUrl && !isGenerating && (
-                      <Button size="sm" onClick={() => handleGeneratePose(pose.id)} disabled={isGeneratingAll}>
-                        <Sparkles className="w-3.5 h-3.5" /> Generate
-                      </Button>
-                    )}
-                    {cleanImageUrl && (
-                      <button
-                        onClick={() => handleDownload(cleanImageUrl, `${template.name}_${pose.name}.jpg`)}
-                        className="p-2.5 rounded-xl text-charcoal-muted hover:text-accent hover:bg-accent-bg transition-colors cursor-pointer border border-cream-border shadow-xs"
-                        title="Download image"
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
-                    )}
+
+                    <div className="flex items-center justify-between pt-1 border-t border-cream-border/40">
+                      {previewImgSrc ? (
+                        <button
+                          type="button"
+                          onClick={() => setPoseModal({
+                            name: pose.name,
+                            url: previewImgSrc,
+                            description: pose.description || '',
+                            purpose: pose.purpose || undefined,
+                            fabricFocus: pose.fabricFocus || undefined,
+                            promptSnippet: pose.promptSnippet,
+                          })}
+                          className="text-[11px] font-semibold text-accent hover:text-accent-hover flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <Eye className="w-3 h-3" />
+                          <span>View Reference</span>
+                        </button>
+                      ) : <div />}
+
+                      {!cleanImageUrl && !isGenerating && (
+                        <Button size="sm" onClick={(e) => { e.stopPropagation(); handleGeneratePose(pose.id); }} disabled={isGeneratingAll || isGeneratingSelected}>
+                          <Sparkles className="w-3.5 h-3.5" /> Generate
+                        </Button>
+                      )}
+                      {cleanImageUrl && (
+                        <button
+                          onClick={() => handleDownload(cleanImageUrl, `${template.name}_${pose.name}.jpg`)}
+                          className="p-2 rounded-xl text-charcoal-muted hover:text-accent hover:bg-accent-bg transition-colors cursor-pointer border border-cream-border shadow-xs"
+                          title="Download image"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </Card>
               );
@@ -1637,17 +1783,6 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
             <div className="mt-8 flex flex-col sm:flex-row justify-center gap-4">
               <Button
                 onClick={() => {
-                  handleSaveOrder();
-                  router.push(productId ? `/admin/inventory/${productId}` : '/admin/inventory');
-                }}
-                variant="secondary"
-                size="lg"
-              >
-                <Layers className="w-4 h-4 text-accent" />
-                View in My Gallery
-              </Button>
-              <Button
-                onClick={() => {
                   Object.entries(generatedImages).forEach(([poseId, data]) => {
                     const pose = template.poses.find(p => p.id === poseId);
                     if (data.imageUrl) handleDownload(data.imageUrl, `${template.name}_${pose?.name || poseId}.jpg`);
@@ -1663,7 +1798,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           {/* Gallery Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-6">
             {template.poses.map(pose => {
-              const gen = generatedImages[pose.id];
+              const genKeys = Object.keys(generatedImages).filter(k => k === pose.id || k.startsWith(`${pose.id}_`));
+              const gen = genKeys.length > 0 ? generatedImages[genKeys[genKeys.length - 1]] : null;
               const cleanGenUrl = gen?.imageUrl ? gen.imageUrl.trim().replace(/[\\'";,\s]+$/, '').replace(/%5C$/i, '') : '';
               if (!cleanGenUrl) return null;
               return (
@@ -1828,6 +1964,83 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               </div>
               <Button size="sm" variant="ghost" onClick={() => setZoomModal(null)}>
                 Done Inspecting
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Reference Pose Inspector Lightbox Modal */}
+      {mounted && poseModal && createPortal(
+        <div className="fixed inset-0 z-[120] bg-charcoal/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl border border-cream-border flex flex-col max-h-[92vh]">
+            {/* Modal Header */}
+            <div className="p-4 px-6 border-b border-cream-border flex items-center justify-between bg-cream-light/40 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-accent-bg border border-accent-border flex items-center justify-center text-accent">
+                  <Camera className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-base text-charcoal flex items-center gap-2">
+                    {poseModal.name}
+                    {poseModal.name.toLowerCase().includes('mirror') && (
+                      <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-extrabold border border-purple-200">
+                        🪞 Ray-Traced Mirror Physics
+                      </span>
+                    )}
+                  </h3>
+                  <p className="text-xs text-charcoal-muted">Pose Reference & Photographic Angle Guide</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPoseModal(null)}
+                className="p-2 rounded-xl hover:bg-cream text-charcoal-muted hover:text-charcoal transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Image & Info */}
+            <div className="flex-1 overflow-auto p-6 space-y-4 bg-cream-light/30">
+              <div className="aspect-[3/4] max-h-[52vh] mx-auto rounded-2xl overflow-hidden border border-cream-border bg-black shadow-lg relative">
+                <img
+                  src={poseModal.url}
+                  alt={poseModal.name}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+
+              <div className="space-y-3 p-4 rounded-2xl bg-white border border-cream-border text-xs">
+                {poseModal.description && (
+                  <div>
+                    <span className="font-bold text-charcoal uppercase tracking-wider text-[10px] block mb-0.5">Posture & Angle:</span>
+                    <p className="text-slate-700 leading-relaxed">{poseModal.description}</p>
+                  </div>
+                )}
+                {poseModal.purpose && (
+                  <div className="pt-2 border-t border-cream-border/60">
+                    <span className="font-bold text-accent uppercase tracking-wider text-[10px] block mb-0.5">🎯 Target Audience Connection:</span>
+                    <p className="text-slate-700 leading-relaxed">{poseModal.purpose}</p>
+                  </div>
+                )}
+                {poseModal.fabricFocus && (
+                  <div className="pt-2 border-t border-cream-border/60">
+                    <span className="font-bold text-emerald-700 uppercase tracking-wider text-[10px] block mb-0.5">✨ Garment & Textile Emphasis:</span>
+                    <p className="text-slate-700 leading-relaxed">{poseModal.fabricFocus}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 px-6 border-t border-cream-border bg-white flex items-center justify-between text-xs shrink-0">
+              <span className="text-charcoal-muted">
+                This reference image and optical geometry will guide the AI photoshoot.
+              </span>
+              <Button size="sm" onClick={() => setPoseModal(null)}>
+                Got It
               </Button>
             </div>
           </div>

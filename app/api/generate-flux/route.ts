@@ -213,7 +213,8 @@ export async function POST(req: NextRequest) {
         `You MUST use the EXACT colors, patterns, motifs, weave texture, and design from these fabric swatches. ` +
         `Instruction: ${garmentMapping}. ` +
         `Do NOT invent new patterns or colors for the provided swatches. The generated garment sections must be a pixel-accurate replication of the provided fabric images.\n` +
-        `CRITICAL: If any optional garment component (like Pant, Bottoms, or Dupatta) is NOT provided in the images above, you MUST automatically design and generate them to perfectly complement the provided body fabric according to high-end fashion taste.`;
+        `CRITICAL: If any optional garment component (like Pant, Bottoms, or Dupatta) is NOT provided in the images above, you MUST automatically design and generate them to perfectly complement the provided body fabric according to high-end fashion taste.\n` +
+        `CRITICAL: DO NOT add tassels, fringes, or latkans to the end of the pallu or borders UNLESS they are explicitly visible in the provided reference images. Do not invent them.`;
     }
 
     // Dynamic Background & Vibe Logic
@@ -244,17 +245,32 @@ export async function POST(req: NextRequest) {
     // Default template fallbacks (if not configured in DB)
     const fallbackSystemPrompt = 'Commercial fashion photoshoot for luxury Indian garments brand. Masterpiece, ultra-sharp focus, photorealistic 8k resolution, editorial Vogue India and Harpers Bazaar style.';
     const fallbackCamera = 'Shot on Hasselblad H6D-100c medium format camera paired with HC 100mm f/2.2 portrait lens. Superb optical sharpness, razor-sharp focus, crisp details, hyper-realistic depth of field, 8K UHD commercial fashion catalogue photography, true color reproduction, zero digital artifacting. Eye-level (peer POV), face always visible.';
-    const fallbackNegative = 'bad anatomy, deformed fingers, extra limbs, mutated hands, plastic skin, doll-like face, mannequin, oversaturated cartoon, 3d render, CGI, digital drawing, blur, out of focus, soft focus, low resolution, artifacts, poorly drawn face, asymmetric eyes, distorted fabric patterns, watermark, signature, blurry text, cropped head, unnatural poses, bright flash, evening bulb light, garish colors, pattern behind print';
+    const fallbackNegative = 'bad anatomy, deformed fingers, fused fingers, too many fingers, missing fingers, broken wrist, extra limbs, mutated hands, plastic skin, doll-like face, mannequin, oversaturated cartoon, 3d render, CGI, digital drawing, blur, out of focus, soft focus, low resolution, artifacts, poorly drawn face, asymmetric eyes, distorted fabric patterns, floating jewelry, melting jewelry, unnatural fabric tension, watermark, signature, blurry text, cropped head, unnatural poses, bright flash, evening bulb light, garish colors, pattern behind print';
     
     const sysPrompt = template?.systemPrompt || fallbackSystemPrompt;
     const camSettings = template?.cameraSettings || fallbackCamera;
-    const negPrompt = template?.negativePrompt || fallbackNegative;
+    
+    // Check if pose or context involves mirrors
+    const isMirror = (dbPose?.name || '').toLowerCase().includes('mirror') ||
+      (dbPose?.promptSnippet || '').toLowerCase().includes('mirror') ||
+      (cleanPrompt || '').toLowerCase().includes('mirror') ||
+      (dynamicBackground || '').toLowerCase().includes('mirror');
+
+    const mirrorPhysicsRule = isMirror
+      ? '\n- OPTICAL MIRROR PHYSICS: The mirror reflection must obey real-world optical ray-tracing geometry. The reflection in the mirror must show the model looking directly into her own eyes in the glass with matching body position, raised hand, and pallu pin placement in exact geometric symmetry with the foreground model. Zero distorted reflections, no impossible angles, no duplicate limbs, single coherent identity.'
+      : '';
+
+    const mirrorNeg = isMirror
+      ? ', broken mirror physics, distorted reflection, impossible reflection angle, reflection looking at camera while body faces away, double faces, duplicate limbs, floating hands, misaligned reflections, uncanny valley reflection, two different people in mirror'
+      : '';
+
+    const negPrompt = (template?.negativePrompt || fallbackNegative) + mirrorNeg;
     
     // The pose snippet from DB
     const posePrompt = dbPose?.promptSnippet || '';
     
     // Combine into final prompt
-    const fluxPrompt = `${imageInstructions}\n\nUser Additions: ${cleanPrompt}\nPose Direction: ${posePrompt}\nBackground & Vibe: ${dynamicBackground}\nStyling & Persona Rules: ${dynamicStyling}\n\nCRITICAL REQUIREMENTS:\n- Generate an ultra-photorealistic fashion photograph, NOT an illustration, painting, or 3D render.\n- ${sysPrompt}\n- ${camSettings}\n- ABSOLUTELY NO TEXT, NO LOGOS, NO WATERMARKS, NO MAGAZINE COVERS. The image must be clean of any typographic elements.\n- Extreme emphasis on ultra-realistic human anatomy, highly detailed natural skin texture with visible pores and micro-details, hyper-realistic eyes, and perfect natural fabric draping.\n- MACRO DETAIL PRESERVATION: You must flawlessly preserve every single microscopic detail of the uploaded fabric. Do not smooth out embroidery, zari work, sequins, or weave textures. Keep the texture hyper-sharp, tactile, and highly defined with absolutely zero blur or softness.`;
+    const fluxPrompt = `${imageInstructions}\n\nUser Additions: ${cleanPrompt}\nPose Direction: ${posePrompt}\nBackground & Vibe: ${dynamicBackground}\nStyling & Persona Rules: ${dynamicStyling}\n\nCRITICAL REQUIREMENTS:\n- Generate an ultra-photorealistic fashion photograph, NOT an illustration, painting, or 3D render.\n- ${sysPrompt}\n- ${camSettings}${mirrorPhysicsRule}\n- ABSOLUTELY NO TEXT, NO LOGOS, NO WATERMARKS, NO MAGAZINE COVERS. The image must be clean of any typographic elements.\n- Extreme emphasis on ultra-realistic human anatomy, highly detailed natural skin texture with visible pores and micro-details, hyper-realistic eyes, and perfect natural fabric draping.\n- MACRO DETAIL PRESERVATION: You must flawlessly preserve every single microscopic detail of the uploaded fabric. Do not smooth out embroidery, zari work, sequins, or weave textures. Keep the texture hyper-sharp, tactile, and highly defined with absolutely zero blur or softness.`;
 
     // 3. Build Kie.ai request body
 
@@ -262,14 +278,15 @@ export async function POST(req: NextRequest) {
     const uploadToImgBB = async (base64Data: string, apiKey: string) => {
       // Remove the prefix to just get the raw base64 string
       const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
-      const formData = new FormData();
-      formData.append('image', cleanBase64);
+      const params = new URLSearchParams();
+      params.append('image', cleanBase64);
       // Set expiration to 24 hours (86400 seconds) so images don't delete while Kie.ai is still queuing
-      formData.append('expiration', '86400');
+      params.append('expiration', '86400');
 
       const res = await fetch(`https://api.imgbb.com/1/upload?key=${apiKey}`, {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params,
       });
 
       if (!res.ok) {

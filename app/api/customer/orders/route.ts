@@ -89,10 +89,14 @@ export async function POST(req: NextRequest) {
         });
         if (product) {
           const firstImage = Object.values(generatedImages as Record<string, {imageUrl: string}>)[0];
+          const existingImages = (product.generatedImages as Record<string, any>) || {};
+          const newImages = (generatedImages as Record<string, any>) || {};
+          const mergedImages = { ...existingImages, ...newImages };
+
           await prisma.product.update({
             where: { id: product.id },
             data: {
-              generatedImages: generatedImages as any,
+              generatedImages: mergedImages as any,
               linkedOrderId: id,
               aspectRatio: aspectRatio || product.aspectRatio,
               coverImageUrl: firstImage?.imageUrl || product.coverImageUrl,

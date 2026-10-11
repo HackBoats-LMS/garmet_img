@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
+import { uploadToStorage } from '@/lib/storage';
 
 // GET /api/admin/templates — List all templates
 export async function GET() {
@@ -53,6 +54,48 @@ export async function POST(req: NextRequest) {
       poses,
     } = body;
 
+    let finalCoverImage = coverImage;
+    if (coverImage && coverImage.startsWith('data:image/')) {
+      const uploaded = await uploadToStorage(coverImage, { 
+        bucket: 'images',
+        folder: 'templates', 
+        publicId: `template_${slug}_cover_${Date.now()}`
+      });
+      finalCoverImage = uploaded.url;
+    }
+
+    let finalPoses = poses;
+    if (poses && Array.isArray(poses)) {
+      finalPoses = await Promise.all(poses.map(async (pose: any, i: number) => {
+        let finalPreview = pose.previewImage;
+        if (finalPreview && finalPreview.startsWith('data:image/')) {
+          const uploaded = await uploadToStorage(finalPreview, {
+            bucket: 'images',
+            folder: 'poses',
+            publicId: `template_${slug}_pose_${i}_${Date.now()}`
+          });
+          finalPreview = uploaded.url;
+        }
+        return { ...pose, previewImage: finalPreview };
+      }));
+    }
+
+    let finalImageSlots = imageSlots;
+    if (imageSlots && Array.isArray(imageSlots)) {
+      finalImageSlots = await Promise.all(imageSlots.map(async (slot: any, i: number) => {
+        let finalSample = slot.sampleImageUrl;
+        if (finalSample && finalSample.startsWith('data:image/')) {
+          const uploaded = await uploadToStorage(finalSample, {
+            bucket: 'images',
+            folder: 'slots',
+            publicId: `template_${slug}_slot_${i}_${Date.now()}`
+          });
+          finalSample = uploaded.url;
+        }
+        return { ...slot, sampleImageUrl: finalSample };
+      }));
+    }
+
     if (!name || !slug) {
       return NextResponse.json({ error: 'Name and slug are required' }, { status: 400 });
     }
@@ -68,7 +111,7 @@ export async function POST(req: NextRequest) {
         name,
         slug,
         tagline: tagline || null,
-        coverImage: coverImage || null,
+        coverImage: finalCoverImage || null,
         description: description || null,
         garmentType: garmentType || null,
         systemPrompt: systemPrompt || null,
@@ -78,7 +121,7 @@ export async function POST(req: NextRequest) {
         defaultModelId: defaultModelId || null,
         allowedModelIds: allowedModelIds || null,
         imageSlots: {
-          create: (imageSlots || []).map((slot: any, i: number) => ({
+          create: (finalImageSlots || []).map((slot: any, i: number) => ({
             name: slot.name,
             description: slot.description || null,
             sortOrder: slot.sortOrder ?? i,
@@ -95,7 +138,7 @@ export async function POST(req: NextRequest) {
           })),
         },
         poses: {
-          create: (poses || []).map((pose: any, i: number) => ({
+          create: (finalPoses || []).map((pose: any, i: number) => ({
             name: pose.name,
             description: pose.description || null,
             promptSnippet: pose.promptSnippet || '',
