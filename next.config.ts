@@ -30,7 +30,8 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  output: 'standalone',
+  // Only enable standalone output for Docker/VPS; omit on Vercel where serverless is used
+  output: process.env.VERCEL ? undefined : 'standalone',
   images: {
     unoptimized: true,
     remotePatterns: [
