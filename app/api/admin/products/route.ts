@@ -58,7 +58,16 @@ export async function GET(req: NextRequest) {
       prisma.product.count({ where }),
     ]);
 
-    return NextResponse.json({ products, total, page, limit });
+    const formattedProducts = products.map((p) => ({
+      ...p,
+      title: p.productName,
+      friendlyCode: p.code1,
+      price: p.retailPrice ?? p.unitPrice,
+      mrp: p.retailPrice,
+      wholesalePrice: p.dealerPrice,
+    }));
+
+    return NextResponse.json({ products: formattedProducts, total, page, limit });
   } catch (error: any) {
     console.error('[Admin Products GET]', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

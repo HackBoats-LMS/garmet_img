@@ -595,38 +595,75 @@ export function ProductForm({ productId }: Props) {
   };
 
   const [uploadingCatalogue, setUploadingCatalogue] = useState(false);
-  
-  const uploadCatalogueFile = async (file: File) => {
+  const [catalogueUploadStatus, setCatalogueUploadStatus] = useState<string | null>(null);
+
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => resolve(event.target?.result as string);
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const uploadCatalogueFiles = async (files: File[]) => {
+    if (!files || files.length === 0) return;
     setUploadingCatalogue(true);
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const base64 = event.target?.result as string;
-      try {
-        const res = await fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ file: base64, type: 'generated', orderId: productId || 'manual' }),
-        });
-        const data = await res.json();
-        if (data.url) {
-          const newPoseId = 'uploaded_' + Date.now();
-          setGeneratedImages(prev => ({
-            ...(prev || {}),
-            [newPoseId]: { imageUrl: data.url, prompt: 'Manually uploaded' }
-          }));
+    const total = files.length;
+    setCatalogueUploadStatus(`0/${total}`);
+
+    const newEntries: Record<string, { imageUrl: string; prompt: string }> = {};
+
+    try {
+      for (let i = 0; i < total; i++) {
+        const file = files[i];
+        setCatalogueUploadStatus(`${i + 1}/${total}`);
+        try {
+          const base64 = await fileToBase64(file);
+          const res = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              file: base64,
+              type: 'generated',
+              orderId: productId || 'manual',
+              poseId: `upload_${Date.now()}_${i}`,
+            }),
+          });
+          const data = await res.json();
+          if (data.url) {
+            const newPoseId = `uploaded_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+            newEntries[newPoseId] = {
+              imageUrl: data.url,
+              prompt: file.name ? file.name.replace(/\.[^/.]+$/, '') : 'Manually uploaded',
+            };
+          }
+        } catch (fileErr) {
+          console.error(`Failed to upload ${file.name}:`, fileErr);
         }
-      } catch (err) {
-        console.error('Failed to upload catalogue photo', err);
-      } finally {
-        setUploadingCatalogue(false);
       }
-    };
-    reader.readAsDataURL(file);
+
+      if (Object.keys(newEntries).length > 0) {
+        setGeneratedImages(prev => ({
+          ...(prev || {}),
+          ...newEntries,
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to upload catalogue photos', err);
+    } finally {
+      setUploadingCatalogue(false);
+      setCatalogueUploadStatus(null);
+    }
   };
 
   const handleUploadCataloguePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) uploadCatalogueFile(file);
+    const fileList = e.target.files;
+    if (fileList && fileList.length > 0) {
+      const files = Array.from(fileList);
+      await uploadCatalogueFiles(files);
+      e.target.value = '';
+    }
   };
 
   const handleOpenGooglePicker = () => {
@@ -643,25 +680,37 @@ export function ProductForm({ productId }: Props) {
       showUploadView: true,
       showUploadFolders: true,
       supportDrives: true,
-      multiselect: false,
+      multiselect: true,
       callbackFunction: async (data: any) => {
-        if (data.action === 'picked') {
-          const doc = data.docs[0];
+        if (data.action === 'picked' && Array.isArray(data.docs) && data.docs.length > 0) {
           const token = (authResponse as any)?.access_token || data.oauthToken;
-          
-          if (doc.id) {
-            try {
-              const res = await fetch(`https://www.googleapis.com/drive/v3/files/${doc.id}?alt=media`, {
-                headers: { Authorization: `Bearer ${token}` }
-              });
-              if (res.ok) {
-                const blob = await res.blob();
-                uploadCatalogueFile(new File([blob], doc.name || "google_photo.jpg", { type: blob.type }));
-                return;
+          setUploadingCatalogue(true);
+          setCatalogueUploadStatus(`Drive 0/${data.docs.length}`);
+
+          const downloadedFiles: File[] = [];
+          for (let i = 0; i < data.docs.length; i++) {
+            const doc = data.docs[i];
+            setCatalogueUploadStatus(`Drive ${i + 1}/${data.docs.length}`);
+            if (doc.id) {
+              try {
+                const res = await fetch(`https://www.googleapis.com/drive/v3/files/${doc.id}?alt=media`, {
+                  headers: { Authorization: `Bearer ${token}` }
+                });
+                if (res.ok) {
+                  const blob = await res.blob();
+                  downloadedFiles.push(new File([blob], doc.name || `drive_photo_${i + 1}.jpg`, { type: blob.type }));
+                }
+              } catch (err) {
+                console.warn(`Drive v3 download failed for ${doc.name}`, err);
               }
-            } catch (err) {
-              console.warn("Drive v3 download failed", err);
             }
+          }
+
+          if (downloadedFiles.length > 0) {
+            await uploadCatalogueFiles(downloadedFiles);
+          } else {
+            setUploadingCatalogue(false);
+            setCatalogueUploadStatus(null);
           }
         }
       }
@@ -1938,6 +1987,7 @@ export function ProductForm({ productId }: Props) {
                     <input
                       type="file"
                       accept="image/*"
+                      multiple
                       onChange={handleUploadCataloguePhoto}
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                       disabled={uploadingCatalogue}
@@ -1946,9 +1996,19 @@ export function ProductForm({ productId }: Props) {
                       type="button"
                       disabled={uploadingCatalogue}
                       className="text-[10px] px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-charcoal font-bold hover:bg-cream-light transition-all flex items-center gap-1 disabled:opacity-50 whitespace-nowrap"
+                      title="Upload one or multiple photos from your device"
                     >
-                      {uploadingCatalogue ? <Loader2 className="w-3 h-3 animate-spin shrink-0" /> : <Upload className="w-3 h-3 shrink-0" />}
-                      Upload Local
+                      {uploadingCatalogue && !catalogueUploadStatus?.startsWith('Drive') ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin shrink-0 text-accent" />
+                          <span>{catalogueUploadStatus ? `Uploading (${catalogueUploadStatus})` : 'Uploading...'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-3 h-3 shrink-0" />
+                          <span>Upload Local</span>
+                        </>
+                      )}
                     </button>
                   </div>
                   <button
@@ -1956,13 +2016,23 @@ export function ProductForm({ productId }: Props) {
                     onClick={handleOpenGooglePicker}
                     disabled={uploadingCatalogue}
                     className="text-[10px] px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-charcoal font-bold hover:bg-cream-light transition-all flex items-center gap-1 disabled:opacity-50 whitespace-nowrap"
+                    title="Select one or multiple photos from Google Drive"
                   >
-                    <svg viewBox="0 0 48 48" className="w-3 h-3 shrink-0">
-                      <path fill="#FFC107" d="M17 7.5L31 7.5 45 31.5 31 31.5z"></path>
-                      <path fill="#1976D2" d="M3.1 31.5L10.1 43.5 38.1 43.5 31.1 31.5z"></path>
-                      <path fill="#4CAF50" d="M17 7.5L3.1 31.5 10.1 43.5 24 19.5z"></path>
-                    </svg>
-                    Drive
+                    {uploadingCatalogue && catalogueUploadStatus?.startsWith('Drive') ? (
+                      <>
+                        <Loader2 className="w-3 h-3 animate-spin shrink-0 text-accent" />
+                        <span>{catalogueUploadStatus}</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg viewBox="0 0 48 48" className="w-3 h-3 shrink-0">
+                          <path fill="#FFC107" d="M17 7.5L31 7.5 45 31.5 31 31.5z"></path>
+                          <path fill="#1976D2" d="M3.1 31.5L10.1 43.5 38.1 43.5 31.1 31.5z"></path>
+                          <path fill="#4CAF50" d="M17 7.5L3.1 31.5 10.1 43.5 24 19.5z"></path>
+                        </svg>
+                        <span>Drive</span>
+                      </>
+                    )}
                   </button>
                   <a href={`/admin/generate?productId=${productId}`}
                     className="text-[10px] px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold hover:bg-accent/90 transition-all flex items-center gap-1 whitespace-nowrap"
