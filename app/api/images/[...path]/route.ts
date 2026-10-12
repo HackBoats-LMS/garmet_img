@@ -53,29 +53,35 @@ export async function GET(
       return NextResponse.json({ error: 'Image path required' }, { status: 400 });
     }
 
-    // 1. Try to fetch from Cloudflare R2 images bucket
+    // 1. Try to fetch from Cloudflare R2 (checks images and models buckets)
     if (s3Client) {
-      try {
-        const s3Res = await s3Client.send(
-          new GetObjectCommand({
-            Bucket: BUCKET_NAME,
-            Key: key,
-          })
-        );
+      const bucketsToCheck = key.includes('models')
+        ? [process.env.R2_MODELS_BUCKET || 'models', BUCKET_NAME]
+        : [BUCKET_NAME, process.env.R2_MODELS_BUCKET || 'models'];
 
-        if (s3Res.Body) {
-          const bytes = await s3Res.Body.transformToByteArray();
-          const contentType = s3Res.ContentType || getMimeType(key);
+      for (const bucket of bucketsToCheck) {
+        try {
+          const s3Res = await s3Client.send(
+            new GetObjectCommand({
+              Bucket: bucket,
+              Key: key,
+            })
+          );
 
-          return new NextResponse(Buffer.from(bytes), {
-            headers: {
-              'Content-Type': contentType,
-              'Cache-Control': 'public, max-age=31536000, immutable',
-            },
-          });
+          if (s3Res.Body) {
+            const bytes = await s3Res.Body.transformToByteArray();
+            const contentType = s3Res.ContentType || getMimeType(key);
+
+            return new NextResponse(Buffer.from(bytes), {
+              headers: {
+                'Content-Type': contentType,
+                'Cache-Control': 'public, max-age=31536000, immutable',
+              },
+            });
+          }
+        } catch (s3Err: any) {
+          // If not found in this bucket, check the next bucket
         }
-      } catch (s3Err: any) {
-        // If not found in R2, proceed to local fallback
       }
     }
 
