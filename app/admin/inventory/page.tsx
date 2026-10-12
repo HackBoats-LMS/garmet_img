@@ -11,18 +11,24 @@ import {
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
 import { Badge } from '@/app/components/ui/Badge';
-import { Input } from '@/app/components/ui/Input';
+import * as XLSX from 'xlsx';
+import { parseSheetSmart, mapSpreadsheetRow } from '@/lib/spreadsheet-mapper';
 
 interface Category { id: string; name: string; slug: string; subCategories: { id: string; name: string; slug: string }[] }
 interface Product {
   id: string;
   stockCode: string;
-  friendlyCode: string | null;
-  title: string;
+  code1?: string | null;
+  friendlyCode?: string | null;
+  productName?: string;
+  title?: string;
   color: string | null;
   clothType: string | null;
-  price: number | null;
-  mrp: number | null;
+  price?: number | null;
+  unitPrice?: number | null;
+  retailPrice?: number | null;
+  dealerPrice?: number | null;
+  mrp?: number | null;
   quantity: number;
   reservedQty: number;
   soldQty: number;
@@ -61,24 +67,133 @@ export default function AdminInventoryPage() {
   // XLSX Import
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<{ message: string; success: boolean } | null>(null);
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setImporting(true);
+    setImportProgress('Reading and preparing file on your PC...');
     setImportResult(null);
+
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/admin/products/import', { method: 'POST', body: fd });
-      const data = await res.json();
-      setImportResult({ message: data.message || data.error, success: res.ok });
-      if (res.ok) fetchProducts();
+      // 1. Parse spreadsheet entirely on the user's PC using local CPU
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+
+      let targetSheet: XLSX.WorkSheet | null = null;
+      for (const name of workbook.SheetNames) {
+        const s = workbook.Sheets[name];
+        if (s && s['!ref']) {
+          targetSheet = s;
+          break;
+        }
+      }
+
+      if (!targetSheet) {
+        throw new Error('Spreadsheet has no data sheets');
+      }
+
+      // Detect header row and extract rows locally on client
+      const rawRows = parseSheetSmart(targetSheet);
+      if (!rawRows || rawRows.length === 0) {
+        throw new Error('No rows found in spreadsheet');
+      }
+
+      // Map, normalize, clean, and validate all fields locally on the user's PC
+      const allMapped = rawRows.map(mapSpreadsheetRow);
+      const validProducts = allMapped.filter(p => p.stockCode && p.stockCode !== '0' && p.stockCode !== '-');
+      const skippedLocally = allMapped.length - validProducts.length;
+
+      if (validProducts.length === 0) {
+        throw new Error('No valid products found in the sheet. Please ensure a Stock Code, Code, or Product Code column exists.');
+      }
+
+      const total = validProducts.length;
+
+      // 2. Pre-check existence of IDs / barcodes to reduce database strain
+      setImportProgress('Verifying product IDs and barcodes with database...');
+      let preCheckSummary = '';
+      try {
+        const verifyRes = await fetch('/api/admin/products/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            verifyOnly: true,
+            products: validProducts.map(p => ({ id: p.id, stockCode: p.stockCode, code1: p.code1 })),
+          }),
+        });
+        if (verifyRes.ok) {
+          const vData = await verifyRes.json();
+          if (vData.verified) {
+            preCheckSummary = `${vData.newCount} new, ${vData.existingCount} existing`;
+          }
+        }
+      } catch {
+        // Non-blocking pre-check
+      }
+
+      // 3. Stream in low-load batches of 25 items with live progress and pool-friendly throttling
+      const BATCH_SIZE = 25;
+      const totalBatches = Math.ceil(total / BATCH_SIZE);
+      let totalCreated = 0;
+      let totalUpdated = 0;
+      let totalSkipped = skippedLocally;
+      const allErrors: string[] = [];
+
+      for (let i = 0; i < total; i += BATCH_SIZE) {
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const batch = validProducts.slice(i, i + BATCH_SIZE);
+        const processedSoFar = Math.min(i + BATCH_SIZE, total);
+        const percent = Math.round((processedSoFar / total) * 100);
+
+        setImportProgress(
+          `Batch ${batchNum}/${totalBatches}: ${processedSoFar} of ${total} products (${percent}%)${preCheckSummary ? ` [${preCheckSummary}]` : ''}...`
+        );
+
+        const res = await fetch('/api/admin/products/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ products: batch }),
+        });
+
+        const rawText = await res.text();
+        let data: any = {};
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          throw new Error(rawText && rawText.length < 300 ? rawText : `Server returned status ${res.status}`);
+        }
+
+        if (!res.ok) {
+          throw new Error(data.error || data.message || `Server error ${res.status}`);
+        }
+
+        totalCreated += data.created || 0;
+        totalUpdated += data.updated || 0;
+        totalSkipped += data.skipped || 0;
+        if (Array.isArray(data.errors)) {
+          allErrors.push(...data.errors);
+        }
+
+        // 50ms pause between batches to keep DB connection pool healthy and avoid CPU spikes
+        if (processedSoFar < total) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+
+      setImportResult({
+        message: `Import complete — ${totalCreated} created, ${totalUpdated} updated, ${totalSkipped} skipped${allErrors.length > 0 ? ` (${allErrors.length} warnings)` : ''}`,
+        success: true,
+      });
+      fetchProducts();
     } catch (err: any) {
-      setImportResult({ message: err.message, success: false });
+      console.error('Import error:', err);
+      setImportResult({ message: err.message || 'Import failed', success: false });
     } finally {
       setImporting(false);
+      setImportProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -167,7 +282,7 @@ export default function AdminInventoryPage() {
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-cream-border bg-white text-sm font-semibold text-charcoal hover:border-emerald-500 hover:text-emerald-700 transition-all disabled:opacity-60 cursor-pointer"
           >
             {importing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
-            Import Excel
+            {importing ? (importProgress || 'Importing...') : 'Import Excel'}
           </button>
           <Link href="/admin/categories">
             <Button variant="secondary" size="md">
@@ -183,6 +298,19 @@ export default function AdminInventoryPage() {
           </Link>
         </div>
       </div>
+
+      {/* Live Import Progress Banner */}
+      {importing && importProgress && (
+        <div className="p-4 rounded-xl flex items-center justify-between gap-3 text-sm font-medium border bg-blue-50 border-blue-200 text-blue-900 shadow-sm animate-pulse">
+          <div className="flex items-center gap-2.5">
+            <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
+            <span className="font-semibold">{importProgress}</span>
+          </div>
+          <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">
+            Client-Side Fast Processing
+          </span>
+        </div>
+      )}
 
       {/* Import Result Banner */}
       {importResult && (
@@ -330,7 +458,9 @@ export default function AdminInventoryPage() {
                             )}
                           </div>
                           <div className="min-w-0">
-                            <p className="font-bold text-charcoal text-sm truncate max-w-[180px]">{product.title}</p>
+                            <p className="font-bold text-charcoal text-sm truncate max-w-[200px]" title={product.productName || product.title || product.stockCode}>
+                              {product.productName || product.title || product.stockCode}
+                            </p>
                             <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                               {product.color && (
                                 <span className="text-[10px] text-charcoal-muted">{product.color}</span>
@@ -346,10 +476,10 @@ export default function AdminInventoryPage() {
                       {/* Stock Code */}
                       <td className="px-4 py-4">
                         <p className="font-mono text-xs font-bold text-charcoal">{product.stockCode}</p>
-                        {product.friendlyCode && (
+                        {(product.code1 || product.friendlyCode) && (
                           <p className="font-mono text-[10px] text-charcoal-muted mt-0.5 flex items-center gap-1">
                             <Tag className="w-2.5 h-2.5" />
-                            {product.friendlyCode}
+                            {product.code1 || product.friendlyCode}
                           </p>
                         )}
                       </td>
@@ -370,11 +500,13 @@ export default function AdminInventoryPage() {
 
                       {/* Price */}
                       <td className="px-4 py-4">
-                        {product.price ? (
+                        {(product.retailPrice != null || product.price != null || product.unitPrice != null) ? (
                           <div>
-                            <p className="text-sm font-bold text-charcoal">₹{product.price.toLocaleString('en-IN')}</p>
-                            {product.mrp && product.mrp > product.price && (
-                              <p className="text-[10px] text-charcoal-muted line-through">₹{product.mrp.toLocaleString('en-IN')}</p>
+                            <p className="text-sm font-bold text-charcoal">
+                              ₹{(product.retailPrice ?? product.price ?? product.unitPrice)?.toLocaleString('en-IN')}
+                            </p>
+                            {product.unitPrice != null && (product.retailPrice ?? product.price) != null && product.unitPrice !== (product.retailPrice ?? product.price) && (
+                              <p className="text-[10px] text-charcoal-muted">Cost: ₹{product.unitPrice.toLocaleString('en-IN')}</p>
                             )}
                           </div>
                         ) : (
