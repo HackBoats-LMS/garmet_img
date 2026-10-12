@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { GoogleGenAI } from '@google/genai';
-import sharp from 'sharp';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // Allow sufficient time for AI generation & image fetch
@@ -10,10 +9,22 @@ export const maxDuration = 60; // Allow sufficient time for AI generation & imag
 const MODELS_TO_TRY = ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.8-flash'];
 
 /**
- * Optimizes an image URL to a max 1024x1024 JPEG base64 buffer for fast multimodal transfer.
+ * Fetches and prepares an image (data URL or remote URL) to base64 for Gemini AI.
+ * Images are pre-compressed client-side, eliminating CPU-heavy server resizing.
  */
 async function fetchAndOptimizeImage(url: string): Promise<{ base64: string; mimeType: string } | null> {
   try {
+    // If it's already a client-compressed data URL
+    if (url.startsWith('data:')) {
+      const match = url.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        return {
+          mimeType: match[1],
+          base64: match[2],
+        };
+      }
+    }
+
     const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
     if (!res.ok) {
       console.warn(`[generate-ai] Failed to fetch image: ${url} (status: ${res.status})`);
@@ -21,18 +32,14 @@ async function fetchAndOptimizeImage(url: string): Promise<{ base64: string; mim
     }
     const arrayBuffer = await res.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-
-    const optimized = await sharp(buffer)
-      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 80 })
-      .toBuffer();
+    const mimeType = res.headers.get('content-type') || 'image/jpeg';
 
     return {
-      base64: optimized.toString('base64'),
-      mimeType: 'image/jpeg',
+      base64: buffer.toString('base64'),
+      mimeType,
     };
   } catch (err: any) {
-    console.error('[generate-ai] Error optimizing image:', err.message);
+    console.error('[generate-ai] Error fetching image:', err.message);
     return null;
   }
 }

@@ -5,6 +5,7 @@ import { ReferenceSlot, UploadedReference } from '../types';
 import { FABRIC_PRESETS, COLOR_PALETTES } from '../utils/constants';
 import { Upload, X, Sparkles, Sliders, Palette, Layers, HelpCircle, Check, Cloud } from 'lucide-react';
 import { useGooglePicker } from '../hooks/useGooglePicker';
+import { compressImageOnClient } from '@/lib/client-compress';
 
 interface ReferenceSlotCardProps {
   slot: ReferenceSlot;
@@ -41,18 +42,32 @@ export const ReferenceSlotCard: React.FC<ReferenceSlotCardProps> = ({
 
   const { openPicker } = useGooglePicker(onFileSelectFromDrive);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
+      try {
+        const { file: compressedFile, dataUrl } = await compressImageOnClient(file, {
+          maxDimension: 1024,
+          quality: 0.85,
+        });
         onChange(slot.id, {
           ...currentRef,
-          file,
-          previewUrl: reader.result as string,
+          file: compressedFile,
+          previewUrl: dataUrl,
         });
-      };
-      reader.readAsDataURL(file);
+      } catch (err) {
+        console.error('Failed to compress image client-side:', err);
+        // Fallback to direct file reader
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          onChange(slot.id, {
+            ...currentRef,
+            file,
+            previewUrl: reader.result as string,
+          });
+        };
+        reader.readAsDataURL(file);
+      }
     }
   };
 

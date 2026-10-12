@@ -3,19 +3,22 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import fs from 'fs';
 import path from 'path';
 
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || '5121be04e91525bb3278414becc5d48a';
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || 'fa7179cc28728cc0f5c77bd28bc5d8db';
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || '7c0261cf9524378259cfa1da5c573163245d57c8d785511a79b05d3a82ce3182';
+// Security: Never hardcode credentials — always read from environment only
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || '';
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || '';
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || '';
 const BUCKET_NAME = process.env.R2_IMAGES_BUCKET || 'images';
 
-const s3Client = new S3Client({
-  region: 'auto',
-  endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: R2_ACCESS_KEY_ID,
-    secretAccessKey: R2_SECRET_ACCESS_KEY,
-  },
-});
+const s3Client = R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
+  ? new S3Client({
+      region: 'auto',
+      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: R2_ACCESS_KEY_ID,
+        secretAccessKey: R2_SECRET_ACCESS_KEY,
+      },
+    })
+  : null;
 
 function getMimeType(filename: string): string {
   const ext = path.extname(filename).toLowerCase();
@@ -51,31 +54,41 @@ export async function GET(
     }
 
     // 1. Try to fetch from Cloudflare R2 images bucket
-    try {
-      const s3Res = await s3Client.send(
-        new GetObjectCommand({
-          Bucket: BUCKET_NAME,
-          Key: key,
-        })
-      );
+    if (s3Client) {
+      try {
+        const s3Res = await s3Client.send(
+          new GetObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: key,
+          })
+        );
 
-      if (s3Res.Body) {
-        const bytes = await s3Res.Body.transformToByteArray();
-        const contentType = s3Res.ContentType || getMimeType(key);
+        if (s3Res.Body) {
+          const bytes = await s3Res.Body.transformToByteArray();
+          const contentType = s3Res.ContentType || getMimeType(key);
 
-        return new NextResponse(Buffer.from(bytes), {
-          headers: {
-            'Content-Type': contentType,
-            'Cache-Control': 'public, max-age=31536000, immutable',
-          },
-        });
+          return new NextResponse(Buffer.from(bytes), {
+            headers: {
+              'Content-Type': contentType,
+              'Cache-Control': 'public, max-age=31536000, immutable',
+            },
+          });
+        }
+      } catch (s3Err: any) {
+        // If not found in R2, proceed to local fallback
       }
-    } catch (s3Err: any) {
-      // If not found in R2, proceed to local fallback
     }
 
-    // 2. Local fallback from public/ directory
-    const localPath = path.join(process.cwd(), 'public', key);
+    // 2. Local fallback from public/ directory (with path traversal protection)
+    const normalizedKey = path.normalize(key).replace(/^(\.\.(\/|\\|$))+/, '');
+    const publicRoot = path.resolve(process.cwd(), 'public');
+    const localPath = path.resolve(publicRoot, normalizedKey);
+
+    // Security: Ensure resolved path stays within the public/ directory
+    if (!localPath.startsWith(publicRoot)) {
+      return NextResponse.json({ error: 'Invalid path' }, { status: 400 });
+    }
+
     if (fs.existsSync(localPath)) {
       const fileBuffer = fs.readFileSync(localPath);
       const contentType = getMimeType(key);
@@ -91,6 +104,6 @@ export async function GET(
     return NextResponse.json({ error: 'Image not found' }, { status: 404 });
   } catch (error: any) {
     console.error('[API /images Error]:', error);
-    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

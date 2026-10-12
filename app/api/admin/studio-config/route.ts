@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { auth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,6 +34,11 @@ async function ensureStudioConfigTable() {
 // GET /api/admin/studio-config
 export async function GET() {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     await ensureStudioConfigTable();
 
     const rows: any[] = await prisma.$queryRawUnsafe(`
@@ -79,6 +85,11 @@ export async function GET() {
 // POST /api/admin/studio-config
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     await ensureStudioConfigTable();
 
     const body = await req.json();

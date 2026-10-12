@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { auth } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,6 +68,11 @@ async function ensureKieModelTable() {
 // GET /api/admin/kie-models
 export async function GET() {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     await ensureKieModelTable();
 
     let models: any[] = [];
@@ -121,6 +127,11 @@ export async function GET() {
 // POST /api/admin/kie-models — Create a new Kie.ai model entry
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await req.json();
     const { displayName, modelId, isImageToImage = true, description, isActive = true, sortOrder = 10 } = body;
 

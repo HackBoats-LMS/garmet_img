@@ -7,15 +7,30 @@ import {
   uploadGeneratedAsset,
   uploadToStorage,
 } from '@/lib/storage';
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = getClientIp(req);
+    const rateCheck = checkRateLimit('api:upload', ip, { windowMs: 60 * 1000, max: 60 });
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { error: 'Too many upload requests. Please wait a moment.' },
+        { status: 429 }
+      );
+    }
+
     const session = await auth();
     const body = await req.json();
     const { file, type, templateSlug, assetName, modelName, orderId, slotId, poseId, customFolder } = body;
 
     if (!file) {
       return NextResponse.json({ error: 'File content (base64 or URL) is required' }, { status: 400 });
+    }
+
+    // Security (M-7): File size limit (20MB)
+    if (typeof file === 'string' && file.length > 20 * 1024 * 1024) {
+      return NextResponse.json({ error: 'File too large (max 20MB)' }, { status: 413 });
     }
 
     const userId = (session?.user as any)?.id || 'guest_user';
@@ -26,15 +41,14 @@ export async function POST(req: NextRequest) {
     switch (type) {
       case 'admin_template':
         if (userRole !== 'admin') {
-          // Allow in local dev or check
-          console.warn('[Upload] Admin template upload requested');
+          return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
         }
         secureUrl = await uploadAdminTemplateAsset(file, templateSlug || 'general', assetName || 'cover');
         break;
 
       case 'admin_model':
         if (userRole !== 'admin') {
-          console.warn('[Upload] Admin model upload requested');
+          return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
         }
         secureUrl = await uploadAdminModelAsset(file, modelName || 'model');
         break;
@@ -48,7 +62,9 @@ export async function POST(req: NextRequest) {
         break;
 
       default:
-        const folder = customFolder || (userRole === 'admin' ? 'coutureai/admin/uploads' : `coutureai/users/${userId}/general`);
+        const folder = (userRole === 'admin' && customFolder)
+          ? customFolder
+          : (userRole === 'admin' ? 'coutureai/admin/uploads' : `coutureai/users/${userId}/general`);
         const result = await uploadToStorage(file, { folder });
         secureUrl = result.url;
         break;

@@ -1,0 +1,26 @@
+# For production: Replace :80 with your domain name (e.g., studio.yourdomain.com) for automatic free HTTPS via Let's Encrypt
+:80 {
+    encode gzip zstd
+
+    header {
+        # Security headers
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Uncomment HSTS when serving over HTTPS with your domain:
+        # Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    }
+
+    reverse_proxy app:3000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+
+        # Generous timeout for long AI generation requests
+        transport http {
+            response_header_timeout 90s
+            read_timeout 90s
+        }
+    }
+}
