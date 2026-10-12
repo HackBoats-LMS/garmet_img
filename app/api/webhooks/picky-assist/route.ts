@@ -3,6 +3,14 @@ import prisma from '@/lib/prisma';
 
 export async function POST(req: NextRequest) {
   try {
+    // Security: Verify Bearer token
+    const authHeader = req.headers.get('authorization');
+    const expectedToken = process.env.PICKY_ASSIST_API_TOKEN;
+    if (!expectedToken || authHeader !== `Bearer ${expectedToken}`) {
+      console.warn('[Picky Assist Webhook] Unauthorized attempt');
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const payload = await req.json();
     
     // Picky Assist will send code1 and the updated quantity.

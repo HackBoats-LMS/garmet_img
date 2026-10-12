@@ -4,8 +4,18 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || '';
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || '';
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || '';
-const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME || '';
-const R2_PUBLIC_URL = process.env.R2_PUBLIC_URL || '';
+
+// 1. Bucket for Generated AI Photoshoots & Customer Uploads
+export const R2_GENERATED_BUCKET = process.env.R2_GENERATED_BUCKET || process.env.R2_BUCKET_NAME || 'generatedimages';
+export const R2_GENERATED_PUBLIC_URL = (process.env.R2_GENERATED_PUBLIC_URL || process.env.R2_PUBLIC_URL || '').replace(/\/$/, '');
+
+// 2. Bucket for Templates, Covers & Pose Guides
+export const R2_IMAGES_BUCKET = process.env.R2_IMAGES_BUCKET || 'images';
+export const R2_IMAGES_PUBLIC_URL = (process.env.R2_IMAGES_PUBLIC_URL || '').replace(/\/$/, '');
+
+// 3. Bucket for Model Portraits & Face References
+export const R2_MODELS_BUCKET = process.env.R2_MODELS_BUCKET || 'models';
+export const R2_MODELS_PUBLIC_URL = (process.env.R2_MODELS_PUBLIC_URL || '').replace(/\/$/, '');
 
 const s3Client = new S3Client({
   region: 'auto',
@@ -21,8 +31,7 @@ export const isStorageConfigured = (): boolean => {
     R2_ACCOUNT_ID &&
     R2_ACCESS_KEY_ID &&
     R2_SECRET_ACCESS_KEY &&
-    R2_BUCKET_NAME &&
-    R2_PUBLIC_URL
+    (R2_GENERATED_PUBLIC_URL || R2_IMAGES_PUBLIC_URL || R2_MODELS_PUBLIC_URL)
   );
 };
 
@@ -83,7 +92,7 @@ export async function uploadToStorage(
     const { buffer, mime, ext } = await getImageBuffer(fileInput);
     const fileName = options.publicId ? `${options.publicId}.${ext}` : `${Date.now()}.${ext}`;
     const objectKey = options.folder ? `${options.folder}/${fileName}` : fileName;
-    const targetBucket = options.bucket || R2_BUCKET_NAME;
+    const targetBucket = options.bucket || R2_GENERATED_BUCKET;
 
     await s3Client.send(
       new PutObjectCommand({
@@ -95,13 +104,13 @@ export async function uploadToStorage(
     );
 
     let fileUrl: string;
-    if (targetBucket === 'images') {
-      const publicImagesBase = process.env.R2_IMAGES_PUBLIC_URL?.replace(/\/$/, '');
-      fileUrl = publicImagesBase ? `${publicImagesBase}/${objectKey}` : `/api/images/${objectKey}`;
+    if (targetBucket === R2_IMAGES_BUCKET) {
+      fileUrl = R2_IMAGES_PUBLIC_URL ? `${R2_IMAGES_PUBLIC_URL}/${objectKey}` : `/api/images/${objectKey}`;
+    } else if (targetBucket === R2_MODELS_BUCKET) {
+      fileUrl = R2_MODELS_PUBLIC_URL ? `${R2_MODELS_PUBLIC_URL}/${objectKey}` : `/api/images/${objectKey}`;
     } else {
       // Default generatedimages bucket public dev URL
-      const baseUrl = R2_PUBLIC_URL.replace(/\/$/, '');
-      fileUrl = `${baseUrl}/${objectKey}`;
+      fileUrl = R2_GENERATED_PUBLIC_URL ? `${R2_GENERATED_PUBLIC_URL}/${objectKey}` : `/api/images/${objectKey}`;
     }
 
     return {
@@ -125,7 +134,7 @@ export async function uploadAdminTemplateAsset(
   assetName: string
 ): Promise<string> {
   const res = await uploadToStorage(fileInput, {
-    bucket: process.env.R2_IMAGES_BUCKET || 'images',
+    bucket: R2_IMAGES_BUCKET,
     folder: `templates/${templateSlug}`,
     publicId: assetName.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
   });
@@ -134,13 +143,14 @@ export async function uploadAdminTemplateAsset(
 
 /**
  * Helper: Upload Admin Model Portrait
- * Stored under: coutureai/admin/models/{modelName}
+ * Stored under Cloudflare R2 bucket: models
  */
 export async function uploadAdminModelAsset(
   fileInput: string,
   modelName: string
 ): Promise<string> {
   const res = await uploadToStorage(fileInput, {
+    bucket: R2_MODELS_BUCKET,
     folder: 'coutureai/admin/models',
     publicId: modelName.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
   });
@@ -149,7 +159,7 @@ export async function uploadAdminModelAsset(
 
 /**
  * Helper: Upload Customer Swatch Image (Partitioned by User ID)
- * Stored under: coutureai/users/{userId}/swatches/{orderId}
+ * Stored under Cloudflare R2 bucket: generatedimages
  */
 export async function uploadCustomerSwatchAsset(
   fileInput: string,
@@ -158,6 +168,7 @@ export async function uploadCustomerSwatchAsset(
   slotId: string
 ): Promise<string> {
   const res = await uploadToStorage(fileInput, {
+    bucket: R2_GENERATED_BUCKET,
     folder: `coutureai/users/${userId}/swatches/${orderId}`,
     publicId: `slot_${slotId}_${Date.now()}`,
   });
@@ -166,7 +177,7 @@ export async function uploadCustomerSwatchAsset(
 
 /**
  * Helper: Upload Generated Photoshoot Image (Partitioned by User ID)
- * Stored under: coutureai/users/{userId}/generated/{orderId}
+ * Stored under Cloudflare R2 bucket: generatedimages
  */
 export async function uploadGeneratedAsset(
   fileInput: string,
@@ -175,6 +186,7 @@ export async function uploadGeneratedAsset(
   poseId: string
 ): Promise<string> {
   const res = await uploadToStorage(fileInput, {
+    bucket: R2_GENERATED_BUCKET,
     folder: `coutureai/users/${userId}/generated/${orderId}`,
     publicId: `pose_${poseId}_${Date.now()}`,
   });

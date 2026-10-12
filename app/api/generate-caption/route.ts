@@ -1,11 +1,24 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
 import { StockItemData } from '@/app/types/stock';
+import { auth } from '@/lib/auth';
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const ip = getClientIp(req);
+    const rateCheck = checkRateLimit('api:caption', ip, { windowMs: 60 * 1000, max: 30 });
+    if (!rateCheck.allowed) {
+      return NextResponse.json({ error: 'Too many caption requests. Please slow down.' }, { status: 429 });
+    }
+
     if (!process.env.GEMINI_API_KEY) {
       return NextResponse.json({ error: 'GEMINI_API_KEY is not configured' }, { status: 500 });
     }
@@ -49,6 +62,7 @@ Return exactly valid JSON.
 
   } catch (error: any) {
     console.error('AI Caption Generation Error:', error);
-    return NextResponse.json({ error: error.message || 'Failed to generate captions' }, { status: 500 });
+    const errorMsg = process.env.NODE_ENV === 'production' ? 'Failed to generate captions' : (error?.message || 'Failed to generate captions');
+    return NextResponse.json({ error: errorMsg }, { status: 500 });
   }
 }

@@ -4,6 +4,7 @@ import fs from 'fs';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import { uploadGeneratedAsset, uploadToStorage, isStorageConfigured } from '@/lib/storage';
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -34,6 +35,15 @@ function resolveImageToDataUrl(imgStr: string): string | null {
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = getClientIp(req);
+    const rateCheck = checkRateLimit('api:generate-flux', ip, { windowMs: 60 * 1000, max: 20 });
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { error: 'Too many generation requests. Please wait a moment.' },
+        { status: 429 }
+      );
+    }
+
     const session = await auth();
     const body = await req.json();
 

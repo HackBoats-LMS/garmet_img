@@ -5,9 +5,9 @@ const path = require('path');
 
 // Configure Cloudinary
 cloudinary.config({
-  cloud_name: 'fe5qt9si',
-  api_key: '184317583519463',
-  api_secret: 'y5s3gB_8E54Q8oVpMksbY9_4u6M',
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || '',
+  api_key: process.env.CLOUDINARY_API_KEY || '',
+  api_secret: process.env.CLOUDINARY_API_SECRET || '',
   secure: true,
 });
 

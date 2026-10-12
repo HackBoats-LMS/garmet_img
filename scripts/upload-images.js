@@ -5,16 +5,11 @@ const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
 
-const R2_ACCOUNT_ID = '5121be04e91525bb3278414becc5d48a';
-const R2_ACCESS_KEY_ID = 'fa7179cc28728cc0f5c77bd28bc5d8db';
-const R2_SECRET_ACCESS_KEY = '7c0261cf9524378259cfa1da5c573163245d57c8d785511a79b05d3a82ce3182';
-const R2_BUCKET_NAME = 'images'; 
-// Assuming the user has configured this bucket with a public URL or similar. 
-// We will use a generic R2 dev URL structure if we don't have a specific one, or the user can update it.
-// Wait, the previous one used https://pub-865f883eab884bad83e2c0b7e83952dc.r2.dev for models. 
-// For images, we can try uploading and then assume a similar public URL, or we might need to ask the user if there's a specific domain.
-// But we'll just upload for now and construct a URL that uses the R2 bucket public URL if they have one, or just assume the same host works.
-const R2_PUBLIC_URL = 'https://pub-865f883eab884bad83e2c0b7e83952dc.r2.dev'; 
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || '';
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || '';
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || '';
+const R2_BUCKET_NAME = process.env.R2_IMAGES_BUCKET || 'images'; 
+const R2_PUBLIC_URL = (process.env.R2_IMAGES_PUBLIC_URL || process.env.R2_PUBLIC_URL || '').replace(/\/$/, ''); 
 
 const s3Client = new S3Client({
   region: 'auto',
