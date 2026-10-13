@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
       seed = 42,
       steps = 30,
       aspectRatio = '3:4',
+      productId,
     } = body;
 
     const userId = reqUserId || (session?.user as any)?.id || 'anonymous_user';
@@ -599,6 +600,7 @@ export async function POST(req: NextRequest) {
             uploadedImages,
             selectedModelId,
             selectedOptions,
+            productId: productId || null,
           });
 
           return NextResponse.json({
@@ -682,6 +684,7 @@ async function saveGeneratedOrder(params: {
   uploadedImages?: any;
   selectedModelId?: string;
   selectedOptions?: any;
+  productId?: string | null;
 }) {
   const {
     userId,
@@ -696,6 +699,7 @@ async function saveGeneratedOrder(params: {
     uploadedImages,
     selectedModelId,
     selectedOptions,
+    productId,
   } = params;
 
   if (userId && userId !== 'anonymous_user' && templateId) {
@@ -728,23 +732,54 @@ async function saveGeneratedOrder(params: {
         });
         console.log(`[DB AutoSave] Updated CustomerOrder ${activeOrderId} with pose ${currentPoseKey}`);
         
-        // Auto-link to Product inventory
-        if (stockCode) {
-          const product = await prisma.product.findFirst({
-            where: { OR: [{ stockCode }, { code1: stockCode }] },
-          });
-          if (product) {
-            const firstImage = Object.values(updatedGenImages as Record<string, {imageUrl: string}>)[0];
-            await prisma.product.update({
-              where: { id: product.id },
-              data: {
-                generatedImages: updatedGenImages as any,
-                linkedOrderId: activeOrderId,
-                coverImageUrl: firstImage?.imageUrl || product.coverImageUrl,
-              },
-            });
-            console.log(`[DB AutoSave] Synced CustomerOrder ${activeOrderId} to Product ${product.id}`);
+        // Auto-link to Product inventory: strictly match by productId if provided, or stockCode if not
+        const targetProduct = productId
+          ? await prisma.product.findUnique({ where: { id: productId } })
+          : (stockCode ? await prisma.product.findFirst({ where: { OR: [{ stockCode }, { code1: stockCode }] } }) : null);
+
+        if (targetProduct) {
+          const existingProductGen = (targetProduct.generatedImages as Record<string, any>) || {};
+          const currentCount = Object.keys(existingProductGen).length;
+
+          // Assign sequential order indices to newly generated images to guarantee order
+          const orderedNewImages: Record<string, any> = {};
+          let newIdx = 0;
+          for (const [k, v] of Object.entries(updatedGenImages)) {
+            if (!existingProductGen[k]) {
+              orderedNewImages[k] = { ...(v as any), order: currentCount + newIdx };
+              newIdx++;
+            } else {
+              orderedNewImages[k] = { ...(existingProductGen[k] as any), ...(v as any) };
+            }
           }
+
+          const mergedGen = {
+            ...existingProductGen,
+            ...orderedNewImages,
+          };
+
+          const sortedList = Object.entries(mergedGen)
+            .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
+            .map(([, img]: any) => img);
+          const firstImage = sortedList[0];
+
+          // Auto-cover logic: keep current cover ONLY if it is a valid non-tempfile URL already in catalogue
+          const currentCover = targetProduct.coverImageUrl;
+          const hasValidCoverInCatalogue = currentCover &&
+            !currentCover.includes('tempfile') &&
+            Object.values(existingProductGen).some((img: any) => img.imageUrl === currentCover);
+
+          const finalCover = hasValidCoverInCatalogue ? currentCover : (firstImage?.imageUrl || currentCover);
+
+          await prisma.product.update({
+            where: { id: targetProduct.id },
+            data: {
+              generatedImages: mergedGen as any,
+              linkedOrderId: activeOrderId,
+              coverImageUrl: finalCover,
+            },
+          });
+          console.log(`[DB AutoSave] Synced CustomerOrder ${activeOrderId} to Product ${targetProduct.id}`);
         }
       } else {
         await prisma.customerOrder.create({
@@ -764,23 +799,52 @@ async function saveGeneratedOrder(params: {
         });
         console.log(`[DB AutoSave] Created CustomerOrder ${activeOrderId} with pose ${currentPoseKey}`);
         
-        // Auto-link to Product inventory
-        if (stockCode) {
-          const product = await prisma.product.findFirst({
-            where: { OR: [{ stockCode }, { code1: stockCode }] },
-          });
-          if (product) {
-            const firstImage = Object.values(updatedGenImages as Record<string, {imageUrl: string}>)[0];
-            await prisma.product.update({
-              where: { id: product.id },
-              data: {
-                generatedImages: updatedGenImages as any,
-                linkedOrderId: activeOrderId,
-                coverImageUrl: firstImage?.imageUrl || product.coverImageUrl,
-              },
-            });
-            console.log(`[DB AutoSave] Synced CustomerOrder ${activeOrderId} to Product ${product.id}`);
+        // Auto-link to Product inventory: strictly match by productId if provided, or stockCode if not
+        const targetProduct = productId
+          ? await prisma.product.findUnique({ where: { id: productId } })
+          : (stockCode ? await prisma.product.findFirst({ where: { OR: [{ stockCode }, { code1: stockCode }] } }) : null);
+
+        if (targetProduct) {
+          const existingProductGen = (targetProduct.generatedImages as Record<string, any>) || {};
+          const currentCount = Object.keys(existingProductGen).length;
+
+          const orderedNewImages: Record<string, any> = {};
+          let newIdx = 0;
+          for (const [k, v] of Object.entries(updatedGenImages)) {
+            if (!existingProductGen[k]) {
+              orderedNewImages[k] = { ...(v as any), order: currentCount + newIdx };
+              newIdx++;
+            } else {
+              orderedNewImages[k] = { ...(existingProductGen[k] as any), ...(v as any) };
+            }
           }
+
+          const mergedGen = {
+            ...existingProductGen,
+            ...orderedNewImages,
+          };
+
+          const sortedList = Object.entries(mergedGen)
+            .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
+            .map(([, img]: any) => img);
+          const firstImage = sortedList[0];
+
+          const currentCover = targetProduct.coverImageUrl;
+          const hasValidCoverInCatalogue = currentCover &&
+            !currentCover.includes('tempfile') &&
+            Object.values(existingProductGen).some((img: any) => img.imageUrl === currentCover);
+
+          const finalCover = hasValidCoverInCatalogue ? currentCover : (firstImage?.imageUrl || currentCover);
+
+          await prisma.product.update({
+            where: { id: targetProduct.id },
+            data: {
+              generatedImages: mergedGen as any,
+              linkedOrderId: activeOrderId,
+              coverImageUrl: finalCover,
+            },
+          });
+          console.log(`[DB AutoSave] Synced CustomerOrder ${activeOrderId} to Product ${targetProduct.id}`);
         }
       }
     } catch (dbErr) {

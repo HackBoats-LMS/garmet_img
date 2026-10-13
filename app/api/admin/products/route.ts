@@ -58,14 +58,28 @@ export async function GET(req: NextRequest) {
       prisma.product.count({ where }),
     ]);
 
-    const formattedProducts = products.map((p) => ({
-      ...p,
-      title: p.productName,
-      friendlyCode: p.code1,
-      price: p.retailPrice ?? p.unitPrice,
-      mrp: p.retailPrice,
-      wholesalePrice: p.dealerPrice,
-    }));
+    const formattedProducts = products.map((p) => {
+      const genObj = (p.generatedImages as Record<string, any>) || {};
+      const sortedGenList = Object.entries(genObj)
+        .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
+        .map(([, img]: any) => img.imageUrl)
+        .filter(Boolean);
+
+      let cover = p.coverImageUrl;
+      if ((!cover || cover.includes('tempfile')) && sortedGenList.length > 0) {
+        cover = sortedGenList[0];
+      }
+
+      return {
+        ...p,
+        title: p.productName,
+        friendlyCode: p.code1,
+        price: p.retailPrice ?? p.unitPrice,
+        mrp: p.retailPrice,
+        wholesalePrice: p.dealerPrice,
+        coverImageUrl: cover,
+      };
+    });
 
     return NextResponse.json({ products: formattedProducts, total, page, limit });
   } catch (error: any) {
@@ -87,7 +101,7 @@ export async function POST(req: NextRequest) {
       stockCode, friendlyCode, title, description,
       color, tags, categoryId, subCategoryId, clothType,
       price, mrp, wholesalePrice, quantity, status,
-      referenceImages, coverImageUrl,
+      referenceImages, generatedImages, coverImageUrl,
       captions, websiteCopy, websiteProductId,
       // XLSX-mapped fields
       designNumber, size, location, embroideryType, cutStyle,
@@ -126,6 +140,7 @@ export async function POST(req: NextRequest) {
         quantity: quantity ? parseInt(quantity) : 0,
         status: status || 'ACTIVE',
         referenceImages: referenceImages || null,
+        generatedImages: generatedImages || null,
         coverImageUrl: coverImageUrl || null,
         captions: captions || null,
         websiteCopy: websiteCopy || null,

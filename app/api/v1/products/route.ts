@@ -73,6 +73,8 @@ export async function GET(req: NextRequest) {
           soldQty: true,
           status: true,
           coverImageUrl: true,
+          generatedImages: true,
+          referenceImages: true,
           tags: true,
           category: { select: { name: true, slug: true } },
           subCategory: { select: { name: true, slug: true } },
@@ -87,8 +89,40 @@ export async function GET(req: NextRequest) {
       prisma.product.count({ where }),
     ]);
 
+    const formattedProducts = products.map((p) => {
+      const genObj = (p.generatedImages as Record<string, any>) || {};
+      const sortedGenEntries = Object.entries(genObj)
+        .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0));
+      
+      const sortedGenList = sortedGenEntries
+        .map(([, img]: any) => img.imageUrl)
+        .filter(Boolean);
+
+      // Auto-fallback cover image if missing or tempfile
+      let cover = p.coverImageUrl;
+      if ((!cover || cover.includes('tempfile')) && sortedGenList.length > 0) {
+        cover = sortedGenList[0];
+      }
+
+      // Ordered gallery images array: cover first, then remaining photos in exact order
+      const images: string[] = [];
+      if (cover) images.push(cover);
+      for (const imgUrl of sortedGenList) {
+        if (!images.includes(imgUrl)) {
+          images.push(imgUrl);
+        }
+      }
+
+      return {
+        ...p,
+        coverImageUrl: cover,
+        images,
+        generatedImages: Object.fromEntries(sortedGenEntries),
+      };
+    });
+
     return NextResponse.json({
-      data: products,
+      data: formattedProducts,
       total,
       page,
       limit,
