@@ -3,8 +3,9 @@
 import React, { useRef } from 'react';
 import { ReferenceSlot, UploadedReference } from '../types';
 import { FABRIC_PRESETS, COLOR_PALETTES } from '../utils/constants';
-import { Upload, X, Sparkles, Sliders, Palette, Layers, HelpCircle, Check, Cloud } from 'lucide-react';
+import { Upload, X, Sparkles, Sliders, Palette, Layers, HelpCircle, Check, Cloud, Loader2 } from 'lucide-react';
 import { useGooglePicker } from '../hooks/useGooglePicker';
+import { useGooglePhotosPicker, PickedPhoto } from '../hooks/useGooglePhotosPicker';
 import { compressImageOnClient } from '@/lib/client-compress';
 
 interface ReferenceSlotCardProps {
@@ -41,6 +42,41 @@ export const ReferenceSlotCard: React.FC<ReferenceSlotCardProps> = ({
   };
 
   const { openPicker } = useGooglePicker(onFileSelectFromDrive);
+
+  const onFileSelectFromPhotos = (photos: PickedPhoto[]) => {
+    if (!photos || photos.length === 0) return;
+    const p = photos[0];
+    try {
+      const arr = p.base64.split(',');
+      const mime = p.mimeType || arr[0]?.match(/:(.*?);/)?.[1] || 'image/jpeg';
+      const bstr = atob(arr[1] || arr[0]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      const file = new File([u8arr], p.filename || 'google_photo.jpg', { type: mime });
+      onChange(slot.id, {
+        ...currentRef,
+        file,
+        previewUrl: p.base64,
+      });
+    } catch (err) {
+      console.error('Failed to parse photo from Google Photos:', err);
+    }
+  };
+
+  const {
+    openPhotosPicker,
+    openAuthorizedPhotosWindow,
+    needsClickToOpen: photosNeedsClickToOpen,
+    isPicking: isPickingPhotos,
+    pickingStatus: photosPickingStatus,
+    cancelPicking: cancelPhotosPicking,
+  } = useGooglePhotosPicker({
+    maxItems: 1,
+    onPhotosSelected: onFileSelectFromPhotos,
+  });
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -174,14 +210,69 @@ export const ReferenceSlotCard: React.FC<ReferenceSlotCardProps> = ({
                   PNG, JPG, WebP up to 10MB
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={openPicker}
-                className="w-full flex items-center justify-center gap-2 py-2 px-3 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-700/50 transition-colors shadow-sm"
-              >
-                <Cloud className="w-4 h-4 text-blue-500" />
-                Select from Google Drive
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={openPicker}
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-700/50 transition-colors shadow-sm whitespace-nowrap"
+                  title="Select from Google Drive"
+                >
+                  <svg viewBox="0 0 48 48" className="w-3.5 h-3.5 shrink-0">
+                    <path fill="#FFC107" d="M17 7.5L31 7.5 45 31.5 31 31.5z"></path>
+                    <path fill="#1976D2" d="M3.1 31.5L10.1 43.5 38.1 43.5 31.1 31.5z"></path>
+                    <path fill="#4CAF50" d="M17 7.5L3.1 31.5 10.1 43.5 24 19.5z"></path>
+                  </svg>
+                  <span>Drive</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={openPhotosPicker}
+                  disabled={isPickingPhotos}
+                  className="flex items-center justify-center gap-1.5 py-2 px-2 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-700/50 transition-colors shadow-sm whitespace-nowrap disabled:opacity-50"
+                  title="Select from Google Photos"
+                >
+                  {isPickingPhotos ? (
+                    <span className="flex items-center gap-1">
+                      {photosNeedsClickToOpen ? (
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openAuthorizedPhotosWindow();
+                          }}
+                          className="bg-amber-600 text-white px-1.5 py-0.5 rounded text-[10px] font-bold shadow-xs cursor-pointer hover:bg-amber-700"
+                        >
+                          👉 Open
+                        </span>
+                      ) : (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin shrink-0 text-amber-500" />
+                          <span className="text-[10px] truncate max-w-[65px]">{photosPickingStatus || 'Loading...'}</span>
+                        </>
+                      )}
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          cancelPhotosPicking();
+                        }}
+                        className="text-slate-400 hover:text-rose-600 font-bold px-0.5 cursor-pointer"
+                        title="Cancel"
+                      >
+                        ✕
+                      </span>
+                    </span>
+                  ) : (
+                    <>
+                      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0">
+                        <path fill="#EA4335" d="M12 2a5 5 0 0 0-5 5v5h5a5 5 0 0 0 0-10z" />
+                        <path fill="#4285F4" d="M2 12a5 5 0 0 0 5 5h5v-5a5 5 0 0 0-10 0z" />
+                        <path fill="#FBBC04" d="M22 12a5 5 0 0 0-5-5h-5v5a5 5 0 0 0 10 0z" />
+                        <path fill="#34A853" d="M12 22a5 5 0 0 0 5-5v-5h-5a5 5 0 0 0 0 10z" />
+                      </svg>
+                      <span>Photos</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           )}
 

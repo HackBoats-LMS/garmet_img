@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import useDrivePicker from 'react-google-drive-picker';
@@ -9,12 +9,14 @@ import {
   Plus, Minus, X, Info, RefreshCw, AlertCircle, CheckCircle2,
   ChevronDown, ChevronUp, Trash2, Settings2, MessageSquare,
   ShoppingBag, Share2, ThumbsUp, Globe, Smartphone, Upload, Loader2,
-  Copy, Check
+  Copy, Check, Star, Eye, Maximize2, ChevronLeft, ChevronRight, Download, ExternalLink, ZoomIn
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
 import { Input } from '@/app/components/ui/Input';
 import { Textarea } from '@/app/components/ui/Input';
+import { useGooglePhotosPicker } from '@/app/hooks/useGooglePhotosPicker';
+import { CollageCreator, CollageInputImage } from '@/app/components/CollageCreator';
 
 // ─── CONSTANTS ───
 
@@ -229,8 +231,10 @@ export function ProductForm({ productId }: Props) {
   const [showAddCol, setShowAddCol] = useState(false);
 
   // Generated images
-  const [generatedImages, setGeneratedImages] = useState<Record<string, { imageUrl: string; prompt?: string }> | null>(null);
+  const [generatedImages, setGeneratedImages] = useState<Record<string, { imageUrl: string; prompt?: string; order?: number }> | null>(null);
   const [linkedOrderId, setLinkedOrderId] = useState<string | null>(null);
+  const [showCollageModal, setShowCollageModal] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   // AI Generation State
   const [generatingName, setGeneratingName] = useState(false);
@@ -246,6 +250,42 @@ export function ProductForm({ productId }: Props) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const [form, setForm] = useState<ProductFormData>(emptyForm());
+
+  const cataloguePhotosList = useMemo(() => {
+    if (!generatedImages) return [];
+    return Object.entries(generatedImages)
+      .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
+      .map(([poseId, img], idx) => ({
+        poseId,
+        imageUrl: img.imageUrl,
+        order: idx,
+        isCover: form.coverImageUrl === img.imageUrl,
+      }));
+  }, [generatedImages, form.coverImageUrl]);
+
+  const collageImagesList: CollageInputImage[] = useMemo(() => {
+    return cataloguePhotosList.map(item => ({
+      id: item.poseId,
+      url: item.imageUrl,
+      poseName: generatedImages?.[item.poseId]?.prompt || item.poseId,
+    }));
+  }, [cataloguePhotosList, generatedImages]);
+
+  // Keyboard navigation for full-screen photo viewer lightbox
+  useEffect(() => {
+    if (lightboxIndex === null) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setLightboxIndex(null);
+      } else if (e.key === 'ArrowLeft') {
+        setLightboxIndex(prev => (prev !== null && prev > 0 ? prev - 1 : prev));
+      } else if (e.key === 'ArrowRight') {
+        setLightboxIndex(prev => (prev !== null && prev < cataloguePhotosList.length - 1 ? prev + 1 : prev));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [lightboxIndex, cataloguePhotosList.length]);
 
   // Load categories
   useEffect(() => {
@@ -272,6 +312,34 @@ export function ProductForm({ productId }: Props) {
             }
           }
 
+          // Detect catalogue images and auto-default cover image
+          const genImgs = (p.generatedImages as Record<string, any>) || null;
+          let loadedCover = p.coverImageUrl || '';
+
+          if (genImgs && typeof genImgs === 'object' && Object.keys(genImgs).length > 0) {
+            const sortedEntries = Object.entries(genImgs).sort(([, a]: any, [, b]: any) => {
+              if (typeof a.order === 'number' && typeof b.order === 'number') {
+                return a.order - b.order;
+              }
+              return 0;
+            });
+            const firstImg = sortedEntries[0]?.[1]?.imageUrl;
+            const coverIsInCatalogue = sortedEntries.some(([, img]: any) => img.imageUrl === loadedCover);
+
+            // Auto-default: If cover image is empty, tempfile URL, or not in catalogue photos
+            if ((!loadedCover || loadedCover.includes('tempfile') || !coverIsInCatalogue) && firstImg) {
+              loadedCover = firstImg;
+              // Auto-persist fix to DB if stale tempfile or missing
+              if (productId && (p.coverImageUrl?.includes('tempfile') || !p.coverImageUrl)) {
+                fetch(`/api/admin/products/${productId}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ coverImageUrl: firstImg }),
+                }).catch(err => console.warn('Auto-default cover image save failed:', err));
+              }
+            }
+          }
+
           setForm({
             stockCode: p.stockCode || '',
             friendlyCode: code1,
@@ -287,7 +355,7 @@ export function ProductForm({ productId }: Props) {
             wholesalePrice: p.dealerPrice != null ? String(p.dealerPrice) : (p.wholesalePrice != null ? String(p.wholesalePrice) : ''),
             quantity: String(p.quantity ?? 0),
             status: p.status || 'ACTIVE',
-            coverImageUrl: p.coverImageUrl || '',
+            coverImageUrl: loadedCover,
             websiteCopy: p.websiteCopy || '',
             websiteProductId: p.websiteProductId || '',
             designNumber: p.productCode || p.designNumber || '',
@@ -305,7 +373,7 @@ export function ProductForm({ productId }: Props) {
             shopifyTitle: p.shopifyTitle || '',
             whatsappCatalogueTitle: p.whatsappCatalogueTitle || '',
           });
-          setGeneratedImages(p.generatedImages || null);
+          setGeneratedImages(genImgs);
           setLinkedOrderId(p.linkedOrderId || null);
           // Load custom fields
           if (p.customFields && typeof p.customFields === 'object') {
@@ -373,7 +441,12 @@ export function ProductForm({ productId }: Props) {
 
   const moveImage = (poseId: string, direction: 'up' | 'down') => {
     if (!generatedImages) return;
-    const entries = Object.entries(generatedImages);
+    const entries = Object.entries(generatedImages).sort(([, a]: any, [, b]: any) => {
+      if (typeof a.order === 'number' && typeof b.order === 'number') {
+        return a.order - b.order;
+      }
+      return 0;
+    });
     const index = entries.findIndex(([id]) => id === poseId);
     if (index < 0) return;
     if (direction === 'up' && index > 0) {
@@ -387,15 +460,61 @@ export function ProductForm({ productId }: Props) {
     } else {
       return;
     }
-    const newObj = Object.fromEntries(entries);
+    const updatedEntries = entries.map(([id, val]: any, idx) => [
+      id,
+      { ...val, order: idx }
+    ]);
+    const newObj = Object.fromEntries(updatedEntries);
     setGeneratedImages(newObj);
+    if (productId) {
+      fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ generatedImages: newObj }),
+      }).catch(err => console.warn('Auto-save reorder failed:', err));
+    }
   };
 
   const deleteImage = (poseId: string) => {
     if (!generatedImages) return;
+    const deletedUrl = generatedImages[poseId]?.imageUrl;
     const newObj = { ...generatedImages };
     delete newObj[poseId];
-    setGeneratedImages(newObj);
+    
+    // Re-index remaining images
+    const entries = Object.entries(newObj).sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0));
+    const reindexed = Object.fromEntries(entries.map(([id, val]: any, idx) => [id, { ...val, order: idx }]));
+    setGeneratedImages(reindexed);
+
+    // If deleted image was the cover image, automatically switch to first available photo
+    let updatedCover = form.coverImageUrl;
+    if (form.coverImageUrl === deletedUrl) {
+      updatedCover = entries[0]?.[1]?.imageUrl || '';
+      set('coverImageUrl', updatedCover);
+    }
+
+    if (productId) {
+      const patchData: any = { generatedImages: reindexed };
+      if (form.coverImageUrl === deletedUrl) {
+        patchData.coverImageUrl = updatedCover;
+      }
+      fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patchData),
+      }).catch(err => console.warn('Auto-save delete failed:', err));
+    }
+  };
+
+  const setCoverImage = (imageUrl: string) => {
+    set('coverImageUrl', imageUrl);
+    if (productId) {
+      fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ coverImageUrl: imageUrl }),
+      }).catch(err => console.warn('Auto-save cover image failed:', err));
+    }
   };
 
   // ─── AI Generation Handlers ───
@@ -612,7 +731,7 @@ export function ProductForm({ productId }: Props) {
     const total = files.length;
     setCatalogueUploadStatus(`0/${total}`);
 
-    const newEntries: Record<string, { imageUrl: string; prompt: string }> = {};
+    const newEntries: Record<string, { imageUrl: string; prompt: string; order?: number }> = {};
 
     try {
       for (let i = 0; i < total; i++) {
@@ -633,9 +752,11 @@ export function ProductForm({ productId }: Props) {
           const data = await res.json();
           if (data.url) {
             const newPoseId = `uploaded_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+            const currentTotal = (generatedImages ? Object.keys(generatedImages).length : 0) + Object.keys(newEntries).length;
             newEntries[newPoseId] = {
               imageUrl: data.url,
               prompt: file.name ? file.name.replace(/\.[^/.]+$/, '') : 'Manually uploaded',
+              order: currentTotal,
             };
           }
         } catch (fileErr) {
@@ -644,10 +765,28 @@ export function ProductForm({ productId }: Props) {
       }
 
       if (Object.keys(newEntries).length > 0) {
-        setGeneratedImages(prev => ({
-          ...(prev || {}),
-          ...newEntries,
-        }));
+        const firstUploadedUrl = Object.values(newEntries)[0]?.imageUrl;
+        const needsCoverUpdate = !form.coverImageUrl || form.coverImageUrl.includes('tempfile');
+
+        setGeneratedImages(prev => {
+          const updated = {
+            ...(prev || {}),
+            ...newEntries,
+          };
+          const patchBody: any = { generatedImages: updated };
+          if (needsCoverUpdate && firstUploadedUrl) {
+            patchBody.coverImageUrl = firstUploadedUrl;
+            set('coverImageUrl', firstUploadedUrl);
+          }
+          if (productId) {
+            fetch(`/api/admin/products/${productId}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(patchBody),
+            }).catch(err => console.warn('Auto-save catalogue upload failed:', err));
+          }
+          return updated;
+        });
       }
     } catch (err) {
       console.error('Failed to upload catalogue photos', err);
@@ -717,6 +856,42 @@ export function ProductForm({ productId }: Props) {
     });
   };
 
+  const {
+    openPhotosPicker,
+    openAuthorizedPhotosWindow,
+    needsClickToOpen: photosNeedsClickToOpen,
+    isPicking: isPickingPhotos,
+    pickingStatus: photosPickingStatus,
+    cancelPicking: cancelPhotosPicking,
+  } = useGooglePhotosPicker({
+    onPhotosSelected: async (photos) => {
+      if (!photos || photos.length === 0) return;
+      const files: File[] = [];
+      for (let i = 0; i < photos.length; i++) {
+        const p = photos[i];
+        try {
+          const arr = p.base64.split(',');
+          const mime = p.mimeType || arr[0]?.match(/:(.*?);/)?.[1] || 'image/jpeg';
+          const bstr = atob(arr[1] || arr[0]);
+          let n = bstr.length;
+          const u8arr = new Uint8Array(n);
+          while (n--) {
+            u8arr[n] = bstr.charCodeAt(n);
+          }
+          files.push(new File([u8arr], p.filename || `google_photo_${i + 1}.jpg`, { type: mime }));
+        } catch (convErr) {
+          console.warn('Failed to convert photo base64 to file', convErr);
+        }
+      }
+      if (files.length > 0) {
+        await uploadCatalogueFiles(files);
+      }
+    },
+    onError: (err) => {
+      alert(err);
+    },
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true); setError(null);
@@ -781,7 +956,8 @@ export function ProductForm({ productId }: Props) {
   );
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-8 animate-fade-in">
+    <>
+      <form onSubmit={handleSubmit} className="space-y-8 animate-fade-in">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -1942,7 +2118,23 @@ export function ProductForm({ productId }: Props) {
 
           {/* Cover Image */}
           <Card className="p-6 space-y-3">
-            <h2 className="font-display text-base font-bold text-charcoal">Thumbnail</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="font-display text-base font-bold text-charcoal">Thumbnail</h2>
+              {generatedImages && Object.keys(generatedImages).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sortedList = Object.entries(generatedImages).sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0));
+                    const firstUrl = sortedList[0]?.[1]?.imageUrl;
+                    if (firstUrl) setCoverImage(firstUrl);
+                  }}
+                  className="text-[10px] px-2 py-1 rounded bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200 font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Make photo #1 the cover thumbnail"
+                >
+                  <Star className="w-3 h-3 text-amber-500 fill-current" /> Use Photo #1 as Cover
+                </button>
+              )}
+            </div>
             
             <div className="flex gap-3 items-end">
               <div className="flex-1">
@@ -1969,8 +2161,11 @@ export function ProductForm({ productId }: Props) {
             </div>
 
             {form.coverImageUrl && (
-              <div className="aspect-square rounded-xl overflow-hidden border border-cream-border bg-cream-light">
+              <div className="aspect-square rounded-xl overflow-hidden border border-cream-border bg-cream-light relative group">
                 <img src={form.coverImageUrl} alt="Cover" className="w-full h-full object-cover" />
+                <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-amber-400 text-amber-950 text-[10px] font-bold shadow-sm flex items-center gap-1">
+                  <Star className="w-3 h-3 fill-current" /> Cover Image
+                </div>
               </div>
             )}
           </Card>
@@ -2034,6 +2229,67 @@ export function ProductForm({ productId }: Props) {
                       </>
                     )}
                   </button>
+                  {isPickingPhotos ? (
+                    <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 text-[10px] text-amber-900 font-semibold shadow-xs">
+                      {photosNeedsClickToOpen ? (
+                        <button
+                          type="button"
+                          onClick={openAuthorizedPhotosWindow}
+                          className="bg-accent text-white px-2 py-0.5 rounded font-bold hover:bg-accent/90 shadow-xs"
+                        >
+                          👉 Open Photos Window
+                        </button>
+                      ) : (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin shrink-0 text-amber-600" />
+                          <span className="truncate max-w-[160px]">{photosPickingStatus || 'Photos active...'}</span>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={cancelPhotosPicking}
+                        className="ml-1 text-slate-400 hover:text-rose-600 font-bold px-1 rounded cursor-pointer"
+                        title="Cancel selection"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={openPhotosPicker}
+                      disabled={uploadingCatalogue}
+                      className="text-[10px] px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-charcoal font-bold hover:bg-cream-light transition-all flex items-center gap-1.5 disabled:opacity-50 whitespace-nowrap"
+                      title="Select photos directly from Google Photos"
+                    >
+                      <svg viewBox="0 0 24 24" className="w-3 h-3 shrink-0">
+                        <path fill="#EA4335" d="M12 2a5 5 0 0 0-5 5v5h5a5 5 0 0 0 0-10z" />
+                        <path fill="#4285F4" d="M2 12a5 5 0 0 0 5 5h5v-5a5 5 0 0 0-10 0z" />
+                        <path fill="#FBBC04" d="M22 12a5 5 0 0 0-5-5h-5v5a5 5 0 0 0 10 0z" />
+                        <path fill="#34A853" d="M12 22a5 5 0 0 0 5-5v-5h-5a5 5 0 0 0 0 10z" />
+                      </svg>
+                      <span>Photos</span>
+                    </button>
+                  )}
+                  {generatedImages && Object.keys(generatedImages).length >= 2 ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowCollageModal(true)}
+                      className="text-[10px] px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 via-rose-500 to-indigo-600 text-white font-bold hover:opacity-90 transition-all flex items-center gap-1 shadow-xs cursor-pointer whitespace-nowrap"
+                      title="Create wholesale catalogue sheet or social collage"
+                    >
+                      <Sparkles className="w-3 h-3 shrink-0" /> Collage
+                    </button>
+                  ) : generatedImages && Object.keys(generatedImages).length === 1 ? (
+                    <button
+                      type="button"
+                      disabled
+                      className="text-[10px] px-2 py-1.5 rounded-lg bg-cream-light border border-cream-border text-charcoal-muted font-medium flex items-center gap-1 cursor-not-allowed whitespace-nowrap opacity-60"
+                      title="Upload or generate at least 2 photos to create a collage"
+                    >
+                      <Sparkles className="w-3 h-3 shrink-0" /> Collage (Min 2)
+                    </button>
+                  ) : null}
                   <a href={`/admin/generate?productId=${productId}`}
                     className="text-[10px] px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold hover:bg-accent/90 transition-all flex items-center gap-1 whitespace-nowrap"
                     target="_blank" rel="noreferrer">
@@ -2045,31 +2301,162 @@ export function ProductForm({ productId }: Props) {
 
             {generatedImages && Object.keys(generatedImages).length > 0 ? (
               <>
-                <div className="grid grid-cols-2 gap-2">
-                  {Object.entries(generatedImages).map(([poseId, img], idx, arr) => (
-                    <div key={poseId} className="aspect-[3/4] rounded-xl overflow-hidden border border-cream-border bg-cream-light group relative">
-                      <img src={img.imageUrl} alt="Generated" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                      <div className="absolute top-2 left-2 w-6 h-6 bg-charcoal/80 backdrop-blur-sm rounded flex items-center justify-center text-white text-xs font-bold shadow-sm">
-                        {idx + 1}
+                <div className="grid grid-cols-2 gap-2.5">
+                  {cataloguePhotosList.map((item, idx) => {
+                    const isCover = item.isCover;
+                    return (
+                      <div
+                        key={item.poseId}
+                        className={`aspect-[3/4] rounded-2xl overflow-hidden border-2 transition-all duration-200 ${
+                          isCover
+                            ? 'border-amber-400 ring-2 ring-amber-300 shadow-md'
+                            : 'border-cream-border hover:border-accent/60 shadow-xs'
+                        } bg-cream-light group relative`}
+                      >
+                        {/* The Image (Click to View in Lightbox) */}
+                        <div
+                          onClick={() => setLightboxIndex(idx)}
+                          className="w-full h-full cursor-zoom-in relative"
+                          title="Click to view full photo"
+                        >
+                          <img
+                            src={item.imageUrl}
+                            alt={`Catalogue Photo #${idx + 1}`}
+                            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                          />
+
+                          {/* Hover Overlay with Click to View hint */}
+                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                            <div className="px-2.5 py-1 bg-black/75 backdrop-blur-md rounded-xl text-white text-[10px] font-bold flex items-center gap-1.5 shadow-md transform translate-y-1 group-hover:translate-y-0 transition-transform">
+                              <Eye className="w-3.5 h-3.5 text-accent" />
+                              <span>Click to View</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Top Left: Order Badge + Cover Tag */}
+                        <div className="absolute top-2 left-2 flex items-center gap-1 z-10 pointer-events-none">
+                          <div className="w-5 h-5 bg-charcoal/85 backdrop-blur-md rounded-md flex items-center justify-center text-white text-[10px] font-bold shadow-xs">
+                            {idx + 1}
+                          </div>
+                          {isCover && (
+                            <div className="px-1.5 py-0.5 bg-amber-400 text-amber-950 rounded-md text-[9px] font-extrabold shadow-xs flex items-center gap-0.5">
+                              <Star className="w-2.5 h-2.5 fill-current" /> COVER
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Top Right: Compact Action Buttons (View + Delete) */}
+                        <div className="absolute top-2 right-2 flex items-center gap-1 z-10">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLightboxIndex(idx);
+                            }}
+                            title="View Full Size Photo"
+                            className="w-6 h-6 rounded-md bg-black/65 hover:bg-white text-white hover:text-charcoal backdrop-blur-md flex items-center justify-center transition-colors shadow-xs cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm(`Delete Photo #${idx + 1}?`)) {
+                                deleteImage(item.poseId);
+                              }
+                            }}
+                            title="Delete photo"
+                            className="w-6 h-6 rounded-md bg-black/65 hover:bg-red-600 text-white backdrop-blur-md flex items-center justify-center transition-colors shadow-xs cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {/* Bottom Bar: Cover Setter & Reorder Controls */}
+                        <div className="absolute bottom-1.5 inset-x-1.5 flex items-center justify-between z-10">
+                          {/* Make Cover Button */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCoverImage(item.imageUrl);
+                            }}
+                            title={isCover ? "Current Cover Photo" : "Set as Cover Photo"}
+                            className={`px-2 py-1 rounded-md text-[9px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-xs ${
+                              isCover
+                                ? 'bg-amber-400 text-amber-950'
+                                : 'bg-black/65 hover:bg-amber-400 text-white hover:text-amber-950 backdrop-blur-md'
+                            }`}
+                          >
+                            <Star className={`w-3 h-3 ${isCover ? 'fill-current' : ''}`} />
+                            <span>{isCover ? 'Cover' : 'Set Cover'}</span>
+                          </button>
+
+                          {/* Reorder Arrows */}
+                          <div className="flex items-center gap-0.5 bg-black/65 backdrop-blur-md p-0.5 rounded-md shadow-xs">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveImage(item.poseId, 'up');
+                              }}
+                              disabled={idx === 0}
+                              title="Move photo earlier"
+                              className="w-5 h-5 flex items-center justify-center text-white hover:bg-white/30 rounded disabled:opacity-20 disabled:pointer-events-none transition-colors cursor-pointer"
+                            >
+                              <ArrowLeft className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveImage(item.poseId, 'down');
+                              }}
+                              disabled={idx === cataloguePhotosList.length - 1}
+                              title="Move photo later"
+                              className="w-5 h-5 flex items-center justify-center text-white hover:bg-white/30 rounded disabled:opacity-20 disabled:pointer-events-none transition-colors cursor-pointer"
+                            >
+                              <ArrowLeft className="w-3 h-3 rotate-180" />
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button type="button" onClick={() => moveImage(poseId, 'up')} disabled={idx === 0} className="p-1.5 bg-white/80 rounded hover:bg-white text-charcoal disabled:opacity-50">
-                          <ArrowLeft className="w-3.5 h-3.5" />
-                        </button>
-                        <button type="button" onClick={() => moveImage(poseId, 'down')} disabled={idx === arr.length - 1} className="p-1.5 bg-white/80 rounded hover:bg-white text-charcoal disabled:opacity-50">
-                          <ArrowLeft className="w-3.5 h-3.5 rotate-180" />
-                        </button>
-                        <button type="button" onClick={() => deleteImage(poseId)} className="p-1.5 bg-white/80 rounded hover:bg-red-50 text-red-600">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-                <p className="text-[10px] text-charcoal-muted text-center">Auto-synced from AI photoshoot session</p>
-                  <span className="text-[10px] text-charcoal-muted text-center block">
-                    Session Order ID: {linkedOrderId}
-                  </span>
+
+                {/* Wholesale Catalogue Collage Banner Action */}
+                {cataloguePhotosList.length >= 2 && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCollageModal(true)}
+                      className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 via-rose-500 to-indigo-600 hover:opacity-95 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer group"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-200 group-hover:rotate-12 transition-transform shrink-0" />
+                      <span>Create Wholesale Catalogue Collage ({cataloguePhotosList.length} Photos)</span>
+                      <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-white/20 text-white ml-0.5">
+                        10 Layouts • WhatsApp & Print
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                <div className="space-y-0.5 text-center pt-1">
+                  <p className="text-[11px] font-semibold text-charcoal">
+                    {cataloguePhotosList.length} Catalogue Photo{cataloguePhotosList.length > 1 ? 's' : ''} (AI & Uploaded)
+                  </p>
+                  <p className="text-[10px] text-charcoal-muted">
+                    Click any photo to view full size. Photo #1 is default cover.
+                  </p>
+                  {linkedOrderId && (
+                    <span className="text-[10px] text-charcoal-muted block font-mono">
+                      Session: {linkedOrderId}
+                    </span>
+                  )}
+                </div>
               </>
             ) : (
               <div className="py-6 text-center space-y-3">
@@ -2088,5 +2475,169 @@ export function ProductForm({ productId }: Props) {
         </div>
       </div>
     </form>
+
+      {/* Wholesale & Social Collage Studio Modal */}
+      {showCollageModal && (
+        <CollageCreator
+          images={collageImagesList}
+          productName={form.title}
+          stockCode={form.stockCode || form.friendlyCode}
+          designNumber={form.designNumber}
+          isOpen={showCollageModal}
+          onClose={() => setShowCollageModal(false)}
+        />
+      )}
+
+      {/* ── HIGH-RES FULLSCREEN PHOTO VIEWER LIGHTBOX (CLICK TO VIEW) ── */}
+      {lightboxIndex !== null && cataloguePhotosList[lightboxIndex] && (
+        <div
+          className="fixed inset-0 z-[250] bg-black/92 backdrop-blur-xl flex flex-col p-3 sm:p-5 text-white animate-fade-in font-sans select-none"
+          onClick={() => setLightboxIndex(null)}
+        >
+          {/* Top Bar */}
+          <div
+            className="flex items-center justify-between gap-3 p-3 bg-white/10 backdrop-blur-md rounded-2xl border border-white/15 mb-3 shrink-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Left: Photo Info & Cover Status */}
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-accent animate-pulse" />
+              <div>
+                <h3 className="text-sm font-bold tracking-wide">
+                  Catalogue Photo {lightboxIndex + 1} of {cataloguePhotosList.length}
+                </h3>
+                <p className="text-[11px] text-white/60">
+                  {cataloguePhotosList[lightboxIndex].isCover ? 'Current Product Cover Image' : 'Click "Make Cover" to use as thumbnail'}
+                </p>
+              </div>
+            </div>
+
+            {/* Right: Actions */}
+            <div className="flex items-center gap-2">
+              {/* Set as Cover button */}
+              <button
+                type="button"
+                onClick={() => setCoverImage(cataloguePhotosList[lightboxIndex].imageUrl)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  cataloguePhotosList[lightboxIndex].isCover
+                    ? 'bg-amber-400 text-amber-950 shadow-md'
+                    : 'bg-white/15 hover:bg-amber-400 hover:text-amber-950 text-white'
+                }`}
+              >
+                <Star className={`w-3.5 h-3.5 ${cataloguePhotosList[lightboxIndex].isCover ? 'fill-current' : ''}`} />
+                <span>{cataloguePhotosList[lightboxIndex].isCover ? 'Cover Photo' : 'Make Cover Photo'}</span>
+              </button>
+
+              {/* Download Photo */}
+              <a
+                href={cataloguePhotosList[lightboxIndex].imageUrl}
+                download={`catalogue_photo_${lightboxIndex + 1}.jpg`}
+                target="_blank"
+                rel="noreferrer"
+                className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+                title="Download original photo"
+              >
+                <Download className="w-4 h-4" />
+              </a>
+
+              {/* Open in New Tab */}
+              <a
+                href={cataloguePhotosList[lightboxIndex].imageUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+                title="Open photo URL in new tab"
+              >
+                <ExternalLink className="w-4 h-4" />
+              </a>
+
+              {/* Close Button */}
+              <button
+                type="button"
+                onClick={() => setLightboxIndex(null)}
+                className="p-2 rounded-xl bg-white/10 hover:bg-white/25 text-white transition-colors cursor-pointer"
+                title="Close viewer (Esc)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Center Image Stage with Navigation Arrows */}
+          <div
+            className="flex-1 min-h-0 relative flex items-center justify-center p-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Prev Arrow */}
+            {lightboxIndex > 0 && (
+              <button
+                type="button"
+                onClick={() => setLightboxIndex(lightboxIndex - 1)}
+                className="absolute left-2 sm:left-6 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-black/60 hover:bg-white text-white hover:text-charcoal backdrop-blur-md flex items-center justify-center transition-all cursor-pointer shadow-xl border border-white/20 hover:scale-105"
+                title="Previous photo (←)"
+              >
+                <ChevronLeft className="w-6 h-6" />
+              </button>
+            )}
+
+            {/* Main High-Res Image */}
+            <div className="max-w-full max-h-full flex items-center justify-center relative">
+              <img
+                src={cataloguePhotosList[lightboxIndex].imageUrl}
+                alt={`Photo #${lightboxIndex + 1}`}
+                className="max-h-[75vh] max-w-[88vw] w-auto h-auto object-contain rounded-2xl shadow-2xl border border-white/10 transition-all duration-200"
+              />
+            </div>
+
+            {/* Next Arrow */}
+            {lightboxIndex < cataloguePhotosList.length - 1 && (
+              <button
+                type="button"
+                onClick={() => setLightboxIndex(lightboxIndex + 1)}
+                className="absolute right-2 sm:right-6 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-black/60 hover:bg-white text-white hover:text-charcoal backdrop-blur-md flex items-center justify-center transition-all cursor-pointer shadow-xl border border-white/20 hover:scale-105"
+                title="Next photo (→)"
+              >
+                <ChevronRight className="w-6 h-6" />
+              </button>
+            )}
+          </div>
+
+          {/* Bottom Thumbnail Strip */}
+          <div
+            className="flex items-center justify-center gap-2 p-2.5 bg-white/10 backdrop-blur-md rounded-2xl border border-white/15 mt-3 shrink-0 overflow-x-auto max-w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {cataloguePhotosList.map((photo, pIdx) => {
+              const isSelected = pIdx === lightboxIndex;
+              const isCover = photo.isCover;
+              return (
+                <button
+                  key={photo.poseId || pIdx}
+                  type="button"
+                  onClick={() => setLightboxIndex(pIdx)}
+                  className={`relative w-14 h-18 rounded-xl overflow-hidden shrink-0 transition-all cursor-pointer border-2 ${
+                    isSelected
+                      ? 'border-accent ring-2 ring-accent/60 scale-105 shadow-md'
+                      : isCover
+                      ? 'border-amber-400 opacity-80 hover:opacity-100'
+                      : 'border-white/20 opacity-60 hover:opacity-100'
+                  }`}
+                >
+                  <img src={photo.imageUrl} alt="" className="w-full h-full object-cover" />
+                  <div className="absolute top-1 left-1 bg-black/75 text-white text-[9px] font-bold px-1 rounded">
+                    #{pIdx + 1}
+                  </div>
+                  {isCover && (
+                    <div className="absolute bottom-1 right-1 bg-amber-400 text-amber-950 p-0.5 rounded">
+                      <Star className="w-2.5 h-2.5 fill-current" />
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </>
   );
 }

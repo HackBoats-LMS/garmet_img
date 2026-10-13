@@ -41,7 +41,35 @@ export async function GET(
       return NextResponse.json({ error: 'Product not found' }, { status: 404 });
     }
 
-    return NextResponse.json({ data: product });
+    const genObj = (product.generatedImages as Record<string, any>) || {};
+    const sortedGenEntries = Object.entries(genObj)
+      .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0));
+    
+    const sortedGenList = sortedGenEntries
+      .map(([, img]: any) => img.imageUrl)
+      .filter(Boolean);
+
+    let cover = product.coverImageUrl;
+    if ((!cover || cover.includes('tempfile')) && sortedGenList.length > 0) {
+      cover = sortedGenList[0];
+    }
+
+    const images: string[] = [];
+    if (cover) images.push(cover);
+    for (const imgUrl of sortedGenList) {
+      if (!images.includes(imgUrl)) {
+        images.push(imgUrl);
+      }
+    }
+
+    const formattedProduct = {
+      ...product,
+      coverImageUrl: cover,
+      images,
+      generatedImages: Object.fromEntries(sortedGenEntries),
+    };
+
+    return NextResponse.json({ data: formattedProduct });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
