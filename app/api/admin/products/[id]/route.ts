@@ -63,6 +63,7 @@ export async function PATCH(
       border, kurtaLength, pantStyle,
       whatsappRetail, whatsappWholesale,
       instagramCaption, facebookCaption, shopifyTitle, whatsappCatalogueTitle,
+      sizeInventory,
       // Custom columns
       customFields,
       // Quantity
@@ -140,6 +141,7 @@ export async function PATCH(
         // XLSX-mapped fields
         productCode: designNumber ?? undefined,
         length_Size: size ?? undefined,
+        sizeInventory: sizeInventory ?? undefined,
         location: location ?? undefined,
         embroideryType: embroideryType ?? undefined,
         cutStyle: cutStyle ?? undefined,

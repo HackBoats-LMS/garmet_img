@@ -13,6 +13,7 @@ import { Card } from '@/app/components/ui/Card';
 import { Badge } from '@/app/components/ui/Badge';
 import * as XLSX from 'xlsx';
 import { parseSheetSmart, mapSpreadsheetRow } from '@/lib/spreadsheet-mapper';
+import { consolidateSpreadsheetRows } from '@/lib/size-inventory';
 
 interface Category { id: string; name: string; slug: string; subCategories: { id: string; name: string; slug: string }[] }
 interface Product {
@@ -30,6 +31,8 @@ interface Product {
   dealerPrice?: number | null;
   mrp?: number | null;
   quantity: number;
+  length_Size?: string | null;
+  sizeInventory?: Record<string, number> | null;
   reservedQty: number;
   soldQty: number;
   status: 'ACTIVE' | 'OUT_OF_STOCK' | 'ARCHIVED' | 'DRAFT';
@@ -52,6 +55,7 @@ export default function AdminInventoryPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -103,7 +107,9 @@ export default function AdminInventoryPage() {
 
       // Map, normalize, clean, and validate all fields locally on the user's PC
       const allMapped = rawRows.map(mapSpreadsheetRow);
-      const validProducts = allMapped.filter(p => p.stockCode && p.stockCode !== '0' && p.stockCode !== '-');
+      // Consolidate rows sharing same Code1 / Product with different sizes & quantities
+      const consolidated = consolidateSpreadsheetRows(allMapped);
+      const validProducts = consolidated.filter(p => p.stockCode && p.stockCode !== '0' && p.stockCode !== '-');
       const skippedLocally = allMapped.length - validProducts.length;
 
       if (validProducts.length === 0) {
@@ -112,8 +118,8 @@ export default function AdminInventoryPage() {
 
       const total = validProducts.length;
 
-      // 2. Pre-check existence of IDs / barcodes to reduce database strain
-      setImportProgress('Verifying product IDs and barcodes with database...');
+      // 2. Pre-check existence of IDs / stockCodes to reduce database strain
+      setImportProgress('Verifying product stockCodes with database...');
       let preCheckSummary = '';
       try {
         const verifyRes = await fetch('/api/admin/products/import', {
@@ -210,10 +216,17 @@ export default function AdminInventoryPage() {
 
       const res = await fetch(`/api/admin/products?${params}`);
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      setFetchError(null);
       setProducts(data.products || []);
       setTotal(data.total || 0);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error('Fetch products error:', err);
+      setFetchError(err.message || 'Failed to load products');
+      setProducts([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -325,6 +338,29 @@ export default function AdminInventoryPage() {
           </div>
           <button onClick={() => setImportResult(null)} className="cursor-pointer opacity-60 hover:opacity-100">
             <XCircle className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Fetch / Auth Error Banner */}
+      {fetchError && (
+        <div className="p-4 rounded-xl flex items-center justify-between gap-3 text-sm font-medium border bg-amber-50 border-amber-200 text-amber-900 animate-fade-in">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <p className="font-bold">Database / Session Notice</p>
+              <p className="text-xs text-amber-800">
+                {fetchError.includes('401') || fetchError.toLowerCase().includes('unauthorized')
+                  ? 'Your login session expired. Please sign out and sign in again with your Google account.'
+                  : fetchError}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => fetchProducts()}
+            className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-colors cursor-pointer"
+          >
+            Retry
           </button>
         </div>
       )}
@@ -467,6 +503,11 @@ export default function AdminInventoryPage() {
                               )}
                               {product.clothType && (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-bg text-accent font-semibold">{product.clothType}</span>
+                              )}
+                              {product.length_Size && product.length_Size !== '-' && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-medium" title={product.sizeInventory ? JSON.stringify(product.sizeInventory) : product.length_Size}>
+                                  Sizes: {product.length_Size}
+                                </span>
                               )}
                             </div>
                           </div>

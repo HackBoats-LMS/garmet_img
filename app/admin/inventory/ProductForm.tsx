@@ -17,6 +17,7 @@ import { Input } from '@/app/components/ui/Input';
 import { Textarea } from '@/app/components/ui/Input';
 import { useGooglePhotosPicker } from '@/app/hooks/useGooglePhotosPicker';
 import { CollageCreator, CollageInputImage } from '@/app/components/CollageCreator';
+import { normalizeSizeInventory, SizeInventoryItem, sumSizeInventory } from '@/lib/size-inventory';
 
 // ─── CONSTANTS ───
 
@@ -250,6 +251,10 @@ export function ProductForm({ productId }: Props) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const [form, setForm] = useState<ProductFormData>(emptyForm());
+  const [sizeInventory, setSizeInventory] = useState<Record<string, SizeInventoryItem>>({});
+  const [newSizeKey, setNewSizeKey] = useState('');
+  const [newSizeQty, setNewSizeQty] = useState('1');
+  const [newSizeStockCode, setNewSizeStockCode] = useState('');
 
   const cataloguePhotosList = useMemo(() => {
     if (!generatedImages) return [];
@@ -375,6 +380,9 @@ export function ProductForm({ productId }: Props) {
           });
           setGeneratedImages(genImgs);
           setLinkedOrderId(p.linkedOrderId || null);
+          if (p.sizeInventory) {
+            setSizeInventory(normalizeSizeInventory(p.sizeInventory));
+          }
           // Load custom fields
           if (p.customFields && typeof p.customFields === 'object') {
             const cf: CustomField[] = Object.entries(p.customFields as Record<string, any>).map(([key, val]: any) => ({
@@ -587,7 +595,9 @@ export function ProductForm({ productId }: Props) {
           pantStyle: form.pantStyle,
           stockCode: form.stockCode,
           designNumber: form.designNumber,
-          price: form.price,
+          price: form.mrp || form.price,
+          retailPrice: form.mrp,
+          unitPrice: form.price,
           wholesalePrice: form.wholesalePrice,
           description: form.description,
         }),
@@ -653,7 +663,9 @@ export function ProductForm({ productId }: Props) {
           pantStyle: form.pantStyle,
           stockCode: form.stockCode,
           designNumber: form.designNumber,
-          price: form.price,
+          price: form.mrp || form.price,
+          retailPrice: form.mrp,
+          unitPrice: form.price,
           wholesalePrice: form.wholesalePrice,
           description: form.description,
         }),
@@ -892,6 +904,86 @@ export function ProductForm({ productId }: Props) {
     },
   });
 
+  const [exportingGooglePhotos, setExportingGooglePhotos] = useState(false);
+  const [googlePhotosSuccess, setGooglePhotosSuccess] = useState<{ albumTitle: string; albumUrl?: string; photosUploaded: number } | null>(null);
+
+  const handleExportAlbumToGooglePhotos = async () => {
+    if (!generatedImages || Object.keys(generatedImages).length === 0) {
+      alert('No catalogue photos available to export.');
+      return;
+    }
+
+    const albumTitle = form.friendlyCode || form.stockCode || form.title || 'Product';
+    const imagesToExport = Object.entries(generatedImages)
+      .filter(([, v]) => Boolean(v?.imageUrl))
+      .map(([poseId, v], idx) => ({
+        imageUrl: v.imageUrl,
+        filename: `${(form.friendlyCode || form.stockCode || 'photo').toLowerCase().replace(/[^a-z0-9_-]+/g, '_')}_${idx + 1}.jpg`,
+        description: `${form.title || 'Product'} (${form.friendlyCode || form.stockCode}) - ${v.prompt || `Photo #${idx + 1}`}`,
+      }));
+
+    if (imagesToExport.length === 0) {
+      alert('No valid images to export.');
+      return;
+    }
+
+    setExportingGooglePhotos(true);
+    setGooglePhotosSuccess(null);
+
+    try {
+      let clientToken: string | undefined = undefined;
+      if (typeof window !== 'undefined') {
+        const cached = sessionStorage.getItem('gphotos_token');
+        const exp = sessionStorage.getItem('gphotos_token_exp');
+        if (cached && exp && Date.now() < Number(exp)) {
+          clientToken = cached;
+        }
+      }
+
+      const res = await fetch('/api/google/photos/export-album', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: clientToken,
+          albumTitle,
+          productId: productId || undefined,
+          images: imagesToExport,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.needsAuth) {
+          throw new Error('Google Photos authorization is required. Please re-login with Google or open the Photos picker first.');
+        }
+        throw new Error(data.error || 'Failed to save to Google Photos album');
+      }
+
+      setGooglePhotosSuccess({
+        albumTitle: data.albumTitle || albumTitle,
+        albumUrl: data.albumUrl,
+        photosUploaded: data.photosUploaded || imagesToExport.length,
+      });
+
+      // Refresh product data if productId exists so updated R2 URLs reflect
+      if (productId) {
+        fetch(`/api/admin/products/${productId}`)
+          .then(r => r.json())
+          .then(d => {
+            if (d.product?.generatedImages) {
+              setGeneratedImages(d.product.generatedImages);
+            }
+          })
+          .catch(console.warn);
+      }
+    } catch (err: any) {
+      console.error('Export album error:', err);
+      alert(err?.message || 'Failed to save to Google Photos album');
+    } finally {
+      setExportingGooglePhotos(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true); setError(null);
@@ -909,6 +1001,7 @@ export function ProductForm({ productId }: Props) {
         mrp: form.mrp ? parseFloat(form.mrp) : null,
         wholesalePrice: form.wholesalePrice ? parseFloat(form.wholesalePrice) : null,
         quantity: parseInt(form.quantity) || 0,
+        sizeInventory: Object.keys(sizeInventory).length > 0 ? sizeInventory : null,
         customFields: Object.keys(customFieldsJson).length > 0 ? customFieldsJson : null,
         generatedImages,
       };
@@ -1002,9 +1095,13 @@ export function ProductForm({ productId }: Props) {
               <div className="space-y-4 pt-1">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <Input label="stockCode *" value={form.stockCode}
+                    <Input label="stockCode (Default / Master)" value={form.stockCode}
                       onChange={e => set('stockCode', e.target.value)} placeholder="967699512" required />
-                    <p className="text-[10px] text-charcoal-muted mt-1">Barcode / 9+ digit scan code</p>
+                    <p className="text-[10px] text-charcoal-muted mt-1">
+                      {Object.keys(sizeInventory).length > 0 
+                        ? 'Master / primary stockCode. Each size below has its own individual stockCode.' 
+                        : '9+ digit scan stockCode'}
+                    </p>
                   </div>
                   <div>
                     <Input label="code1" value={form.friendlyCode}
@@ -1021,13 +1118,282 @@ export function ProductForm({ productId }: Props) {
                     <p className="text-[10px] text-charcoal-muted mt-1">Short human-readable alias.</p>
                   </div>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Input label="productCode" value={form.designNumber}
                     onChange={e => set('designNumber', e.target.value)} placeholder="DES-2024-01" />
-                  <Input label="Size" value={form.size}
-                    onChange={e => set('size', e.target.value)} placeholder="Free / S-M-L / 38-42" />
                   <Input label="Storage Location" value={form.location}
                     onChange={e => set('location', e.target.value)} placeholder="Rack A3, Shelf 2" />
+                </div>
+
+                {/* ── PROMINENT SIZE & STOCK MANAGER (PER-SIZE QUANTITIES) ── */}
+                <div className="p-5 rounded-2xl bg-amber-50/60 border border-amber-200/90 shadow-xs space-y-4">
+                  {/* Header Row */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-200/70">
+                    <div>
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                          <Package className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-extrabold text-charcoal tracking-wide">
+                              Sizes & Stock Quantities
+                            </span>
+                            <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-200/80 text-amber-900 font-extrabold border border-amber-300/80">
+                              Total: {form.quantity} pcs
+                            </span>
+                          </div>
+                          <p className="text-xs text-charcoal-muted mt-0.5">
+                            Manage each size's exact inventory. Total stock updates automatically.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Preset Buttons */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] text-charcoal-muted font-bold mr-0.5">Quick Add:</span>
+                      {['S', 'M', 'L', 'XL', 'XXL', '3XL', 'FS'].map(sz => (
+                        <button
+                          key={sz}
+                          type="button"
+                          onClick={() => {
+                            const current = sizeInventory[sz];
+                            const next = {
+                              ...sizeInventory,
+                              [sz]: {
+                                quantity: (current?.quantity || 0) + 1,
+                                stockCode: current?.stockCode || null,
+                              }
+                            };
+                            setSizeInventory(next);
+                            const tot = sumSizeInventory(next);
+                            set('quantity', tot.toString());
+                            set('size', Object.keys(next).join(', '));
+                          }}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-amber-100 text-charcoal border border-amber-300 text-xs font-bold transition-all shadow-2xs hover:scale-105 cursor-pointer active:scale-95"
+                          title={`Add 1 to size ${sz}`}
+                        >
+                          +{sz}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Configured Sizes Cards */}
+                  {Object.entries(sizeInventory).length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                      {Object.entries(sizeInventory).map(([sKey, sItem]) => {
+                        const qty = typeof sItem === 'number' ? sItem : sItem?.quantity || 0;
+                        const stockCode = typeof sItem === 'object' ? sItem?.stockCode : null;
+
+                        return (
+                          <div
+                            key={sKey}
+                            className="flex flex-col justify-between p-3 rounded-xl bg-white border border-amber-200/90 shadow-xs hover:border-amber-400 transition-all group"
+                          >
+                            <div className="flex items-start justify-between gap-1 mb-2">
+                              <div className="flex-1 pr-1">
+                                <span className="text-sm font-black text-charcoal px-2.5 py-1 rounded-lg bg-amber-100/80 border border-amber-200/80 inline-block">
+                                  {sKey}
+                                </span>
+                                <div className="mt-1.5">
+                                  <label className="text-[10px] font-bold text-amber-900/80 uppercase tracking-wider block mb-0.5">
+                                    StockCode:
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={stockCode || ''}
+                                    placeholder="e.g. 5150000065"
+                                    onChange={e => {
+                                      const nextVal = e.target.value.trim();
+                                      const next = {
+                                        ...sizeInventory,
+                                        [sKey]: {
+                                          quantity: qty,
+                                          stockCode: nextVal || null,
+                                        }
+                                      };
+                                      setSizeInventory(next);
+                                      // If top-level stockCode is empty, auto-populate with first size's stockCode
+                                      if (!form.stockCode && nextVal) {
+                                        set('stockCode', nextVal);
+                                      }
+                                    }}
+                                    className="w-full px-2 py-1 text-xs font-mono font-bold text-charcoal bg-amber-50/70 border border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:bg-white transition-all placeholder:font-sans placeholder:font-normal placeholder:text-charcoal-muted/60"
+                                  />
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = { ...sizeInventory };
+                                  delete next[sKey];
+                                  setSizeInventory(next);
+                                  const tot = sumSizeInventory(next);
+                                  set('quantity', tot.toString());
+                                  const remaining = Object.keys(next);
+                                  set('size', remaining.length > 0 ? remaining.join(', ') : '');
+                                }}
+                                className="p-1 rounded-md text-charcoal-light/60 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
+                                title={`Remove size ${sKey}`}
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-1 bg-cream-light/40 p-1.5 rounded-lg border border-cream-border/60">
+                              <span className="text-xs font-bold text-amber-950 pl-1">
+                                {qty} <span className="text-[10px] font-normal text-charcoal-muted">pcs</span>
+                              </span>
+
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const next = {
+                                      ...sizeInventory,
+                                      [sKey]: {
+                                        quantity: Math.max(0, qty - 1),
+                                        stockCode: stockCode || null,
+                                      }
+                                    };
+                                    setSizeInventory(next);
+                                    const tot = sumSizeInventory(next);
+                                    set('quantity', tot.toString());
+                                    const activeSizes = Object.keys(next).filter(k => (next[k]?.quantity ?? 0) > 0);
+                                    if (activeSizes.length > 0) set('size', activeSizes.join(', '));
+                                  }}
+                                  className="w-6 h-6 flex items-center justify-center rounded-md bg-white hover:bg-cream-dark text-charcoal text-xs font-bold border border-cream-border transition-colors cursor-pointer active:scale-95 shadow-2xs"
+                                  title="Decrease quantity by 1"
+                                >
+                                  -
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const next = {
+                                      ...sizeInventory,
+                                      [sKey]: {
+                                        quantity: qty + 1,
+                                        stockCode: stockCode || null,
+                                      }
+                                    };
+                                    setSizeInventory(next);
+                                    const tot = sumSizeInventory(next);
+                                    set('quantity', tot.toString());
+                                    set('size', Object.keys(next).join(', '));
+                                  }}
+                                  className="w-6 h-6 flex items-center justify-center rounded-md bg-white hover:bg-cream-dark text-charcoal text-xs font-bold border border-cream-border transition-colors cursor-pointer active:scale-95 shadow-2xs"
+                                  title="Increase quantity by 1"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="py-4 px-4 rounded-xl bg-white/80 border border-dashed border-amber-300 text-center">
+                      <p className="text-xs font-medium text-charcoal-muted">
+                        No sizes configured yet. Use the inputs below or click the quick presets above to add sizes.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Add Size Input Row with Per-Size StockCode */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-amber-200/70">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-xs font-bold text-charcoal">Size:</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. XL, 38, M"
+                          value={newSizeKey}
+                          onChange={e => setNewSizeKey(e.target.value.toUpperCase())}
+                          className="w-28 px-3 py-2 rounded-xl border border-amber-300 bg-white text-xs font-bold text-charcoal uppercase focus:outline-none focus:ring-2 focus:ring-amber-500/20 shadow-2xs"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-xs font-bold text-charcoal">Qty:</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={newSizeQty}
+                          onChange={e => setNewSizeQty(e.target.value)}
+                          className="w-16 px-2.5 py-2 rounded-xl border border-amber-300 bg-white text-xs font-bold text-charcoal text-center focus:outline-none focus:ring-2 focus:ring-amber-500/20 shadow-2xs"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-xs font-bold text-charcoal">StockCode:</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. 5270000094 (optional)"
+                          value={newSizeStockCode}
+                          onChange={e => setNewSizeStockCode(e.target.value.trim())}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const trimmed = newSizeKey.trim().toUpperCase();
+                              const qtyNum = parseInt(newSizeQty, 10);
+                              if (!trimmed || isNaN(qtyNum) || qtyNum < 0) return;
+                              const currentItem = sizeInventory[trimmed];
+                              const next = {
+                                ...sizeInventory,
+                                [trimmed]: {
+                                  quantity: (currentItem?.quantity || 0) + qtyNum,
+                                  stockCode: newSizeStockCode.trim() || currentItem?.stockCode || null,
+                                }
+                              };
+                              setSizeInventory(next);
+                              const tot = sumSizeInventory(next);
+                              set('quantity', tot.toString());
+                              set('size', Object.keys(next).join(', '));
+                              setNewSizeKey('');
+                              setNewSizeQty('1');
+                              setNewSizeStockCode('');
+                            }
+                          }}
+                          className="w-48 px-3 py-2 rounded-xl border border-amber-300 bg-white text-xs font-mono font-bold text-charcoal focus:outline-none focus:ring-2 focus:ring-amber-500/20 shadow-2xs"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const trimmed = newSizeKey.trim().toUpperCase();
+                          const qtyNum = parseInt(newSizeQty, 10);
+                          if (!trimmed || isNaN(qtyNum) || qtyNum < 0) return;
+                          const currentItem = sizeInventory[trimmed];
+                          const next = {
+                            ...sizeInventory,
+                            [trimmed]: {
+                              quantity: (currentItem?.quantity || 0) + qtyNum,
+                              stockCode: newSizeStockCode.trim() || currentItem?.stockCode || null,
+                            }
+                          };
+                          setSizeInventory(next);
+                          const tot = sumSizeInventory(next);
+                          set('quantity', tot.toString());
+                          set('size', Object.keys(next).join(', '));
+                          setNewSizeKey('');
+                          setNewSizeQty('1');
+                          setNewSizeStockCode('');
+                        }}
+                        className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white text-xs font-extrabold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                      >
+                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" /> Add Size
+                      </button>
+                    </div>
+
+                    <div className="text-xs text-charcoal-muted">
+                      Size Summary: <span className="font-bold text-charcoal bg-amber-100/60 px-2 py-1 rounded-md border border-amber-200/80">{form.size || 'None'}</span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* ── DESIGN GROUP PANEL ── */}
@@ -2074,25 +2440,175 @@ export function ProductForm({ productId }: Props) {
           <Card className="p-6 space-y-4">
             <SectionHeader id="stock" title="Stock Quantity" icon={Package} />
             {openSections.stock && (
-              <div className="space-y-1.5 pt-1 max-w-[200px]">
-                <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase">
-                  {isEdit ? "Current Stock" : "Initial Stock"}
-                </label>
-                <div className="flex items-center gap-2">
-                  <button type="button" 
-                    onClick={() => set('quantity', Math.max(0, (parseInt(form.quantity) || 0) - 1).toString())}
-                    className="w-12 h-12 flex shrink-0 items-center justify-center rounded-xl border border-cream-border bg-cream-light hover:bg-cream-dark hover:border-accent text-charcoal transition-all cursor-pointer">
-                    <Minus className="w-5 h-5" />
-                  </button>
-                  <input type="number" value={form.quantity}
-                    onChange={e => set('quantity', e.target.value)} placeholder="0"
-                    className="flex-1 w-full px-2 py-3 text-center rounded-xl bg-white border border-cream-border text-charcoal font-bold text-lg focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all duration-200"
-                  />
-                  <button type="button" 
-                    onClick={() => set('quantity', ((parseInt(form.quantity) || 0) + 1).toString())}
-                    className="w-12 h-12 flex shrink-0 items-center justify-center rounded-xl border border-cream-border bg-cream-light hover:bg-cream-dark hover:border-accent text-charcoal transition-all cursor-pointer">
-                    <Plus className="w-5 h-5" />
-                  </button>
+              <div className="space-y-4 pt-1">
+                <div className="space-y-1.5 max-w-[200px]">
+                  <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase">
+                    {isEdit ? "Total Stock" : "Initial Total Stock"}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button type="button" 
+                      onClick={() => set('quantity', Math.max(0, (parseInt(form.quantity) || 0) - 1).toString())}
+                      className="w-12 h-12 flex shrink-0 items-center justify-center rounded-xl border border-cream-border bg-cream-light hover:bg-cream-dark hover:border-accent text-charcoal transition-all cursor-pointer">
+                      <Minus className="w-5 h-5" />
+                    </button>
+                    <input type="number" value={form.quantity}
+                      onChange={e => set('quantity', e.target.value)} placeholder="0"
+                      className="flex-1 w-full px-2 py-3 text-center rounded-xl bg-white border border-cream-border text-charcoal font-bold text-lg focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all duration-200"
+                    />
+                    <button type="button" 
+                      onClick={() => set('quantity', ((parseInt(form.quantity) || 0) + 1).toString())}
+                      className="w-12 h-12 flex shrink-0 items-center justify-center rounded-xl border border-cream-border bg-cream-light hover:bg-cream-dark hover:border-accent text-charcoal transition-all cursor-pointer">
+                      <Plus className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* ── SIZE-WISE STOCK BREAKDOWN ── */}
+                <div className="border-t border-cream-border pt-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase">
+                      Size Breakdown (Per-Size Quantities)
+                    </label>
+                    {Object.keys(sizeInventory).length > 0 && (
+                      <span className="text-[10px] text-accent font-bold">
+                        {Object.keys(sizeInventory).length} sizes configured
+                      </span>
+                    )}
+                  </div>
+
+                  {/* List of configured sizes */}
+                  {Object.entries(sizeInventory).length > 0 ? (
+                    <div className="space-y-2">
+                      {Object.entries(sizeInventory).map(([sKey, sItem]) => {
+                        const qty = typeof sItem === 'number' ? sItem : sItem?.quantity || 0;
+                        const stockCode = typeof sItem === 'object' ? sItem?.stockCode : null;
+
+                        return (
+                          <div key={sKey} className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-cream-light/60 border border-cream-border">
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-charcoal px-2.5 py-0.5 rounded-md bg-white border border-cream-border inline-block w-fit">
+                                {sKey}
+                              </span>
+                              {stockCode && (
+                                <span className="text-[9px] font-mono text-charcoal-muted mt-0.5">
+                                  {stockCode}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = {
+                                    ...sizeInventory,
+                                    [sKey]: {
+                                      quantity: Math.max(0, qty - 1),
+                                      stockCode: stockCode || null,
+                                    }
+                                  };
+                                  setSizeInventory(next);
+                                  const tot = sumSizeInventory(next);
+                                  set('quantity', tot.toString());
+                                  const activeSizes = Object.keys(next).filter(k => (next[k]?.quantity ?? 0) > 0);
+                                  if (activeSizes.length > 0) set('size', activeSizes.join(', '));
+                                }}
+                                className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-cream-border text-charcoal hover:border-accent cursor-pointer"
+                              >
+                                -
+                              </button>
+                              <span className="w-10 text-center text-xs font-bold text-charcoal">
+                                {qty}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = {
+                                    ...sizeInventory,
+                                    [sKey]: {
+                                      quantity: qty + 1,
+                                      stockCode: stockCode || null,
+                                    }
+                                  };
+                                  setSizeInventory(next);
+                                  const tot = sumSizeInventory(next);
+                                  set('quantity', tot.toString());
+                                  set('size', Object.keys(next).join(', '));
+                                }}
+                                className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-cream-border text-charcoal hover:border-accent cursor-pointer"
+                              >
+                                +
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = { ...sizeInventory };
+                                  delete next[sKey];
+                                  setSizeInventory(next);
+                                  const tot = sumSizeInventory(next);
+                                  set('quantity', tot.toString());
+                                  const remaining = Object.keys(next);
+                                  set('size', remaining.length > 0 ? remaining.join(', ') : '');
+                                }}
+                                className="p-1.5 text-red-500 hover:text-red-700 cursor-pointer ml-1"
+                                title="Remove size"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-charcoal-muted italic">
+                      No per-size breakdown added. Add sizes below if this item has multiple sizes (e.g. S, M, L).
+                    </p>
+                  )}
+
+                  {/* Add size row */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="text"
+                      placeholder="Size (e.g. M)"
+                      value={newSizeKey}
+                      onChange={e => setNewSizeKey(e.target.value.toUpperCase())}
+                      className="w-20 px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-xs font-bold text-charcoal focus:outline-none focus:border-accent"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Qty"
+                      min="1"
+                      value={newSizeQty}
+                      onChange={e => setNewSizeQty(e.target.value)}
+                      className="w-14 px-2 py-1.5 rounded-lg border border-cream-border bg-white text-xs font-bold text-charcoal text-center focus:outline-none focus:border-accent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const trimmed = newSizeKey.trim().toUpperCase();
+                        const qtyNum = parseInt(newSizeQty, 10);
+                        if (!trimmed || isNaN(qtyNum) || qtyNum < 0) return;
+                        const current = sizeInventory[trimmed];
+                        const next = {
+                          ...sizeInventory,
+                          [trimmed]: {
+                            quantity: (current?.quantity || 0) + qtyNum,
+                            stockCode: newSizeStockCode.trim() || current?.stockCode || null,
+                          }
+                        };
+                        setSizeInventory(next);
+                        const tot = sumSizeInventory(next);
+                        set('quantity', tot.toString());
+                        set('size', Object.keys(next).join(', '));
+                        setNewSizeKey('');
+                        setNewSizeQty('1');
+                        setNewSizeStockCode('');
+                      }}
+                      className="flex-1 py-1.5 px-3 rounded-lg bg-accent text-white text-xs font-bold hover:bg-accent/90 transition-colors cursor-pointer"
+                    >
+                      + Add Size
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -2290,6 +2806,27 @@ export function ProductForm({ productId }: Props) {
                       <Sparkles className="w-3 h-3 shrink-0" /> Collage (Min 2)
                     </button>
                   ) : null}
+                  {generatedImages && Object.keys(generatedImages).length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleExportAlbumToGooglePhotos}
+                      disabled={exportingGooglePhotos}
+                      className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 transition-all flex items-center gap-1.5 disabled:opacity-50 whitespace-nowrap shadow-xs cursor-pointer"
+                      title={`Save all ${Object.keys(generatedImages).length} photos to Cloudflare R2 & Google Photos in album "${form.friendlyCode || form.stockCode || 'Code1'}"`}
+                    >
+                      {exportingGooglePhotos ? (
+                        <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                      ) : (
+                        <svg viewBox="0 0 24 24" className="w-3 h-3 shrink-0">
+                          <path fill="#EA4335" d="M12 2a5 5 0 0 0-5 5v5h5a5 5 0 0 0 0-10z" />
+                          <path fill="#4285F4" d="M2 12a5 5 0 0 0 5 5h5v-5a5 5 0 0 0-10 0z" />
+                          <path fill="#FBBC04" d="M22 12a5 5 0 0 0-5-5h-5v5a5 5 0 0 0 10 0z" />
+                          <path fill="#34A853" d="M12 22a5 5 0 0 0 5-5v-5h-5a5 5 0 0 0 0 10z" />
+                        </svg>
+                      )}
+                      <span>{exportingGooglePhotos ? 'Syncing...' : `Save to Photos (${form.friendlyCode || form.stockCode || 'Code1'})`}</span>
+                    </button>
+                  )}
                   <a href={`/admin/generate?productId=${productId}`}
                     className="text-[10px] px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold hover:bg-accent/90 transition-all flex items-center gap-1 whitespace-nowrap"
                     target="_blank" rel="noreferrer">
@@ -2298,6 +2835,29 @@ export function ProductForm({ productId }: Props) {
                 </div>
               )}
             </div>
+
+            {/* Google Photos Album Sync Success Feedback */}
+            {googlePhotosSuccess && (
+              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between gap-2 animate-fade-in">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <div>
+                    <span className="font-bold">Album Synced:</span> {googlePhotosSuccess.albumTitle} ({googlePhotosSuccess.photosUploaded} photos saved to Google Photos & R2)
+                  </div>
+                </div>
+                {googlePhotosSuccess.albumUrl && (
+                  <a
+                    href={googlePhotosSuccess.albumUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px] hover:bg-emerald-700 transition-colors whitespace-nowrap flex items-center gap-1"
+                  >
+                    <span>Open Album</span>
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                )}
+              </div>
+            )}
 
             {generatedImages && Object.keys(generatedImages).length > 0 ? (
               <>

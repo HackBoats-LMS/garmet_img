@@ -187,6 +187,7 @@ model Product {
   // ── XLSX-MAPPED FIELDS (from Project.xlsx columns) ──
   productCode            String? // DESIGN NUMBER
   length_Size            String? // SIZE
+  sizeInventory          Json?   // Size-wise stock breakdown e.g. {"S": 2, "M": 5, "L": 3}
   location               String? // LOCATION / storage shelf or rack
   embroideryType         String? // EMBROIDERY TYPE e.g. "Zari", "Thread", "Mirror"
   cutStyle               String? // CUT STYLE e.g. "A-Line", "Straight", "Anarkali"

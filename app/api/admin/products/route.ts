@@ -108,6 +108,7 @@ export async function POST(req: NextRequest) {
       border, kurtaLength, pantStyle,
       whatsappRetail, whatsappWholesale,
       instagramCaption, facebookCaption, shopifyTitle, whatsappCatalogueTitle,
+      sizeInventory,
       // Custom columns
       customFields,
     } = body;
@@ -148,6 +149,7 @@ export async function POST(req: NextRequest) {
         // XLSX fields
         productCode: designNumber || null,
         length_Size: size || null,
+        sizeInventory: sizeInventory || null,
         location: location || null,
         embroideryType: embroideryType || null,
         cutStyle: cutStyle || null,
