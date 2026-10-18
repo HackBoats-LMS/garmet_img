@@ -71,11 +71,11 @@ export default function LoginPage() {
             size="lg"
             className="w-full h-12 bg-white flex items-center justify-center gap-3 font-semibold text-charcoal hover:bg-cream-dark border-cream-dark shadow-sm transition-all cursor-pointer"
           >
-            <Image 
-              src="https://www.svgrepo.com/show/475656/google-color.svg" 
-              alt="Google" 
-              width={20} 
-              height={20} 
+            <Image
+              src="https://www.svgrepo.com/show/475656/google-color.svg"
+              alt="Google"
+              width={20}
+              height={20}
             />
             Continue with Google
           </Button>

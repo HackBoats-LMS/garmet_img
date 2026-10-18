@@ -142,6 +142,7 @@ export interface MappedProduct {
   facebookCaption: string | null;
   shopifyTitle: string | null;
   whatsappCatalogueTitle: string | null;
+  sizeInventory?: Record<string, number> | null;
 }
 
 /**

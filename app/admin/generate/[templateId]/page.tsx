@@ -208,6 +208,9 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const [selectedPoses, setSelectedPoses] = useState<Set<string>>(new Set());
   const [genStatus, setGenStatus] = useState<string | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
+  const [exportingGooglePhotos, setExportingGooglePhotos] = useState(false);
+  const [googlePhotosSuccess, setGooglePhotosSuccess] = useState<{ albumTitle: string; albumUrl?: string; photosUploaded: number } | null>(null);
+  const [googlePhotosError, setGooglePhotosError] = useState<string | null>(null);
 
   // Collage Creator Modal State
   const [showCollageModal, setShowCollageModal] = useState(false);
@@ -909,6 +912,75 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       URL.revokeObjectURL(a.href);
     } catch {
       window.open(url, '_blank');
+    }
+  };
+
+  // Export all generated images to both Cloudflare R2 and Google Photos in an album titled as Code1
+  const handleExportToGooglePhotos = async () => {
+    const validImages = Object.entries(generatedImages)
+      .filter(([, data]) => Boolean(data?.imageUrl))
+      .map(([poseId, data], idx) => {
+        const pose = template?.poses.find(p => p.id === poseId || poseId.startsWith(`${p.id}_`));
+        return {
+          imageUrl: data.imageUrl,
+          filename: `${stockCode || productName || 'product'}_${pose?.name?.toLowerCase().replace(/\s+/g, '_') || `pose_${idx + 1}`}.jpg`,
+          description: `${productName} (${stockCode}) - ${pose?.name || 'Model Pose'}`,
+        };
+      });
+
+    if (validImages.length === 0) {
+      alert('No generated images available to export.');
+      return;
+    }
+
+    // Product album name: strictly code1 (or stockCode / productName as fallback)
+    const albumTitle = product?.code1 || stockCode || productName || 'Product';
+
+    setExportingGooglePhotos(true);
+    setGooglePhotosError(null);
+    setGooglePhotosSuccess(null);
+
+    try {
+      // Check for cached GIS token in sessionStorage if session token isn't present
+      let clientToken: string | undefined = undefined;
+      if (typeof window !== 'undefined') {
+        const cached = sessionStorage.getItem('gphotos_token');
+        const exp = sessionStorage.getItem('gphotos_token_exp');
+        if (cached && exp && Date.now() < Number(exp)) {
+          clientToken = cached;
+        }
+      }
+
+      const res = await fetch('/api/google/photos/export-album', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: clientToken,
+          albumTitle,
+          productId: productId || undefined,
+          images: validImages,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (data.needsAuth) {
+          throw new Error('Google Photos access is required. Please re-authenticate with Google or check your permissions.');
+        }
+        throw new Error(data.error || 'Failed to export to Google Photos');
+      }
+
+      setGooglePhotosSuccess({
+        albumTitle: data.albumTitle || albumTitle,
+        albumUrl: data.albumUrl,
+        photosUploaded: data.photosUploaded || validImages.length,
+      });
+    } catch (err: any) {
+      console.error('Google Photos export failed:', err);
+      setGooglePhotosError(err?.message || 'Failed to export to Google Photos');
+    } finally {
+      setExportingGooglePhotos(false);
     }
   };
 
@@ -1935,7 +2007,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               {Object.keys(generatedImages).length} of {template.poses.length} poses generated successfully.
             </p>
 
-            <div className="mt-8 flex flex-col sm:flex-row justify-center gap-4">
+            <div className="mt-8 flex flex-col sm:flex-row justify-center items-center gap-4 flex-wrap">
               <Button
                 onClick={() => {
                   Object.entries(generatedImages).forEach(([poseId, data]) => {
@@ -1948,6 +2020,23 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                 <Download className="w-4 h-4" /> Download All HD Images
               </Button>
 
+              <Button
+                onClick={handleExportToGooglePhotos}
+                loading={exportingGooglePhotos}
+                disabled={exportingGooglePhotos || Object.keys(generatedImages).length === 0}
+                size="lg"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-md flex items-center gap-2"
+                title={`Save all generated images to Cloudflare R2 and Google Photos in album "${product?.code1 || stockCode || 'Code1'}"`}
+              >
+                <svg viewBox="0 0 24 24" className="w-4 h-4 shrink-0 fill-current">
+                  <path fill="#EA4335" d="M12 2a5 5 0 0 0-5 5v5h5a5 5 0 0 0 0-10z" />
+                  <path fill="#4285F4" d="M2 12a5 5 0 0 0 5 5h5v-5a5 5 0 0 0-10 0z" />
+                  <path fill="#FBBC04" d="M22 12a5 5 0 0 0-5-5h-5v5a5 5 0 0 0 10 0z" />
+                  <path fill="#34A853" d="M12 22a5 5 0 0 0 5-5v-5h-5a5 5 0 0 0 0 10z" />
+                </svg>
+                <span>Save to Google Photos & R2 (Album: {product?.code1 || stockCode || 'Code1'})</span>
+              </Button>
+
               {collageImagesList.length >= 2 && (
                 <Button
                   onClick={() => setShowCollageModal(true)}
@@ -1958,6 +2047,41 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                 </Button>
               )}
             </div>
+
+            {/* Google Photos Export Feedback */}
+            {googlePhotosSuccess && (
+              <div className="mt-6 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm max-w-lg mx-auto flex items-center justify-between gap-3 animate-fade-in">
+                <div className="flex items-center gap-2 text-left">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <div>
+                    <p className="font-bold">Saved to Google Photos & Cloudflare R2!</p>
+                    <p className="text-xs text-emerald-700">
+                      Album: <span className="font-semibold underline">{googlePhotosSuccess.albumTitle}</span> ({googlePhotosSuccess.photosUploaded} photos)
+                    </p>
+                  </div>
+                </div>
+                {googlePhotosSuccess.albumUrl && (
+                  <a
+                    href={googlePhotosSuccess.albumUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-bold text-xs hover:bg-emerald-700 transition-colors whitespace-nowrap"
+                  >
+                    View Album ↗
+                  </a>
+                )}
+              </div>
+            )}
+
+            {googlePhotosError && (
+              <div className="mt-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm max-w-lg mx-auto flex items-center gap-2 animate-fade-in text-left">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                <div>
+                  <p className="font-bold">Sync Failed</p>
+                  <p className="text-xs text-rose-700">{googlePhotosError}</p>
+                </div>
+              </div>
+            )}
           </Card>
 
           {/* Gallery Grid */}

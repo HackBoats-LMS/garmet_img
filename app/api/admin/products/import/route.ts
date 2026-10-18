@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import * as XLSX from 'xlsx';
 import { parseSheetSmart, mapSpreadsheetRow, MappedProduct } from '@/lib/spreadsheet-mapper';
+import { addOrUpdateSizeStock, consolidateSpreadsheetRows, normalizeSizeInventory, sumSizeInventory } from '@/lib/size-inventory';
 
 // POST /api/admin/products/import
 export async function POST(req: NextRequest) {
@@ -49,11 +50,14 @@ export async function POST(req: NextRequest) {
       items = rawRows.map(mapSpreadsheetRow);
     }
 
+    // Consolidate rows sharing same Code1 / Product with different sizes & quantities
+    const consolidatedItems = consolidateSpreadsheetRows(items);
+
     // Filter valid items
     const validItems: MappedProduct[] = [];
     let skipped = 0;
 
-    for (const item of items) {
+    for (const item of consolidatedItems) {
       if (!item.stockCode || item.stockCode === '0' || item.stockCode === '-') {
         skipped++;
       } else {
@@ -103,7 +107,7 @@ export async function POST(req: NextRequest) {
           ...(code1s.length > 0 ? [{ code1: { in: code1s } }] : [])
         ]
       },
-      select: { id: true, stockCode: true, code1: true, designGroupId: true }
+      select: { id: true, stockCode: true, code1: true, designGroupId: true, quantity: true, sizeInventory: true, length_Size: true }
     });
 
     const existingById = new Map<string, typeof existingProducts[0]>();
@@ -163,6 +167,51 @@ export async function POST(req: NextRequest) {
                        existingByStock.get(stockCode) ||
                        (item.code1 ? existingByCode1.get(item.code1) : null);
 
+      const itemSizeInventory = item.sizeInventory && typeof item.sizeInventory === 'object' ? item.sizeInventory : null;
+      const itemSize = item.length_Size ? String(item.length_Size).trim() : null;
+      let finalSizeInventory: any = itemSizeInventory;
+      let finalQuantity = item.quantity;
+      let finalLengthSize = item.length_Size;
+
+      if (existing) {
+        // Sync or merge incoming sizes into existing product's sizeInventory
+        const existingInv = normalizeSizeInventory(existing.sizeInventory);
+        if (itemSizeInventory) {
+          const merged: Record<string, any> = { ...existingInv };
+          for (const [sKey, sVal] of Object.entries(itemSizeInventory)) {
+            const incomingQty = typeof sVal === 'number' ? sVal : (sVal as any)?.quantity || 0;
+            const incomingStockCode = typeof sVal === 'object' ? (sVal as any)?.stockCode : null;
+            const currentItem = merged[sKey] || { quantity: 0, stockCode: null };
+            // Set quantity to incoming sheet quantity (or keep current if incoming is 0), and map stockCode
+            merged[sKey] = {
+              quantity: incomingQty > 0 ? incomingQty : (currentItem.quantity || 0),
+              stockCode: incomingStockCode || currentItem.stockCode || null,
+            };
+          }
+          finalSizeInventory = merged;
+          finalQuantity = sumSizeInventory(merged);
+          finalLengthSize = Object.keys(merged).filter(k => (merged[k]?.quantity ?? 0) > 0).join(', ') || item.length_Size;
+        } else if (itemSize && itemSize !== '-') {
+          const added = addOrUpdateSizeStock(existing.sizeInventory, itemSize, item.quantity, item.stockCode);
+          finalSizeInventory = added.sizeInventory;
+          finalQuantity = added.totalQuantity;
+          const activeSizes = Object.keys(finalSizeInventory).filter(s => (finalSizeInventory[s]?.quantity ?? 0) > 0).join(', ');
+          finalLengthSize = activeSizes || existing.length_Size || itemSize;
+        } else {
+          finalSizeInventory = existing.sizeInventory;
+          finalQuantity = item.quantity;
+        }
+      } else {
+        if (!finalSizeInventory && itemSize && itemSize !== '-') {
+          finalSizeInventory = {
+            [itemSize.toUpperCase()]: {
+              quantity: item.quantity,
+              stockCode: item.stockCode || null,
+            }
+          };
+        }
+      }
+
       const productPayload = {
         productName: item.productName || `Product ${stockCode}`,
         productDescription: item.productDescription,
@@ -173,7 +222,8 @@ export async function POST(req: NextRequest) {
         dealerPrice: item.dealerPrice,
         code1: item.code1,
         productCode: item.productCode,
-        length_Size: item.length_Size,
+        length_Size: finalLengthSize,
+        sizeInventory: finalSizeInventory,
         location: item.location,
         embroideryType: item.embroideryType,
         cutStyle: item.cutStyle,
@@ -186,7 +236,7 @@ export async function POST(req: NextRequest) {
         facebookCaption: item.facebookCaption,
         shopifyTitle: item.shopifyTitle,
         whatsappCatalogueTitle: item.whatsappCatalogueTitle,
-        quantity: item.quantity,
+        quantity: finalQuantity,
         designGroupId,
       };
 

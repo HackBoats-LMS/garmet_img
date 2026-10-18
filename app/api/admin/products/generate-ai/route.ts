@@ -104,9 +104,15 @@ export async function POST(req: NextRequest) {
       stockCode = '',
       designNumber = '',
       price = '',
+      retailPrice = '',
+      unitPrice = '',
       wholesalePrice = '',
       description = '',
     } = body;
+
+    // Resolve prices cleanly
+    const finalRetailPrice = retailPrice || price || '';
+    const finalWholesalePrice = wholesalePrice || '';
 
     // Pick best image URL
     const activeImageUrl = imageUrl || (Array.isArray(images) && images.length > 0 ? images[0] : null);
@@ -211,15 +217,21 @@ PRODUCT DETAILS GIVEN:
 - Kurta Length / Pant Style: ${kurtaLength || ''} ${pantStyle || ''}
 - Stock Code / Barcode: ${stockCode || ''}
 - Design Number: ${designNumber || ''}
-- Retail Price: ${price ? `₹${price}` : 'Available on request'}
-- Dealer / Wholesale Price: ${wholesalePrice ? `₹${wholesalePrice}` : ''}
+- Retail Price (B2C Customers): ${finalRetailPrice ? `₹${finalRetailPrice}` : 'Available on request'}
+- Dealer / Wholesale Price (B2B Only): ${finalWholesalePrice ? `₹${finalWholesalePrice}` : 'Available on request'}
 - Existing Notes: ${description || ''}
+
+PRICING RULES FOR EACH CAPTION (VERY IMPORTANT):
+1. "whatsappRetail": MUST use the Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : 'Price on request'}). NEVER mention wholesale or dealer price here under any circumstances.
+2. "whatsappWholesale": MUST use the Dealer/Wholesale Price (${finalWholesalePrice ? `₹${finalWholesalePrice}` : 'Price on inquiry'}). If retail price is also mentioned, clearly distinguish: e.g. "Wholesale: ₹${finalWholesalePrice} | Suggested Retail/MRP: ₹${finalRetailPrice}".
+3. "whatsappCatalogueTitle": Mention Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : ''}) if including price.
+4. "instagramCaption", "facebookCaption", "shopifyTitle": Use Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : ''}) if including price, NEVER wholesale price.
 
 ${targetPlatform ? `TASK: Generate ONLY the caption for the platform: "${targetPlatform}". Return a JSON object with this single key.` : `TASK: Generate all platform captions for this product. Return your answer ONLY as a valid JSON object with the following exact keys:`}
 {
-  "whatsappRetail": "WhatsApp broadcast message for retail customers (warm, personal, boutique feel, 2-3 emojis, details product & price, ends with 'The best 4 minutes of your day. R.G.J.Dass · Sindhi Colony, Secunderabad')",
-  "whatsappWholesale": "WhatsApp message for B2B wholesale buyers/store owners (professional, design code, fabric/print, 4-colour pack, dealer price, margin info, direct dispatch from Secunderabad warehouse)",
-  "whatsappCatalogueTitle": "Short catalogue listing title + 2-3 line searchable description",
+  "whatsappRetail": "WhatsApp broadcast message for retail customers (warm, personal, boutique feel, 2-3 emojis, details product & retail price (₹${finalRetailPrice || 'on request'}), ends with 'The best 4 minutes of your day. R.G.J.Dass · Sindhi Colony, Secunderabad')",
+  "whatsappWholesale": "WhatsApp message for B2B wholesale buyers/store owners (professional, design code, fabric/print, 4-colour pack, dealer price (₹${finalWholesalePrice || 'on inquiry'}), margin info, direct dispatch from Secunderabad warehouse)",
+  "whatsappCatalogueTitle": "Short catalogue listing title + 2-3 line searchable description with retail price",
   "instagramCaption": "Engaging Instagram caption with a stop-scroll hook for our ICPs, quiet confident storytelling, 3-4 tasteful emojis, and 15-20 curated hashtags",
   "facebookCaption": "Community-focused Facebook post highlighting 75 years of textile craft in Secunderabad, everyday wearability, engaging question, and store visit/order info",
   "shopifyTitle": "SEO-optimised Shopify title and 3-paragraph product description (The Morning Drape, Fabric & Motifs, Occasion Styling & Specs)"
