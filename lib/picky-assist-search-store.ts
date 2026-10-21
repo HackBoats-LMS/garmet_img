@@ -12,7 +12,10 @@ export interface RecordedSearchResponse {
   summary: string;
 }
 
-const SEARCH_RESPONSES_FILE = path.join(process.cwd(), 'app', 'api', 'admin', 'picky-test', 'search-responses.json');
+const IS_SERVERLESS = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const SEARCH_RESPONSES_FILE = IS_SERVERLESS
+  ? path.join('/tmp', 'picky-assist-search-responses.json')
+  : path.join(process.cwd(), 'app', 'api', 'admin', 'picky-test', 'search-responses.json');
 
 // Global event emitter for asynchronous waiting
 declare global {

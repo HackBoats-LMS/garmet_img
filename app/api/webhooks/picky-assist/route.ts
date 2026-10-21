@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parsePickyAssistWebhookBody, processPickyAssistOrder } from '@/lib/picky-assist-orders';
-import { saveRequest, RecordedRequest } from '@/app/api/admin/picky-test/logStore';
+import { saveRequest, RecordedRequest } from '@/lib/picky-assist-logger';
 
 export async function POST(req: NextRequest) {
   return handleWebhook(req);

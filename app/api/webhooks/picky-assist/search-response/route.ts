@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parsePickyAssistWebhookBody } from '@/lib/picky-assist-orders';
 import { saveSearchResponse } from '@/lib/picky-assist-search-store';
-import { saveRequest, RecordedRequest } from '@/app/api/admin/picky-test/logStore';
+import { saveRequest, RecordedRequest } from '@/lib/picky-assist-logger';
 
 export async function POST(req: NextRequest) {
   return handleSearchCallback(req);
