@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
       seed = 42,
       steps = 30,
       aspectRatio = '3:4',
+      productId,
     } = body;
 
     const userId = reqUserId || (session?.user as any)?.id || 'anonymous_user';
@@ -284,56 +285,100 @@ export async function POST(req: NextRequest) {
 
     // 3. Build Kie.ai request body
 
-    // Helper function to upload to ImgBB (Free anonymous hosting for Kie.ai to read)
-    const uploadToImgBB = async (base64Data: string, apiKey: string) => {
-      // Remove the prefix to just get the raw base64 string
-      const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
-      const params = new URLSearchParams();
-      params.append('image', cleanBase64);
-      // Set expiration to 24 hours (86400 seconds) so images don't delete while Kie.ai is still queuing
-      params.append('expiration', '86400');
+    // Helper function to upload reference images to Kie.ai's native temporary storage (with R2 fallback)
+    const uploadReferenceImageToKie = async (base64Data: string, apiKey: string): Promise<string> => {
+      // 1. Primary: Kie.ai Native Temporary Stream Upload (auto-deleted after 3 days by Kie.ai)
+      try {
+        const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+        const mimeMatch = base64Data.match(/^data:(image\/\w+);base64,/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const ext = mimeType.split('/')[1] || 'jpg';
+        const buffer = Buffer.from(cleanBase64, 'base64');
 
-      const res = await fetch(`https://api.imgbb.com/1/upload?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: params,
-      });
+        const formData = new FormData();
+        formData.append('file', new Blob([buffer], { type: mimeType }), `ref_${Date.now()}.${ext}`);
+        formData.append('uploadPath', 'images/user-uploads');
+        formData.append('fileName', `ref_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`);
 
-      if (!res.ok) {
-        throw new Error(`ImgBB upload failed: ${await res.text()}`);
+        const res = await fetch('https://kieai.redpandaai.co/api/file-stream-upload', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: formData,
+        });
+
+        if (res.ok) {
+          const resData = await res.json();
+          const downloadUrl = resData?.data?.downloadUrl || resData?.downloadUrl;
+          if (downloadUrl) {
+            return downloadUrl;
+          }
+        }
+        console.warn(`[Kie.ai] Native stream upload returned status ${res.status}, falling back to R2...`);
+      } catch (nativeErr: any) {
+        console.warn(`[Kie.ai] Native stream upload failed:`, nativeErr?.message);
       }
 
-      const data = await res.json();
-      return data.data.url; // Returns a direct .jpg/.png URL
+      // 2. Fallback: Cloudflare R2 Temporary Storage
+      if (isStorageConfigured()) {
+        try {
+          const uploaded = await uploadToStorage(base64Data, {
+            folder: 'temp-reference-inputs',
+            publicId: `ref_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          });
+          if (uploaded.url) {
+            return uploaded.url;
+          }
+        } catch (r2Err: any) {
+          console.warn('[Storage] R2 fallback upload failed:', r2Err?.message);
+        }
+      }
+
+      // 3. Fallback: ImgBB (only if IMGBB_API_KEY configured and previous methods failed)
+      const imgbbKey = process.env.IMGBB_API_KEY;
+      if (imgbbKey) {
+        try {
+          const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+          const params = new URLSearchParams();
+          params.append('image', cleanBase64);
+          params.append('expiration', '86400');
+          const res = await fetch(`https://api.imgbb.com/1/upload?key=${imgbbKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params,
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.data?.url) return data.data.url;
+          }
+        } catch (imgbbErr: any) {
+          console.warn('[ImgBB] Fallback failed:', imgbbErr?.message);
+        }
+      }
+
+      throw new Error('Failed to upload reference image to temporary hosting (Kie.ai native upload failed).');
     };
 
     let inputUrls: string[] = [];
     if (geminiImageParts.length > 0) {
-      const imgbbKey = process.env.IMGBB_API_KEY;
-      if (!imgbbKey) {
-        return NextResponse.json(
-          { error: 'IMGBB_API_KEY is not configured in environment variables. Please add it to your .env file.' },
-          { status: 500 }
-        );
-      }
-
       for (let i = 0; i < geminiImageParts.length; i++) {
         const part = geminiImageParts[i];
         const dataUrl = `data:${part.inline_data.mime_type};base64,${part.inline_data.data}`;
 
         try {
-          console.log(`[Kie.ai] Uploading reference image ${i + 1} to ImgBB for temporary hosting...`);
-          const imgUrl = await uploadToImgBB(dataUrl, imgbbKey);
+          console.log(`[Kie.ai] Uploading reference image ${i + 1} to Kie.ai native temporary hosting...`);
+          const imgUrl = await uploadReferenceImageToKie(dataUrl, kieApiKeyBearer);
           inputUrls.push(imgUrl);
-        } catch (err) {
-          console.error(`[Kie.ai] Failed to upload image ${i + 1} to ImgBB:`, err);
+        } catch (err: any) {
+          console.error(`[Kie.ai] Failed to upload image ${i + 1}:`, err);
           return NextResponse.json(
-            { error: `Failed to upload image to ImgBB. Check your API key. Error: ${err}` },
+            { error: `Failed to upload reference image for AI photoshoot: ${err?.message || err}` },
             { status: 500 }
           );
         }
       }
-      console.log(`[Kie.ai] Successfully uploaded ${inputUrls.length} images to ImgBB`);
+      console.log(`[Kie.ai] Successfully uploaded ${inputUrls.length} reference images to temporary hosting`);
     }
 
     // Determine model — prefer image-to-image when we have input images, else text-to-image
@@ -557,6 +602,7 @@ export async function POST(req: NextRequest) {
             uploadedImages,
             selectedModelId,
             selectedOptions,
+            productId: productId || null,
           });
 
           return NextResponse.json({
@@ -640,6 +686,7 @@ async function saveGeneratedOrder(params: {
   uploadedImages?: any;
   selectedModelId?: string;
   selectedOptions?: any;
+  productId?: string | null;
 }) {
   const {
     userId,
@@ -654,6 +701,7 @@ async function saveGeneratedOrder(params: {
     uploadedImages,
     selectedModelId,
     selectedOptions,
+    productId,
   } = params;
 
   if (userId && userId !== 'anonymous_user' && templateId) {
@@ -686,23 +734,54 @@ async function saveGeneratedOrder(params: {
         });
         console.log(`[DB AutoSave] Updated CustomerOrder ${activeOrderId} with pose ${currentPoseKey}`);
         
-        // Auto-link to Product inventory
-        if (stockCode) {
-          const product = await prisma.product.findFirst({
-            where: { OR: [{ stockCode }, { code1: stockCode }] },
-          });
-          if (product) {
-            const firstImage = Object.values(updatedGenImages as Record<string, {imageUrl: string}>)[0];
-            await prisma.product.update({
-              where: { id: product.id },
-              data: {
-                generatedImages: updatedGenImages as any,
-                linkedOrderId: activeOrderId,
-                coverImageUrl: firstImage?.imageUrl || product.coverImageUrl,
-              },
-            });
-            console.log(`[DB AutoSave] Synced CustomerOrder ${activeOrderId} to Product ${product.id}`);
+        // Auto-link to Product inventory: strictly match by productId if provided, or stockCode if not
+        const targetProduct = productId
+          ? await prisma.product.findUnique({ where: { id: productId } })
+          : (stockCode ? await prisma.product.findFirst({ where: { OR: [{ stockCode }, { code1: stockCode }] } }) : null);
+
+        if (targetProduct) {
+          const existingProductGen = (targetProduct.generatedImages as Record<string, any>) || {};
+          const currentCount = Object.keys(existingProductGen).length;
+
+          // Assign sequential order indices to newly generated images to guarantee order
+          const orderedNewImages: Record<string, any> = {};
+          let newIdx = 0;
+          for (const [k, v] of Object.entries(updatedGenImages)) {
+            if (!existingProductGen[k]) {
+              orderedNewImages[k] = { ...(v as any), order: currentCount + newIdx };
+              newIdx++;
+            } else {
+              orderedNewImages[k] = { ...(existingProductGen[k] as any), ...(v as any) };
+            }
           }
+
+          const mergedGen = {
+            ...existingProductGen,
+            ...orderedNewImages,
+          };
+
+          const sortedList = Object.entries(mergedGen)
+            .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
+            .map(([, img]: any) => img);
+          const firstImage = sortedList[0];
+
+          // Auto-cover logic: keep current cover ONLY if it is a valid non-tempfile URL already in catalogue
+          const currentCover = targetProduct.coverImageUrl;
+          const hasValidCoverInCatalogue = currentCover &&
+            !currentCover.includes('tempfile') &&
+            Object.values(existingProductGen).some((img: any) => img.imageUrl === currentCover);
+
+          const finalCover = hasValidCoverInCatalogue ? currentCover : (firstImage?.imageUrl || currentCover);
+
+          await prisma.product.update({
+            where: { id: targetProduct.id },
+            data: {
+              generatedImages: mergedGen as any,
+              linkedOrderId: activeOrderId,
+              coverImageUrl: finalCover,
+            },
+          });
+          console.log(`[DB AutoSave] Synced CustomerOrder ${activeOrderId} to Product ${targetProduct.id}`);
         }
       } else {
         await prisma.customerOrder.create({
@@ -722,23 +801,52 @@ async function saveGeneratedOrder(params: {
         });
         console.log(`[DB AutoSave] Created CustomerOrder ${activeOrderId} with pose ${currentPoseKey}`);
         
-        // Auto-link to Product inventory
-        if (stockCode) {
-          const product = await prisma.product.findFirst({
-            where: { OR: [{ stockCode }, { code1: stockCode }] },
-          });
-          if (product) {
-            const firstImage = Object.values(updatedGenImages as Record<string, {imageUrl: string}>)[0];
-            await prisma.product.update({
-              where: { id: product.id },
-              data: {
-                generatedImages: updatedGenImages as any,
-                linkedOrderId: activeOrderId,
-                coverImageUrl: firstImage?.imageUrl || product.coverImageUrl,
-              },
-            });
-            console.log(`[DB AutoSave] Synced CustomerOrder ${activeOrderId} to Product ${product.id}`);
+        // Auto-link to Product inventory: strictly match by productId if provided, or stockCode if not
+        const targetProduct = productId
+          ? await prisma.product.findUnique({ where: { id: productId } })
+          : (stockCode ? await prisma.product.findFirst({ where: { OR: [{ stockCode }, { code1: stockCode }] } }) : null);
+
+        if (targetProduct) {
+          const existingProductGen = (targetProduct.generatedImages as Record<string, any>) || {};
+          const currentCount = Object.keys(existingProductGen).length;
+
+          const orderedNewImages: Record<string, any> = {};
+          let newIdx = 0;
+          for (const [k, v] of Object.entries(updatedGenImages)) {
+            if (!existingProductGen[k]) {
+              orderedNewImages[k] = { ...(v as any), order: currentCount + newIdx };
+              newIdx++;
+            } else {
+              orderedNewImages[k] = { ...(existingProductGen[k] as any), ...(v as any) };
+            }
           }
+
+          const mergedGen = {
+            ...existingProductGen,
+            ...orderedNewImages,
+          };
+
+          const sortedList = Object.entries(mergedGen)
+            .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
+            .map(([, img]: any) => img);
+          const firstImage = sortedList[0];
+
+          const currentCover = targetProduct.coverImageUrl;
+          const hasValidCoverInCatalogue = currentCover &&
+            !currentCover.includes('tempfile') &&
+            Object.values(existingProductGen).some((img: any) => img.imageUrl === currentCover);
+
+          const finalCover = hasValidCoverInCatalogue ? currentCover : (firstImage?.imageUrl || currentCover);
+
+          await prisma.product.update({
+            where: { id: targetProduct.id },
+            data: {
+              generatedImages: mergedGen as any,
+              linkedOrderId: activeOrderId,
+              coverImageUrl: finalCover,
+            },
+          });
+          console.log(`[DB AutoSave] Synced CustomerOrder ${activeOrderId} to Product ${targetProduct.id}`);
         }
       }
     } catch (dbErr) {

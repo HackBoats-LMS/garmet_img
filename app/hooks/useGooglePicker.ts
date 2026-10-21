@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useSession } from 'next-auth/react';
 
 export function useGooglePicker(onFileSelect: (file: File, previewUrl: string) => void) {
+  const { data: session } = useSession();
   const [isScriptLoaded, setIsScriptLoaded] = useState(false);
 
   useEffect(() => {
@@ -40,6 +42,14 @@ export function useGooglePicker(onFileSelect: (file: File, previewUrl: string) =
       return;
     }
 
+    // 1. Direct use from Google login session
+    const sessionToken = (session?.user as any)?.accessToken;
+    if (sessionToken) {
+      createPicker(sessionToken);
+      return;
+    }
+
+    // 2. Fallback to GIS
     const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: 'https://www.googleapis.com/auth/drive.readonly',
@@ -51,7 +61,7 @@ export function useGooglePicker(onFileSelect: (file: File, previewUrl: string) =
       },
     });
 
-    tokenClient.requestAccessToken({ prompt: 'consent' });
+    tokenClient.requestAccessToken({ prompt: '' });
 
     function createPicker(accessToken: string) {
       // View for Google Drive Images

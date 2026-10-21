@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       id,
+      productId,
       userId,
       templateId,
       productName,
@@ -82,11 +83,11 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Auto-link: if order has stockCode + generatedImages, attach to Product
-      if (stockCode && generatedImages && Object.keys(generatedImages).length > 0) {
-        const product = await prisma.product.findFirst({
-          where: { OR: [{ stockCode }, { code1: stockCode }] },
-        });
+      // Auto-link: if order has (productId or stockCode) + generatedImages, attach to Product
+      if ((productId || stockCode) && generatedImages && Object.keys(generatedImages).length > 0) {
+        const product = productId
+          ? await prisma.product.findUnique({ where: { id: productId } })
+          : (stockCode ? await prisma.product.findFirst({ where: { OR: [{ stockCode }, { code1: stockCode }] } }) : null);
         if (product) {
           const firstImage = Object.values(generatedImages as Record<string, {imageUrl: string}>)[0];
           const existingImages = (product.generatedImages as Record<string, any>) || {};
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest) {
               generatedImages: mergedImages as any,
               linkedOrderId: id,
               aspectRatio: aspectRatio || product.aspectRatio,
-              coverImageUrl: firstImage?.imageUrl || product.coverImageUrl,
+              coverImageUrl: product.coverImageUrl || firstImage?.imageUrl,
               captions: captions ? captions as any : product.captions,
             },
           });
@@ -125,6 +126,30 @@ export async function POST(req: NextRequest) {
         status: status || 'draft',
       },
     });
+
+    // Auto-link for newly created order
+    if ((productId || stockCode) && generatedImages && Object.keys(generatedImages).length > 0) {
+      const product = productId
+        ? await prisma.product.findUnique({ where: { id: productId } })
+        : (stockCode ? await prisma.product.findFirst({ where: { OR: [{ stockCode }, { code1: stockCode }] } }) : null);
+      if (product) {
+        const firstImage = Object.values(generatedImages as Record<string, {imageUrl: string}>)[0];
+        const existingImages = (product.generatedImages as Record<string, any>) || {};
+        const newImages = (generatedImages as Record<string, any>) || {};
+        const mergedImages = { ...existingImages, ...newImages };
+
+        await prisma.product.update({
+          where: { id: product.id },
+          data: {
+            generatedImages: mergedImages as any,
+            linkedOrderId: order.id,
+            aspectRatio: aspectRatio || product.aspectRatio,
+            coverImageUrl: product.coverImageUrl || firstImage?.imageUrl,
+            captions: captions ? captions as any : product.captions,
+          },
+        });
+      }
+    }
 
     return NextResponse.json({ order }, { status: 201 });
   } catch (error: any) {

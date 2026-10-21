@@ -58,7 +58,30 @@ export async function GET(req: NextRequest) {
       prisma.product.count({ where }),
     ]);
 
-    return NextResponse.json({ products, total, page, limit });
+    const formattedProducts = products.map((p) => {
+      const genObj = (p.generatedImages as Record<string, any>) || {};
+      const sortedGenList = Object.entries(genObj)
+        .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
+        .map(([, img]: any) => img.imageUrl)
+        .filter(Boolean);
+
+      let cover = p.coverImageUrl;
+      if ((!cover || cover.includes('tempfile')) && sortedGenList.length > 0) {
+        cover = sortedGenList[0];
+      }
+
+      return {
+        ...p,
+        title: p.productName,
+        friendlyCode: p.code1,
+        price: p.retailPrice ?? p.unitPrice,
+        mrp: p.retailPrice,
+        wholesalePrice: p.dealerPrice,
+        coverImageUrl: cover,
+      };
+    });
+
+    return NextResponse.json({ products: formattedProducts, total, page, limit });
   } catch (error: any) {
     console.error('[Admin Products GET]', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -78,13 +101,14 @@ export async function POST(req: NextRequest) {
       stockCode, friendlyCode, title, description,
       color, tags, categoryId, subCategoryId, clothType,
       price, mrp, wholesalePrice, quantity, status,
-      referenceImages, coverImageUrl,
+      referenceImages, generatedImages, coverImageUrl,
       captions, websiteCopy, websiteProductId,
       // XLSX-mapped fields
       designNumber, size, location, embroideryType, cutStyle,
       border, kurtaLength, pantStyle,
       whatsappRetail, whatsappWholesale,
       instagramCaption, facebookCaption, shopifyTitle, whatsappCatalogueTitle,
+      sizeInventory,
       // Custom columns
       customFields,
     } = body;
@@ -117,6 +141,7 @@ export async function POST(req: NextRequest) {
         quantity: quantity ? parseInt(quantity) : 0,
         status: status || 'ACTIVE',
         referenceImages: referenceImages || null,
+        generatedImages: generatedImages || null,
         coverImageUrl: coverImageUrl || null,
         captions: captions || null,
         websiteCopy: websiteCopy || null,
@@ -124,6 +149,7 @@ export async function POST(req: NextRequest) {
         // XLSX fields
         productCode: designNumber || null,
         length_Size: size || null,
+        sizeInventory: sizeInventory || null,
         location: location || null,
         embroideryType: embroideryType || null,
         cutStyle: cutStyle || null,

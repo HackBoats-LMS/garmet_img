@@ -5,6 +5,35 @@ import { uploadGeneratedAsset, isStorageConfigured } from '@/lib/storage';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
+async function syncCompletedImageToProduct(
+  productId: string | null,
+  orderId: string,
+  poseId: string,
+  permanentUrl: string
+) {
+  if (!productId) return;
+  try {
+    const existingProduct = await prisma.product.findUnique({ where: { id: productId } });
+    if (existingProduct) {
+      const currentGen = (existingProduct.generatedImages as Record<string, any>) || {};
+      const keyExists = currentGen[poseId] && currentGen[poseId].imageUrl !== permanentUrl;
+      const finalPoseKey = keyExists ? `${poseId}_${Date.now()}` : poseId;
+      await prisma.product.update({
+        where: { id: productId },
+        data: {
+          generatedImages: {
+            ...currentGen,
+            [finalPoseKey]: { imageUrl: permanentUrl, generatedAt: new Date().toISOString() },
+          },
+          linkedOrderId: orderId !== 'order' ? orderId : existingProduct.linkedOrderId,
+        },
+      });
+    }
+  } catch (productDbErr) {
+    console.error('[task-status Product DB save error]:', productDbErr);
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -156,26 +185,7 @@ export async function GET(req: NextRequest) {
               }
             }
 
-            if (productId) {
-              try {
-                const existingProduct = await prisma.product.findUnique({ where: { id: productId } });
-                if (existingProduct) {
-                  const currentGen = (existingProduct.generatedImages as any) || {};
-                  await prisma.product.update({
-                    where: { id: productId },
-                    data: {
-                      generatedImages: {
-                        ...currentGen,
-                        [poseId]: { imageUrl: permanentUrl, generatedAt: new Date().toISOString() },
-                      },
-                      linkedOrderId: orderId !== 'order' ? orderId : existingProduct.linkedOrderId,
-                    }
-                  });
-                }
-              } catch (productDbErr) {
-                console.error('[task-status Product DB save error]:', productDbErr);
-              }
-            }
+            await syncCompletedImageToProduct(productId, orderId, poseId, permanentUrl);
 
             return NextResponse.json({ status: 'completed', imageUrl: permanentUrl, taskId, provider: 'kie-ai' });
           } else {
@@ -285,6 +295,8 @@ export async function GET(req: NextRequest) {
                     }
                   }
 
+                  await syncCompletedImageToProduct(productId, orderId, poseId, permanentUrl);
+
                   return NextResponse.json({ status: 'completed', imageUrl: permanentUrl, taskId, provider: 'segmind' });
                 }
               }
@@ -369,6 +381,8 @@ export async function GET(req: NextRequest) {
           console.error('[task-status DB save error]:', dbErr);
         }
       }
+
+      await syncCompletedImageToProduct(productId, orderId, poseId, permanentUrl);
 
       return NextResponse.json({ status: 'completed', imageUrl: permanentUrl, taskId, provider: 'piapi' });
     }

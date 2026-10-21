@@ -63,6 +63,8 @@ export async function GET(request: Request) {
         unitPrice: true,
         quantity: true,
         generatedImages: true,
+        length_Size: true,
+        sizeInventory: true,
       },
       take: limit > 1000 ? 1000 : limit, // Max limit 1000 per request
       skip: offset,
@@ -81,14 +83,23 @@ export async function GET(request: Request) {
       }
 
       const stableId = product.code1 || product.productCode || product.stockCode;
+      const sizeInv = (product.sizeInventory && typeof product.sizeInventory === 'object') ? product.sizeInventory as Record<string, number> : {};
+      const availableSizes = Object.entries(sizeInv)
+        .filter(([_, q]) => q > 0)
+        .map(([s]) => s);
+
+      const sizeDisplay = availableSizes.length > 0 ? availableSizes.join(', ') : (product.length_Size || 'Free Size');
 
       return {
         id: stableId,
         productName: product.whatsappCatalogueTitle || product.productName || 'Untitled Garment',
-        description: product.whatsappRetail || 'Premium Garment',
+        description: `${product.whatsappRetail || 'Premium Garment'}${sizeDisplay ? ` | Sizes: ${sizeDisplay}` : ''}`,
         availability: product.quantity > 0 ? 'in stock' : 'out of stock',
         condition: 'new',
         unitPrice: `${product.unitPrice || 0} INR`,
+        size: sizeDisplay,
+        size_inventory: sizeInv,
+        available_sizes: availableSizes,
         link: `https://your-store.com/product/${stableId}`,
         image_link: primaryImageUrl || 'https://your-store.com/placeholder.jpg',
         brand: 'rgjdass Couture',

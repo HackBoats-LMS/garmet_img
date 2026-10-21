@@ -6,7 +6,7 @@ import { useRouter, useSearchParams, useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
   ArrowLeft, ArrowRight, Upload, X, Sparkles, Download, Check, Camera, Layers,
-  Image as ImageIcon, RotateCw, RotateCcw, Maximize2, Eye, Info, ArrowLeftRight, ZoomIn, ZoomOut, CheckCircle2, AlertCircle, ArrowDown
+  Image as ImageIcon, RotateCw, RotateCcw, Maximize2, Eye, Info, ArrowLeftRight, ZoomIn, ZoomOut, CheckCircle2, AlertCircle, ArrowDown, Loader2
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Input, Textarea } from '@/app/components/ui/Input';
@@ -14,6 +14,8 @@ import { Card } from '@/app/components/ui/Card';
 import { Badge } from '@/app/components/ui/Badge';
 import { StepIndicator } from '@/app/components/ui/StepIndicator';
 import useDrivePicker from 'react-google-drive-picker';
+import { useGooglePhotosPicker } from '@/app/hooks/useGooglePhotosPicker';
+import { CollageCreator, CollageInputImage } from '@/app/components/CollageCreator';
 
 interface TemplateData {
   id: string;
@@ -49,7 +51,17 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const productId = searchParams.get('productId');
   const [product, setProduct] = useState<any>(null);
   useEffect(() => {
-    if (!productId) return;
+    // Reset photoshoot session order and state when productId changes
+    setOrderId(null);
+    setGeneratedImages({});
+    setUploadedImages({});
+    if (!productId) {
+      setProduct(null);
+      setProductName('');
+      setStockCode('');
+      setDescription('');
+      return;
+    }
     fetch('/api/admin/products/' + productId)
       .then(async r => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -57,13 +69,31 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         return text ? JSON.parse(text) : {};
       })
       .then(d => {
-      if (!d.product) return;
-      setProduct(d.product);
-      setProductName(d.product.productName || d.product.title || '');
-      setStockCode(d.product.code1 || d.product.stockCode || '');
-      setDescription(d.product.productDescription || d.product.description || '');
-    }).catch(console.error);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+        if (!d.product) return;
+        setProduct(d.product);
+        setProductName(d.product.productName || d.product.title || '');
+        setStockCode(d.product.code1 || d.product.stockCode || '');
+        setDescription(d.product.productDescription || d.product.description || '');
+        if (d.product.linkedOrderId) {
+          setOrderId(d.product.linkedOrderId);
+        }
+        if (d.product.generatedImages && typeof d.product.generatedImages === 'object') {
+          setGeneratedImages(d.product.generatedImages);
+        }
+        if (d.product.referenceImages && Array.isArray(d.product.referenceImages)) {
+          const restoredUploads: Record<string, string> = {};
+          d.product.referenceImages.forEach((img: any, idx: number) => {
+            if (img?.url) {
+              const slotKey = img.slotId || `slot_${idx}`;
+              restoredUploads[slotKey] = img.url;
+            }
+          });
+          if (Object.keys(restoredUploads).length > 0) {
+            setUploadedImages(restoredUploads);
+          }
+        }
+      }).catch(console.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId]);
 
   const [template, setTemplate] = useState<TemplateData | null>(null);
@@ -178,6 +208,24 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const [selectedPoses, setSelectedPoses] = useState<Set<string>>(new Set());
   const [genStatus, setGenStatus] = useState<string | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
+  const [exportingGooglePhotos, setExportingGooglePhotos] = useState(false);
+  const [googlePhotosSuccess, setGooglePhotosSuccess] = useState<{ albumTitle: string; albumUrl?: string; photosUploaded: number } | null>(null);
+  const [googlePhotosError, setGooglePhotosError] = useState<string | null>(null);
+
+  // Collage Creator Modal State
+  const [showCollageModal, setShowCollageModal] = useState(false);
+  const collageImagesList: CollageInputImage[] = React.useMemo(() => {
+    return Object.entries(generatedImages)
+      .filter(([, v]) => Boolean(v?.imageUrl))
+      .map(([k, v]) => {
+        const pose = template?.poses.find(p => p.id === k || k.startsWith(`${p.id}_`));
+        return {
+          id: k,
+          url: v.imageUrl,
+          poseName: pose?.name || k,
+        };
+      });
+  }, [generatedImages, template?.poses]);
 
   // Step: Image Format
   const [selectedAspectRatio, setSelectedAspectRatio] = useState<string>('3:4');
@@ -318,6 +366,45 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         }
       }
     });
+  };
+
+  const [activePhotosSlotId, setActivePhotosSlotId] = useState<string | null>(null);
+
+  const {
+    openPhotosPicker,
+    openAuthorizedPhotosWindow,
+    needsClickToOpen: photosNeedsClickToOpen,
+    isPicking: isPickingPhotos,
+    pickingStatus: photosPickingStatus,
+    cancelPicking: cancelPhotosPicking,
+  } = useGooglePhotosPicker({
+    maxItems: 1,
+    onPhotosSelected: async (photos) => {
+      if (!photos || photos.length === 0 || !activePhotosSlotId) return;
+      const p = photos[0];
+      try {
+        const arr = p.base64.split(',');
+        const mime = p.mimeType || arr[0]?.match(/:(.*?);/)?.[1] || 'image/jpeg';
+        const bstr = atob(arr[1] || arr[0]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        const file = new File([u8arr], p.filename || 'google_photo.jpg', { type: mime });
+        processImageFile(activePhotosSlotId, file);
+      } catch (convErr) {
+        console.warn('Failed to convert photo base64 to file', convErr);
+      }
+    },
+    onError: (err) => {
+      alert(err);
+    },
+  });
+
+  const handleOpenGooglePhotosPicker = (slotId: string) => {
+    setActivePhotosSlotId(slotId);
+    openPhotosPicker();
   };
   const [analyzingSwatch, setAnalyzingSwatch] = useState(false);
   const [swatchAnalysis, setSwatchAnalysis] = useState<{
@@ -692,6 +779,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           userId: (session?.user as any)?.id || 'customer',
           templateId: template.id,
           orderId: orderId || `order_${Date.now()}`,
+          productId: productId || null,
           poseId: pose.id,
           productName: productName || template.name,
           stockCode: stockCode || null,
@@ -789,6 +877,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: orderId,
+        productId: productId || undefined,
         userId,
         templateId: template.id,
         productName,
@@ -823,6 +912,75 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       URL.revokeObjectURL(a.href);
     } catch {
       window.open(url, '_blank');
+    }
+  };
+
+  // Export all generated images to both Cloudflare R2 and Google Photos in an album titled as Code1
+  const handleExportToGooglePhotos = async () => {
+    const validImages = Object.entries(generatedImages)
+      .filter(([, data]) => Boolean(data?.imageUrl))
+      .map(([poseId, data], idx) => {
+        const pose = template?.poses.find(p => p.id === poseId || poseId.startsWith(`${p.id}_`));
+        return {
+          imageUrl: data.imageUrl,
+          filename: `${stockCode || productName || 'product'}_${pose?.name?.toLowerCase().replace(/\s+/g, '_') || `pose_${idx + 1}`}.jpg`,
+          description: `${productName} (${stockCode}) - ${pose?.name || 'Model Pose'}`,
+        };
+      });
+
+    if (validImages.length === 0) {
+      alert('No generated images available to export.');
+      return;
+    }
+
+    // Product album name: strictly code1 (or stockCode / productName as fallback)
+    const albumTitle = product?.code1 || stockCode || productName || 'Product';
+
+    setExportingGooglePhotos(true);
+    setGooglePhotosError(null);
+    setGooglePhotosSuccess(null);
+
+    try {
+      // Check for cached GIS token in sessionStorage if session token isn't present
+      let clientToken: string | undefined = undefined;
+      if (typeof window !== 'undefined') {
+        const cached = sessionStorage.getItem('gphotos_token');
+        const exp = sessionStorage.getItem('gphotos_token_exp');
+        if (cached && exp && Date.now() < Number(exp)) {
+          clientToken = cached;
+        }
+      }
+
+      const res = await fetch('/api/google/photos/export-album', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: clientToken,
+          albumTitle,
+          productId: productId || undefined,
+          images: validImages,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (data.needsAuth) {
+          throw new Error('Google Photos access is required. Please re-authenticate with Google or check your permissions.');
+        }
+        throw new Error(data.error || 'Failed to export to Google Photos');
+      }
+
+      setGooglePhotosSuccess({
+        albumTitle: data.albumTitle || albumTitle,
+        albumUrl: data.albumUrl,
+        photosUploaded: data.photosUploaded || validImages.length,
+      });
+    } catch (err: any) {
+      console.error('Google Photos export failed:', err);
+      setGooglePhotosError(err?.message || 'Failed to export to Google Photos');
+    } finally {
+      setExportingGooglePhotos(false);
     }
   };
 
@@ -1152,17 +1310,75 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                     </div>
 
                     {!isUploaded && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          handleOpenGooglePicker(slot.id);
-                        }}
-                        className="mt-1.5 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-bold transition-colors border border-blue-200 cursor-pointer shadow-xs"
-                      >
-                        <ImageIcon className="w-3.5 h-3.5" />
-                        Select from Google Drive
-                      </button>
+                      <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            handleOpenGooglePicker(slot.id);
+                          }}
+                          className="flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-bold transition-colors border border-blue-200 cursor-pointer shadow-xs whitespace-nowrap"
+                          title="Select from Google Drive"
+                        >
+                          <svg viewBox="0 0 48 48" className="w-3.5 h-3.5 shrink-0">
+                            <path fill="#FFC107" d="M17 7.5L31 7.5 45 31.5 31 31.5z"></path>
+                            <path fill="#1976D2" d="M3.1 31.5L10.1 43.5 38.1 43.5 31.1 31.5z"></path>
+                            <path fill="#4CAF50" d="M17 7.5L3.1 31.5 10.1 43.5 24 19.5z"></path>
+                          </svg>
+                          <span>Drive</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            handleOpenGooglePhotosPicker(slot.id);
+                          }}
+                          disabled={isPickingPhotos && activePhotosSlotId === slot.id}
+                          className="flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl bg-amber-50/70 hover:bg-amber-100/80 text-amber-900 text-xs font-bold transition-colors border border-amber-200 cursor-pointer shadow-xs whitespace-nowrap disabled:opacity-50"
+                          title="Select from Google Photos"
+                        >
+                          {isPickingPhotos && activePhotosSlotId === slot.id ? (
+                            <span className="flex items-center gap-1">
+                              {photosNeedsClickToOpen ? (
+                                <span
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openAuthorizedPhotosWindow();
+                                  }}
+                                  className="bg-accent text-white px-1.5 py-0.5 rounded text-[10px] font-bold shadow-xs cursor-pointer hover:bg-accent/90"
+                                >
+                                  👉 Open
+                                </span>
+                              ) : (
+                                <>
+                                  <Loader2 className="w-3 h-3 animate-spin shrink-0 text-amber-600" />
+                                  <span className="text-[10px] truncate max-w-[65px]">{photosPickingStatus || 'Loading...'}</span>
+                                </>
+                              )}
+                              <span
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  cancelPhotosPicking();
+                                }}
+                                className="text-slate-400 hover:text-rose-600 font-bold px-0.5 cursor-pointer"
+                                title="Cancel"
+                              >
+                                ✕
+                              </span>
+                            </span>
+                          ) : (
+                            <>
+                              <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0">
+                                <path fill="#EA4335" d="M12 2a5 5 0 0 0-5 5v5h5a5 5 0 0 0 0-10z" />
+                                <path fill="#4285F4" d="M2 12a5 5 0 0 0 5 5h5v-5a5 5 0 0 0-10 0z" />
+                                <path fill="#FBBC04" d="M22 12a5 5 0 0 0-5-5h-5v5a5 5 0 0 0 10 0z" />
+                                <path fill="#34A853" d="M12 22a5 5 0 0 0 5-5v-5h-5a5 5 0 0 0 0 10z" />
+                              </svg>
+                              <span>Photos</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     )}
                     {/* Quick Slot Management Controls (When Uploaded) */}
                     {isUploaded && (
@@ -1558,6 +1774,17 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               <p className="text-xs text-charcoal-muted mt-1">Generate poses individually, select multiple, or all together</p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
+              {collageImagesList.length >= 2 && (
+                <Button 
+                  onClick={() => setShowCollageModal(true)} 
+                  variant="ghost"
+                  size="lg"
+                  className="bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-600" />
+                  <span>Create Collage ({collageImagesList.length})</span>
+                </Button>
+              )}
               <Button 
                 onClick={handleGenerateSelected} 
                 loading={isGeneratingSelected} 
@@ -1780,7 +2007,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               {Object.keys(generatedImages).length} of {template.poses.length} poses generated successfully.
             </p>
 
-            <div className="mt-8 flex flex-col sm:flex-row justify-center gap-4">
+            <div className="mt-8 flex flex-col sm:flex-row justify-center items-center gap-4 flex-wrap">
               <Button
                 onClick={() => {
                   Object.entries(generatedImages).forEach(([poseId, data]) => {
@@ -1792,7 +2019,69 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               >
                 <Download className="w-4 h-4" /> Download All HD Images
               </Button>
+
+              <Button
+                onClick={handleExportToGooglePhotos}
+                loading={exportingGooglePhotos}
+                disabled={exportingGooglePhotos || Object.keys(generatedImages).length === 0}
+                size="lg"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-md flex items-center gap-2"
+                title={`Save all generated images to Cloudflare R2 and Google Photos in album "${product?.code1 || stockCode || 'Code1'}"`}
+              >
+                <svg viewBox="0 0 24 24" className="w-4 h-4 shrink-0 fill-current">
+                  <path fill="#EA4335" d="M12 2a5 5 0 0 0-5 5v5h5a5 5 0 0 0 0-10z" />
+                  <path fill="#4285F4" d="M2 12a5 5 0 0 0 5 5h5v-5a5 5 0 0 0-10 0z" />
+                  <path fill="#FBBC04" d="M22 12a5 5 0 0 0-5-5h-5v5a5 5 0 0 0 10 0z" />
+                  <path fill="#34A853" d="M12 22a5 5 0 0 0 5-5v-5h-5a5 5 0 0 0 0 10z" />
+                </svg>
+                <span>Save to Google Photos & R2 (Album: {product?.code1 || stockCode || 'Code1'})</span>
+              </Button>
+
+              {collageImagesList.length >= 2 && (
+                <Button
+                  onClick={() => setShowCollageModal(true)}
+                  size="lg"
+                  className="bg-gradient-to-r from-amber-500 via-rose-500 to-violet-600 hover:opacity-95 text-white font-bold shadow-md"
+                >
+                  <Sparkles className="w-4 h-4" /> Create Wholesale Collage Sheet
+                </Button>
+              )}
             </div>
+
+            {/* Google Photos Export Feedback */}
+            {googlePhotosSuccess && (
+              <div className="mt-6 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm max-w-lg mx-auto flex items-center justify-between gap-3 animate-fade-in">
+                <div className="flex items-center gap-2 text-left">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <div>
+                    <p className="font-bold">Saved to Google Photos & Cloudflare R2!</p>
+                    <p className="text-xs text-emerald-700">
+                      Album: <span className="font-semibold underline">{googlePhotosSuccess.albumTitle}</span> ({googlePhotosSuccess.photosUploaded} photos)
+                    </p>
+                  </div>
+                </div>
+                {googlePhotosSuccess.albumUrl && (
+                  <a
+                    href={googlePhotosSuccess.albumUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-bold text-xs hover:bg-emerald-700 transition-colors whitespace-nowrap"
+                  >
+                    View Album ↗
+                  </a>
+                )}
+              </div>
+            )}
+
+            {googlePhotosError && (
+              <div className="mt-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm max-w-lg mx-auto flex items-center gap-2 animate-fade-in text-left">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                <div>
+                  <p className="font-bold">Sync Failed</p>
+                  <p className="text-xs text-rose-700">{googlePhotosError}</p>
+                </div>
+              </div>
+            )}
           </Card>
 
           {/* Gallery Grid */}
@@ -2054,6 +2343,18 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{rotationToast}</span>
         </div>
+      )}
+
+      {/* Collage Studio Modal */}
+      {showCollageModal && (
+        <CollageCreator
+          images={collageImagesList}
+          productName={productName}
+          stockCode={stockCode}
+          designNumber={product?.productCode || product?.designNumber || ''}
+          isOpen={showCollageModal}
+          onClose={() => setShowCollageModal(false)}
+        />
       )}
     </div>
   );

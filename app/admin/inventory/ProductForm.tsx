@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import useDrivePicker from 'react-google-drive-picker';
@@ -9,12 +9,15 @@ import {
   Plus, Minus, X, Info, RefreshCw, AlertCircle, CheckCircle2,
   ChevronDown, ChevronUp, Trash2, Settings2, MessageSquare,
   ShoppingBag, Share2, ThumbsUp, Globe, Smartphone, Upload, Loader2,
-  Copy, Check
+  Copy, Check, Star, Eye, Maximize2, ChevronLeft, ChevronRight, Download, ExternalLink, ZoomIn, Key
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
 import { Input } from '@/app/components/ui/Input';
 import { Textarea } from '@/app/components/ui/Input';
+import { useGooglePhotosPicker } from '@/app/hooks/useGooglePhotosPicker';
+import { CollageCreator, CollageInputImage } from '@/app/components/CollageCreator';
+import { normalizeSizeInventory, SizeInventoryItem, sumSizeInventory } from '@/lib/size-inventory';
 
 // ─── CONSTANTS ───
 
@@ -229,14 +232,19 @@ export function ProductForm({ productId }: Props) {
   const [showAddCol, setShowAddCol] = useState(false);
 
   // Generated images
-  const [generatedImages, setGeneratedImages] = useState<Record<string, { imageUrl: string; prompt?: string }> | null>(null);
+  const [generatedImages, setGeneratedImages] = useState<Record<string, { imageUrl: string; prompt?: string; order?: number }> | null>(null);
   const [linkedOrderId, setLinkedOrderId] = useState<string | null>(null);
+  const [showCollageModal, setShowCollageModal] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   // AI Generation State
   const [generatingName, setGeneratingName] = useState(false);
   const [nameSuggestions, setNameSuggestions] = useState<{ productName: string; catalogueTitle: string } | null>(null);
   const [nameSavedNotice, setNameSavedNotice] = useState<string | null>(null);
 
+  const [aiKeywords, setAiKeywords] = useState(''); // Custom keywords e.g. "chikankari, pure organza, handloom"
+
+  const [generatingDescription, setGeneratingDescription] = useState(false);
   const [generatingCaptions, setGeneratingCaptions] = useState(false);
   const [draftCaptions, setDraftCaptions] = useState<Record<string, string> | null>(null);
   const [captionsAppliedNotice, setCaptionsAppliedNotice] = useState(false);
@@ -246,6 +254,46 @@ export function ProductForm({ productId }: Props) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const [form, setForm] = useState<ProductFormData>(emptyForm());
+  const [sizeInventory, setSizeInventory] = useState<Record<string, SizeInventoryItem>>({});
+  const [newSizeKey, setNewSizeKey] = useState('');
+  const [newSizeQty, setNewSizeQty] = useState('1');
+  const [newSizeStockCode, setNewSizeStockCode] = useState('');
+
+  const cataloguePhotosList = useMemo(() => {
+    if (!generatedImages) return [];
+    return Object.entries(generatedImages)
+      .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
+      .map(([poseId, img], idx) => ({
+        poseId,
+        imageUrl: img.imageUrl,
+        order: idx,
+        isCover: form.coverImageUrl === img.imageUrl,
+      }));
+  }, [generatedImages, form.coverImageUrl]);
+
+  const collageImagesList: CollageInputImage[] = useMemo(() => {
+    return cataloguePhotosList.map(item => ({
+      id: item.poseId,
+      url: item.imageUrl,
+      poseName: generatedImages?.[item.poseId]?.prompt || item.poseId,
+    }));
+  }, [cataloguePhotosList, generatedImages]);
+
+  // Keyboard navigation for full-screen photo viewer lightbox
+  useEffect(() => {
+    if (lightboxIndex === null) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setLightboxIndex(null);
+      } else if (e.key === 'ArrowLeft') {
+        setLightboxIndex(prev => (prev !== null && prev > 0 ? prev - 1 : prev));
+      } else if (e.key === 'ArrowRight') {
+        setLightboxIndex(prev => (prev !== null && prev < cataloguePhotosList.length - 1 ? prev + 1 : prev));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [lightboxIndex, cataloguePhotosList.length]);
 
   // Load categories
   useEffect(() => {
@@ -272,6 +320,34 @@ export function ProductForm({ productId }: Props) {
             }
           }
 
+          // Detect catalogue images and auto-default cover image
+          const genImgs = (p.generatedImages as Record<string, any>) || null;
+          let loadedCover = p.coverImageUrl || '';
+
+          if (genImgs && typeof genImgs === 'object' && Object.keys(genImgs).length > 0) {
+            const sortedEntries = Object.entries(genImgs).sort(([, a]: any, [, b]: any) => {
+              if (typeof a.order === 'number' && typeof b.order === 'number') {
+                return a.order - b.order;
+              }
+              return 0;
+            });
+            const firstImg = sortedEntries[0]?.[1]?.imageUrl;
+            const coverIsInCatalogue = sortedEntries.some(([, img]: any) => img.imageUrl === loadedCover);
+
+            // Auto-default: If cover image is empty, tempfile URL, or not in catalogue photos
+            if ((!loadedCover || loadedCover.includes('tempfile') || !coverIsInCatalogue) && firstImg) {
+              loadedCover = firstImg;
+              // Auto-persist fix to DB if stale tempfile or missing
+              if (productId && (p.coverImageUrl?.includes('tempfile') || !p.coverImageUrl)) {
+                fetch(`/api/admin/products/${productId}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ coverImageUrl: firstImg }),
+                }).catch(err => console.warn('Auto-default cover image save failed:', err));
+              }
+            }
+          }
+
           setForm({
             stockCode: p.stockCode || '',
             friendlyCode: code1,
@@ -287,7 +363,7 @@ export function ProductForm({ productId }: Props) {
             wholesalePrice: p.dealerPrice != null ? String(p.dealerPrice) : (p.wholesalePrice != null ? String(p.wholesalePrice) : ''),
             quantity: String(p.quantity ?? 0),
             status: p.status || 'ACTIVE',
-            coverImageUrl: p.coverImageUrl || '',
+            coverImageUrl: loadedCover,
             websiteCopy: p.websiteCopy || '',
             websiteProductId: p.websiteProductId || '',
             designNumber: p.productCode || p.designNumber || '',
@@ -305,8 +381,11 @@ export function ProductForm({ productId }: Props) {
             shopifyTitle: p.shopifyTitle || '',
             whatsappCatalogueTitle: p.whatsappCatalogueTitle || '',
           });
-          setGeneratedImages(p.generatedImages || null);
+          setGeneratedImages(genImgs);
           setLinkedOrderId(p.linkedOrderId || null);
+          if (p.sizeInventory) {
+            setSizeInventory(normalizeSizeInventory(p.sizeInventory));
+          }
           // Load custom fields
           if (p.customFields && typeof p.customFields === 'object') {
             const cf: CustomField[] = Object.entries(p.customFields as Record<string, any>).map(([key, val]: any) => ({
@@ -373,7 +452,12 @@ export function ProductForm({ productId }: Props) {
 
   const moveImage = (poseId: string, direction: 'up' | 'down') => {
     if (!generatedImages) return;
-    const entries = Object.entries(generatedImages);
+    const entries = Object.entries(generatedImages).sort(([, a]: any, [, b]: any) => {
+      if (typeof a.order === 'number' && typeof b.order === 'number') {
+        return a.order - b.order;
+      }
+      return 0;
+    });
     const index = entries.findIndex(([id]) => id === poseId);
     if (index < 0) return;
     if (direction === 'up' && index > 0) {
@@ -387,15 +471,106 @@ export function ProductForm({ productId }: Props) {
     } else {
       return;
     }
-    const newObj = Object.fromEntries(entries);
+    const updatedEntries = entries.map(([id, val]: any, idx) => [
+      id,
+      { ...val, order: idx }
+    ]);
+    const newObj = Object.fromEntries(updatedEntries);
     setGeneratedImages(newObj);
+    if (productId) {
+      fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ generatedImages: newObj }),
+      }).catch(err => console.warn('Auto-save reorder failed:', err));
+    }
+  };
+
+  // Picky Assist Sync inside ProductForm
+  const [syncingPicky, setSyncingPicky] = useState(false);
+  const [autoSyncOnSave, setAutoSyncOnSave] = useState(true);
+  const [pickySyncResult, setPickySyncResult] = useState<{
+    success: boolean;
+    message: string;
+    diff?: any;
+    actionTaken?: 'added' | 'updated' | 'no_change';
+  } | null>(null);
+
+  const handleSyncToPickyAssist = async (targetId?: string) => {
+    const idToSync = targetId || productId;
+    if (!idToSync) return;
+    setSyncingPicky(true);
+    setPickySyncResult(null);
+    try {
+      const res = await fetch('/api/admin/picky-assist/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: idToSync, action: 'sync' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      }
+      setPickySyncResult({
+        success: data.success,
+        message: data.message || 'Synced successfully with Picky Assist',
+        diff: data.diff,
+        actionTaken: data.actionTaken,
+      });
+    } catch (err: any) {
+      console.error('Picky sync failed:', err);
+      setPickySyncResult({
+        success: false,
+        message: err.message || 'Failed to sync with Picky Assist',
+      });
+    } finally {
+      setSyncingPicky(false);
+      setTimeout(() => {
+        setPickySyncResult(null);
+      }, 8000);
+    }
   };
 
   const deleteImage = (poseId: string) => {
     if (!generatedImages) return;
+    const deletedUrl = generatedImages[poseId]?.imageUrl;
     const newObj = { ...generatedImages };
     delete newObj[poseId];
-    setGeneratedImages(newObj);
+    
+    // Re-index remaining images
+    const entries = Object.entries(newObj).sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0));
+    const reindexed = Object.fromEntries(entries.map(([id, val]: any, idx) => [id, { ...val, order: idx }]));
+    setGeneratedImages(reindexed);
+
+    // If deleted image was the cover image, automatically switch to first available photo
+    let updatedCover = form.coverImageUrl;
+    if (form.coverImageUrl === deletedUrl) {
+      updatedCover = entries[0]?.[1]?.imageUrl || '';
+      set('coverImageUrl', updatedCover);
+    }
+
+    if (productId) {
+      const patchData: any = { generatedImages: reindexed };
+      if (form.coverImageUrl === deletedUrl) {
+        patchData.coverImageUrl = updatedCover;
+      }
+      fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patchData),
+      }).catch(err => console.warn('Auto-save delete failed:', err));
+    }
+  };
+
+  const setCoverImage = (imageUrl: string) => {
+    set('coverImageUrl', imageUrl);
+    if (productId) {
+      fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ coverImageUrl: imageUrl }),
+      }).catch(err => console.warn('Auto-save cover image failed:', err));
+    }
   };
 
   // ─── AI Generation Handlers ───
@@ -421,6 +596,7 @@ export function ProductForm({ productId }: Props) {
           cutStyle: form.cutStyle,
           border: form.border,
           description: form.description,
+          keywords: aiKeywords,
         }),
       });
       const data = await res.json();
@@ -443,6 +619,49 @@ export function ProductForm({ productId }: Props) {
     set('title', chosenName);
     setNameSavedNotice(`Applied "${chosenName}" to product name!`);
     setTimeout(() => setNameSavedNotice(null), 3000);
+  };
+
+  const handleGenerateDescription = async () => {
+    setGeneratingDescription(true);
+    setError(null);
+    try {
+      const catName = categories.find(c => c.id === form.categoryId)?.name || 'Saree';
+      const res = await fetch('/api/admin/products/generate-ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'captions',
+          imageUrl: activeProductImage,
+          productName: form.title,
+          color: form.color,
+          clothType: form.clothType,
+          category: catName,
+          embroideryType: form.embroideryType,
+          cutStyle: form.cutStyle,
+          border: form.border,
+          kurtaLength: form.kurtaLength,
+          pantStyle: form.pantStyle,
+          stockCode: form.stockCode,
+          designNumber: form.designNumber,
+          price: form.mrp || form.price,
+          retailPrice: form.mrp,
+          unitPrice: form.price,
+          wholesalePrice: form.wholesalePrice,
+          description: form.description,
+          keywords: aiKeywords,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to generate description');
+      const d = json.data || {};
+      if (d.productDescription) {
+        set('description', d.productDescription);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Error generating description');
+    } finally {
+      setGeneratingDescription(false);
+    }
   };
 
   const handleGenerateAllCaptions = async () => {
@@ -468,9 +687,12 @@ export function ProductForm({ productId }: Props) {
           pantStyle: form.pantStyle,
           stockCode: form.stockCode,
           designNumber: form.designNumber,
-          price: form.price,
+          price: form.mrp || form.price,
+          retailPrice: form.mrp,
+          unitPrice: form.price,
           wholesalePrice: form.wholesalePrice,
           description: form.description,
+          keywords: aiKeywords,
         }),
       });
       const json = await res.json();
@@ -494,6 +716,9 @@ export function ProductForm({ productId }: Props) {
     if (draftCaptions.instagramCaption) set('instagramCaption', draftCaptions.instagramCaption);
     if (draftCaptions.facebookCaption) set('facebookCaption', draftCaptions.facebookCaption);
     if (draftCaptions.shopifyTitle) set('shopifyTitle', draftCaptions.shopifyTitle);
+    if (draftCaptions.productDescription && !form.description) {
+      set('description', draftCaptions.productDescription);
+    }
     setDraftCaptions(null);
     setCaptionsAppliedNotice(true);
     setTimeout(() => setCaptionsAppliedNotice(false), 4000);
@@ -534,9 +759,12 @@ export function ProductForm({ productId }: Props) {
           pantStyle: form.pantStyle,
           stockCode: form.stockCode,
           designNumber: form.designNumber,
-          price: form.price,
+          price: form.mrp || form.price,
+          retailPrice: form.mrp,
+          unitPrice: form.price,
           wholesalePrice: form.wholesalePrice,
           description: form.description,
+          keywords: aiKeywords,
         }),
       });
       const json = await res.json();
@@ -595,38 +823,95 @@ export function ProductForm({ productId }: Props) {
   };
 
   const [uploadingCatalogue, setUploadingCatalogue] = useState(false);
-  
-  const uploadCatalogueFile = async (file: File) => {
+  const [catalogueUploadStatus, setCatalogueUploadStatus] = useState<string | null>(null);
+
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => resolve(event.target?.result as string);
+      reader.onerror = (err) => reject(err);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const uploadCatalogueFiles = async (files: File[]) => {
+    if (!files || files.length === 0) return;
     setUploadingCatalogue(true);
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const base64 = event.target?.result as string;
-      try {
-        const res = await fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ file: base64, type: 'generated', orderId: productId || 'manual' }),
-        });
-        const data = await res.json();
-        if (data.url) {
-          const newPoseId = 'uploaded_' + Date.now();
-          setGeneratedImages(prev => ({
-            ...(prev || {}),
-            [newPoseId]: { imageUrl: data.url, prompt: 'Manually uploaded' }
-          }));
+    const total = files.length;
+    setCatalogueUploadStatus(`0/${total}`);
+
+    const newEntries: Record<string, { imageUrl: string; prompt: string; order?: number }> = {};
+
+    try {
+      for (let i = 0; i < total; i++) {
+        const file = files[i];
+        setCatalogueUploadStatus(`${i + 1}/${total}`);
+        try {
+          const base64 = await fileToBase64(file);
+          const res = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              file: base64,
+              type: 'generated',
+              orderId: productId || 'manual',
+              poseId: `upload_${Date.now()}_${i}`,
+            }),
+          });
+          const data = await res.json();
+          if (data.url) {
+            const newPoseId = `uploaded_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+            const currentTotal = (generatedImages ? Object.keys(generatedImages).length : 0) + Object.keys(newEntries).length;
+            newEntries[newPoseId] = {
+              imageUrl: data.url,
+              prompt: file.name ? file.name.replace(/\.[^/.]+$/, '') : 'Manually uploaded',
+              order: currentTotal,
+            };
+          }
+        } catch (fileErr) {
+          console.error(`Failed to upload ${file.name}:`, fileErr);
         }
-      } catch (err) {
-        console.error('Failed to upload catalogue photo', err);
-      } finally {
-        setUploadingCatalogue(false);
       }
-    };
-    reader.readAsDataURL(file);
+
+      if (Object.keys(newEntries).length > 0) {
+        const firstUploadedUrl = Object.values(newEntries)[0]?.imageUrl;
+        const needsCoverUpdate = !form.coverImageUrl || form.coverImageUrl.includes('tempfile');
+
+        setGeneratedImages(prev => {
+          const updated = {
+            ...(prev || {}),
+            ...newEntries,
+          };
+          const patchBody: any = { generatedImages: updated };
+          if (needsCoverUpdate && firstUploadedUrl) {
+            patchBody.coverImageUrl = firstUploadedUrl;
+            set('coverImageUrl', firstUploadedUrl);
+          }
+          if (productId) {
+            fetch(`/api/admin/products/${productId}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(patchBody),
+            }).catch(err => console.warn('Auto-save catalogue upload failed:', err));
+          }
+          return updated;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to upload catalogue photos', err);
+    } finally {
+      setUploadingCatalogue(false);
+      setCatalogueUploadStatus(null);
+    }
   };
 
   const handleUploadCataloguePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) uploadCatalogueFile(file);
+    const fileList = e.target.files;
+    if (fileList && fileList.length > 0) {
+      const files = Array.from(fileList);
+      await uploadCatalogueFiles(files);
+      e.target.value = '';
+    }
   };
 
   const handleOpenGooglePicker = () => {
@@ -643,29 +928,157 @@ export function ProductForm({ productId }: Props) {
       showUploadView: true,
       showUploadFolders: true,
       supportDrives: true,
-      multiselect: false,
+      multiselect: true,
       callbackFunction: async (data: any) => {
-        if (data.action === 'picked') {
-          const doc = data.docs[0];
+        if (data.action === 'picked' && Array.isArray(data.docs) && data.docs.length > 0) {
           const token = (authResponse as any)?.access_token || data.oauthToken;
-          
-          if (doc.id) {
-            try {
-              const res = await fetch(`https://www.googleapis.com/drive/v3/files/${doc.id}?alt=media`, {
-                headers: { Authorization: `Bearer ${token}` }
-              });
-              if (res.ok) {
-                const blob = await res.blob();
-                uploadCatalogueFile(new File([blob], doc.name || "google_photo.jpg", { type: blob.type }));
-                return;
+          setUploadingCatalogue(true);
+          setCatalogueUploadStatus(`Drive 0/${data.docs.length}`);
+
+          const downloadedFiles: File[] = [];
+          for (let i = 0; i < data.docs.length; i++) {
+            const doc = data.docs[i];
+            setCatalogueUploadStatus(`Drive ${i + 1}/${data.docs.length}`);
+            if (doc.id) {
+              try {
+                const res = await fetch(`https://www.googleapis.com/drive/v3/files/${doc.id}?alt=media`, {
+                  headers: { Authorization: `Bearer ${token}` }
+                });
+                if (res.ok) {
+                  const blob = await res.blob();
+                  downloadedFiles.push(new File([blob], doc.name || `drive_photo_${i + 1}.jpg`, { type: blob.type }));
+                }
+              } catch (err) {
+                console.warn(`Drive v3 download failed for ${doc.name}`, err);
               }
-            } catch (err) {
-              console.warn("Drive v3 download failed", err);
             }
+          }
+
+          if (downloadedFiles.length > 0) {
+            await uploadCatalogueFiles(downloadedFiles);
+          } else {
+            setUploadingCatalogue(false);
+            setCatalogueUploadStatus(null);
           }
         }
       }
     });
+  };
+
+  const {
+    openPhotosPicker,
+    openAuthorizedPhotosWindow,
+    needsClickToOpen: photosNeedsClickToOpen,
+    isPicking: isPickingPhotos,
+    pickingStatus: photosPickingStatus,
+    cancelPicking: cancelPhotosPicking,
+  } = useGooglePhotosPicker({
+    onPhotosSelected: async (photos) => {
+      if (!photos || photos.length === 0) return;
+      const files: File[] = [];
+      for (let i = 0; i < photos.length; i++) {
+        const p = photos[i];
+        try {
+          const arr = p.base64.split(',');
+          const mime = p.mimeType || arr[0]?.match(/:(.*?);/)?.[1] || 'image/jpeg';
+          const bstr = atob(arr[1] || arr[0]);
+          let n = bstr.length;
+          const u8arr = new Uint8Array(n);
+          while (n--) {
+            u8arr[n] = bstr.charCodeAt(n);
+          }
+          files.push(new File([u8arr], p.filename || `google_photo_${i + 1}.jpg`, { type: mime }));
+        } catch (convErr) {
+          console.warn('Failed to convert photo base64 to file', convErr);
+        }
+      }
+      if (files.length > 0) {
+        await uploadCatalogueFiles(files);
+      }
+    },
+    onError: (err) => {
+      alert(err);
+    },
+  });
+
+  const [exportingGooglePhotos, setExportingGooglePhotos] = useState(false);
+  const [googlePhotosSuccess, setGooglePhotosSuccess] = useState<{ albumTitle: string; albumUrl?: string; photosUploaded: number } | null>(null);
+
+  const handleExportAlbumToGooglePhotos = async () => {
+    if (!generatedImages || Object.keys(generatedImages).length === 0) {
+      alert('No catalogue photos available to export.');
+      return;
+    }
+
+    const albumTitle = form.friendlyCode || form.stockCode || form.title || 'Product';
+    const imagesToExport = Object.entries(generatedImages)
+      .filter(([, v]) => Boolean(v?.imageUrl))
+      .map(([poseId, v], idx) => ({
+        imageUrl: v.imageUrl,
+        filename: `${(form.friendlyCode || form.stockCode || 'photo').toLowerCase().replace(/[^a-z0-9_-]+/g, '_')}_${idx + 1}.jpg`,
+        description: `${form.title || 'Product'} (${form.friendlyCode || form.stockCode}) - ${v.prompt || `Photo #${idx + 1}`}`,
+      }));
+
+    if (imagesToExport.length === 0) {
+      alert('No valid images to export.');
+      return;
+    }
+
+    setExportingGooglePhotos(true);
+    setGooglePhotosSuccess(null);
+
+    try {
+      let clientToken: string | undefined = undefined;
+      if (typeof window !== 'undefined') {
+        const cached = sessionStorage.getItem('gphotos_token');
+        const exp = sessionStorage.getItem('gphotos_token_exp');
+        if (cached && exp && Date.now() < Number(exp)) {
+          clientToken = cached;
+        }
+      }
+
+      const res = await fetch('/api/google/photos/export-album', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: clientToken,
+          albumTitle,
+          productId: productId || undefined,
+          images: imagesToExport,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.needsAuth) {
+          throw new Error('Google Photos authorization is required. Please re-login with Google or open the Photos picker first.');
+        }
+        throw new Error(data.error || 'Failed to save to Google Photos album');
+      }
+
+      setGooglePhotosSuccess({
+        albumTitle: data.albumTitle || albumTitle,
+        albumUrl: data.albumUrl,
+        photosUploaded: data.photosUploaded || imagesToExport.length,
+      });
+
+      // Refresh product data if productId exists so updated R2 URLs reflect
+      if (productId) {
+        fetch(`/api/admin/products/${productId}`)
+          .then(r => r.json())
+          .then(d => {
+            if (d.product?.generatedImages) {
+              setGeneratedImages(d.product.generatedImages);
+            }
+          })
+          .catch(console.warn);
+      }
+    } catch (err: any) {
+      console.error('Export album error:', err);
+      alert(err?.message || 'Failed to save to Google Photos album');
+    } finally {
+      setExportingGooglePhotos(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -685,6 +1098,7 @@ export function ProductForm({ productId }: Props) {
         mrp: form.mrp ? parseFloat(form.mrp) : null,
         wholesalePrice: form.wholesalePrice ? parseFloat(form.wholesalePrice) : null,
         quantity: parseInt(form.quantity) || 0,
+        sizeInventory: Object.keys(sizeInventory).length > 0 ? sizeInventory : null,
         customFields: Object.keys(customFieldsJson).length > 0 ? customFieldsJson : null,
         generatedImages,
       };
@@ -732,7 +1146,8 @@ export function ProductForm({ productId }: Props) {
   );
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-8 animate-fade-in">
+    <>
+      <form onSubmit={handleSubmit} className="space-y-8 animate-fade-in">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -747,7 +1162,30 @@ export function ProductForm({ productId }: Props) {
             {isEdit ? 'Edit Product' : 'Add New Product'}
           </h1>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {isEdit && (
+            <button
+              type="button"
+              onClick={() => handleSyncToPickyAssist()}
+              disabled={syncingPicky || saving}
+              title="Sync this product to Picky Assist (searches first, adds if new, updates diff if changed)"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-cream-border bg-white text-charcoal hover:border-emerald-600 hover:text-emerald-700 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${syncingPicky ? 'animate-spin text-amber-600' : 'text-emerald-600'}`} />
+              <span>{syncingPicky ? 'Syncing...' : 'Sync to Picky Assist'}</span>
+            </button>
+          )}
+
+          <label className="flex items-center gap-1.5 text-xs text-charcoal cursor-pointer select-none bg-cream-light/60 px-2.5 py-1.5 rounded-lg border border-cream-border">
+            <input
+              type="checkbox"
+              checked={autoSyncOnSave}
+              onChange={(e) => setAutoSyncOnSave(e.target.checked)}
+              className="accent-accent w-3.5 h-3.5 rounded"
+            />
+            <span className="font-medium text-[11px]">Auto-sync on save</span>
+          </label>
+
           {success && (
             <span className="flex items-center gap-1.5 text-sm text-emerald-700 font-semibold">
               <CheckCircle2 className="w-4 h-4" /> Saved!
@@ -759,6 +1197,44 @@ export function ProductForm({ productId }: Props) {
           </Button>
         </div>
       </div>
+
+      {pickySyncResult && (
+        <div className={`p-4 rounded-xl text-sm flex items-start gap-2.5 border shadow-xs animate-fade-in ${
+          pickySyncResult.success ? 'bg-emerald-50 text-emerald-900 border-emerald-200' : 'bg-red-50 text-red-900 border-red-200'
+        }`}>
+          {pickySyncResult.success ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+          ) : (
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <p className="font-bold">{pickySyncResult.success ? 'Picky Assist Sync Success' : 'Picky Assist Sync Failed'}</p>
+              {pickySyncResult.actionTaken === 'updated' && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 text-white">
+                  VERIFIED & UPDATED EXISTING IN PICKY
+                </span>
+              )}
+              {pickySyncResult.actionTaken === 'added' && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-600 text-white">
+                  NOT FOUND & CREATED NEW IN PICKY
+                </span>
+              )}
+            </div>
+            <p className="text-xs">{pickySyncResult.message}</p>
+            {pickySyncResult.diff && Object.keys(pickySyncResult.diff).length > 0 && (
+              <div className="mt-2 text-[11px] font-mono bg-white/70 p-2 rounded-lg border border-emerald-300">
+                <span className="font-bold text-emerald-950 block mb-1">Updated Fields in Picky Assist:</span>
+                {Object.entries(pickySyncResult.diff).map(([k, v]: any) => (
+                  <div key={k}>
+                    <span className="font-bold">{k}:</span> {JSON.stringify(v.remote)} &rarr; {JSON.stringify(v.local)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm flex items-center gap-2">
@@ -777,9 +1253,13 @@ export function ProductForm({ productId }: Props) {
               <div className="space-y-4 pt-1">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <Input label="stockCode *" value={form.stockCode}
+                    <Input label="stockCode (Default / Master)" value={form.stockCode}
                       onChange={e => set('stockCode', e.target.value)} placeholder="967699512" required />
-                    <p className="text-[10px] text-charcoal-muted mt-1">Barcode / 9+ digit scan code</p>
+                    <p className="text-[10px] text-charcoal-muted mt-1">
+                      {Object.keys(sizeInventory).length > 0 
+                        ? 'Master / primary stockCode. Each size below has its own individual stockCode.' 
+                        : '9+ digit scan stockCode'}
+                    </p>
                   </div>
                   <div>
                     <Input label="code1" value={form.friendlyCode}
@@ -796,13 +1276,286 @@ export function ProductForm({ productId }: Props) {
                     <p className="text-[10px] text-charcoal-muted mt-1">Short human-readable alias.</p>
                   </div>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Input label="productCode" value={form.designNumber}
                     onChange={e => set('designNumber', e.target.value)} placeholder="DES-2024-01" />
-                  <Input label="Size" value={form.size}
-                    onChange={e => set('size', e.target.value)} placeholder="Free / S-M-L / 38-42" />
                   <Input label="Storage Location" value={form.location}
                     onChange={e => set('location', e.target.value)} placeholder="Rack A3, Shelf 2" />
+                </div>
+
+                {/* ── PROMINENT SIZE & STOCK MANAGER (PER-SIZE QUANTITIES) ── */}
+                <div className="p-5 rounded-2xl bg-amber-50/60 border border-amber-200/90 shadow-xs space-y-4">
+                  {/* Header Row */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-200/70">
+                    <div>
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-xs">
+                          <Package className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-extrabold text-charcoal tracking-wide">
+                              Sizes & Stock Quantities
+                            </span>
+                            <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-200/80 text-amber-900 font-extrabold border border-amber-300/80">
+                              Total: {form.quantity} pcs
+                            </span>
+                          </div>
+                          <p className="text-xs text-charcoal-muted mt-0.5">
+                            Manage each size's exact inventory. Total stock updates automatically.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Preset Buttons */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[11px] text-charcoal-muted font-bold mr-0.5">Quick Add:</span>
+                      {['S', 'M', 'L', 'XL', 'XXL', '3XL', 'FS'].map(sz => (
+                        <button
+                          key={sz}
+                          type="button"
+                          onClick={() => {
+                            const current = sizeInventory[sz];
+                            const baseCode = form.friendlyCode || form.stockCode || 'item';
+                            const defaultVariantCode = current?.stockCode || `${baseCode}-${sz}`;
+                            const next = {
+                              ...sizeInventory,
+                              [sz]: {
+                                quantity: (current?.quantity || 0) + 1,
+                                stockCode: defaultVariantCode,
+                              }
+                            };
+                            setSizeInventory(next);
+                            const tot = sumSizeInventory(next);
+                            set('quantity', tot.toString());
+                            set('size', Object.keys(next).join(', '));
+                          }}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-amber-100 text-charcoal border border-amber-300 text-xs font-bold transition-all shadow-2xs hover:scale-105 cursor-pointer active:scale-95"
+                          title={`Add 1 to size ${sz}`}
+                        >
+                          +{sz}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Configured Sizes Cards */}
+                  {Object.entries(sizeInventory).length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                      {Object.entries(sizeInventory).map(([sKey, sItem]) => {
+                        const qty = typeof sItem === 'number' ? sItem : sItem?.quantity || 0;
+                        const stockCode = typeof sItem === 'object' ? sItem?.stockCode : null;
+
+                        return (
+                          <div
+                            key={sKey}
+                            className="flex flex-col justify-between p-3 rounded-xl bg-white border border-amber-200/90 shadow-xs hover:border-amber-400 transition-all group"
+                          >
+                            <div className="flex items-start justify-between gap-1 mb-2">
+                              <div className="flex-1 pr-1">
+                                <span className="text-sm font-black text-charcoal px-2.5 py-1 rounded-lg bg-amber-100/80 border border-amber-200/80 inline-block">
+                                  {sKey}
+                                </span>
+                                <div className="mt-1.5">
+                                  <label className="text-[10px] font-bold text-amber-900/80 uppercase tracking-wider block mb-0.5">
+                                    StockCode:
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={stockCode || ''}
+                                    placeholder="e.g. 5150000065"
+                                    onChange={e => {
+                                      const nextVal = e.target.value.trim();
+                                      const next = {
+                                        ...sizeInventory,
+                                        [sKey]: {
+                                          quantity: qty,
+                                          stockCode: nextVal || null,
+                                        }
+                                      };
+                                      setSizeInventory(next);
+                                      // If top-level stockCode is empty, auto-populate with first size's stockCode
+                                      if (!form.stockCode && nextVal) {
+                                        set('stockCode', nextVal);
+                                      }
+                                    }}
+                                    className="w-full px-2 py-1 text-xs font-mono font-bold text-charcoal bg-amber-50/70 border border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:bg-white transition-all placeholder:font-sans placeholder:font-normal placeholder:text-charcoal-muted/60"
+                                  />
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = { ...sizeInventory };
+                                  delete next[sKey];
+                                  setSizeInventory(next);
+                                  const tot = sumSizeInventory(next);
+                                  set('quantity', tot.toString());
+                                  const remaining = Object.keys(next);
+                                  set('size', remaining.length > 0 ? remaining.join(', ') : '');
+                                }}
+                                className="p-1 rounded-md text-charcoal-light/60 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
+                                title={`Remove size ${sKey}`}
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-1 bg-cream-light/40 p-1.5 rounded-lg border border-cream-border/60">
+                              <span className="text-xs font-bold text-amber-950 pl-1">
+                                {qty} <span className="text-[10px] font-normal text-charcoal-muted">pcs</span>
+                              </span>
+
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const next = {
+                                      ...sizeInventory,
+                                      [sKey]: {
+                                        quantity: Math.max(0, qty - 1),
+                                        stockCode: stockCode || null,
+                                      }
+                                    };
+                                    setSizeInventory(next);
+                                    const tot = sumSizeInventory(next);
+                                    set('quantity', tot.toString());
+                                    const activeSizes = Object.keys(next).filter(k => (next[k]?.quantity ?? 0) > 0);
+                                    if (activeSizes.length > 0) set('size', activeSizes.join(', '));
+                                  }}
+                                  className="w-6 h-6 flex items-center justify-center rounded-md bg-white hover:bg-cream-dark text-charcoal text-xs font-bold border border-cream-border transition-colors cursor-pointer active:scale-95 shadow-2xs"
+                                  title="Decrease quantity by 1"
+                                >
+                                  -
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const next = {
+                                      ...sizeInventory,
+                                      [sKey]: {
+                                        quantity: qty + 1,
+                                        stockCode: stockCode || null,
+                                      }
+                                    };
+                                    setSizeInventory(next);
+                                    const tot = sumSizeInventory(next);
+                                    set('quantity', tot.toString());
+                                    set('size', Object.keys(next).join(', '));
+                                  }}
+                                  className="w-6 h-6 flex items-center justify-center rounded-md bg-white hover:bg-cream-dark text-charcoal text-xs font-bold border border-cream-border transition-colors cursor-pointer active:scale-95 shadow-2xs"
+                                  title="Increase quantity by 1"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="py-4 px-4 rounded-xl bg-white/80 border border-dashed border-amber-300 text-center">
+                      <p className="text-xs font-medium text-charcoal-muted">
+                        No sizes configured yet. Use the inputs below or click the quick presets above to add sizes.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Add Size Input Row with Per-Size StockCode */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-amber-200/70">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-xs font-bold text-charcoal">Size:</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. XL, 38, M"
+                          value={newSizeKey}
+                          onChange={e => setNewSizeKey(e.target.value.toUpperCase())}
+                          className="w-28 px-3 py-2 rounded-xl border border-amber-300 bg-white text-xs font-bold text-charcoal uppercase focus:outline-none focus:ring-2 focus:ring-amber-500/20 shadow-2xs"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-xs font-bold text-charcoal">Qty:</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={newSizeQty}
+                          onChange={e => setNewSizeQty(e.target.value)}
+                          className="w-16 px-2.5 py-2 rounded-xl border border-amber-300 bg-white text-xs font-bold text-charcoal text-center focus:outline-none focus:ring-2 focus:ring-amber-500/20 shadow-2xs"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-xs font-bold text-charcoal">StockCode:</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. 5270000094 (optional)"
+                          value={newSizeStockCode}
+                          onChange={e => setNewSizeStockCode(e.target.value.trim())}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const trimmed = newSizeKey.trim().toUpperCase();
+                              const qtyNum = parseInt(newSizeQty, 10);
+                              if (!trimmed || isNaN(qtyNum) || qtyNum < 0) return;
+                              const currentItem = sizeInventory[trimmed];
+                              const next = {
+                                ...sizeInventory,
+                                [trimmed]: {
+                                  quantity: (currentItem?.quantity || 0) + qtyNum,
+                                  stockCode: newSizeStockCode.trim() || currentItem?.stockCode || null,
+                                }
+                              };
+                              setSizeInventory(next);
+                              const tot = sumSizeInventory(next);
+                              set('quantity', tot.toString());
+                              set('size', Object.keys(next).join(', '));
+                              setNewSizeKey('');
+                              setNewSizeQty('1');
+                              setNewSizeStockCode('');
+                            }
+                          }}
+                          className="w-48 px-3 py-2 rounded-xl border border-amber-300 bg-white text-xs font-mono font-bold text-charcoal focus:outline-none focus:ring-2 focus:ring-amber-500/20 shadow-2xs"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const trimmed = newSizeKey.trim().toUpperCase();
+                          const qtyNum = parseInt(newSizeQty, 10);
+                          if (!trimmed || isNaN(qtyNum) || qtyNum < 0) return;
+                          const currentItem = sizeInventory[trimmed];
+                          const baseCode = form.friendlyCode || form.stockCode || 'item';
+                          const generatedCode = newSizeStockCode.trim() || currentItem?.stockCode || `${baseCode}-${trimmed}`;
+                          const next = {
+                            ...sizeInventory,
+                            [trimmed]: {
+                              quantity: (currentItem?.quantity || 0) + qtyNum,
+                              stockCode: generatedCode,
+                            }
+                          };
+                          setSizeInventory(next);
+                          const tot = sumSizeInventory(next);
+                          set('quantity', tot.toString());
+                          set('size', Object.keys(next).join(', '));
+                          setNewSizeKey('');
+                          setNewSizeQty('1');
+                          setNewSizeStockCode('');
+                        }}
+                        className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 active:scale-95 text-white text-xs font-extrabold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                      >
+                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" /> Add Size
+                      </button>
+                    </div>
+
+                    <div className="text-xs text-charcoal-muted">
+                      Size Summary: <span className="font-bold text-charcoal bg-amber-100/60 px-2 py-1 rounded-md border border-amber-200/80">{form.size || 'None'}</span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* ── DESIGN GROUP PANEL ── */}
@@ -998,9 +1751,80 @@ export function ProductForm({ productId }: Props) {
                     </div>
                   )}
                 </div>
-                <Textarea label="productDescription (used for caption generation)" value={form.description}
-                  onChange={e => set('description', e.target.value)}
-                  placeholder="Describe the product — weave, work, occasions, feel..." rows={4} />
+
+                {/* AI Feature Keywords */}
+                <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                      <Key className="w-3.5 h-3.5 text-amber-700" />
+                      Special Craft & Feature Keywords (Included in AI Name, Description & Captions)
+                    </label>
+                    {aiKeywords && (
+                      <button
+                        type="button"
+                        onClick={() => setAiKeywords('')}
+                        className="text-[10px] text-amber-700 hover:text-amber-900 font-semibold cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={aiKeywords}
+                    onChange={e => setAiKeywords(e.target.value)}
+                    placeholder="e.g. chikankari, handloom cotton, Lucknowi work, summer pastel, zari border..."
+                    className="w-full px-3 py-2 rounded-lg border border-amber-300 bg-white text-xs text-charcoal placeholder:text-slate-400 focus:outline-none focus:border-amber-600"
+                  />
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-amber-800">
+                    <span className="font-medium text-amber-900">Suggestions:</span>
+                    {['Chikankari', 'Kanjivaram', 'Handloom', 'Zari Border', 'Modal Cotton', 'Banarasi Weave'].map(kw => (
+                      <button
+                        key={kw}
+                        type="button"
+                        onClick={() => {
+                          const current = aiKeywords.split(',').map(s => s.trim()).filter(Boolean);
+                          if (!current.some(c => c.toLowerCase() === kw.toLowerCase())) {
+                            setAiKeywords([...current, kw].join(', '));
+                          }
+                        }}
+                        className="px-2 py-0.5 rounded-full bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-[10px] font-medium transition-colors cursor-pointer"
+                      >
+                        + {kw}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase">
+                      productDescription (used for caption generation)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleGenerateDescription}
+                      disabled={generatingDescription}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-[11px] font-bold transition-all cursor-pointer disabled:opacity-50"
+                      title="Generate a 2-3 sentence product description with your keywords"
+                    >
+                      {generatingDescription ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                          <span>Writing description...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                          <span>✨ AI Description</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <Textarea value={form.description}
+                    onChange={e => set('description', e.target.value)}
+                    placeholder="Describe the product — weave, work, occasions, feel..." rows={4} />
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                   {/* Colour */}
@@ -1170,6 +1994,15 @@ export function ProductForm({ productId }: Props) {
                         <strong> The Home CEO</strong> and <strong>Professional Connoisseur</strong> personas, and the 
                         <em> 4-minute morning drape</em> ritual (strict banned words filter applied).
                       </p>
+                      {aiKeywords && (
+                        <div className="flex items-center gap-1.5 text-xs text-amber-900 font-semibold pt-1">
+                          <Key className="w-3.5 h-3.5 text-amber-700" />
+                          <span>Active Keywords:</span>
+                          <span className="px-2 py-0.5 rounded-md bg-amber-200/70 text-amber-950 text-[11px] font-bold font-mono">
+                            {aiKeywords}
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     <button
@@ -1849,25 +2682,175 @@ export function ProductForm({ productId }: Props) {
           <Card className="p-6 space-y-4">
             <SectionHeader id="stock" title="Stock Quantity" icon={Package} />
             {openSections.stock && (
-              <div className="space-y-1.5 pt-1 max-w-[200px]">
-                <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase">
-                  {isEdit ? "Current Stock" : "Initial Stock"}
-                </label>
-                <div className="flex items-center gap-2">
-                  <button type="button" 
-                    onClick={() => set('quantity', Math.max(0, (parseInt(form.quantity) || 0) - 1).toString())}
-                    className="w-12 h-12 flex shrink-0 items-center justify-center rounded-xl border border-cream-border bg-cream-light hover:bg-cream-dark hover:border-accent text-charcoal transition-all cursor-pointer">
-                    <Minus className="w-5 h-5" />
-                  </button>
-                  <input type="number" value={form.quantity}
-                    onChange={e => set('quantity', e.target.value)} placeholder="0"
-                    className="flex-1 w-full px-2 py-3 text-center rounded-xl bg-white border border-cream-border text-charcoal font-bold text-lg focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all duration-200"
-                  />
-                  <button type="button" 
-                    onClick={() => set('quantity', ((parseInt(form.quantity) || 0) + 1).toString())}
-                    className="w-12 h-12 flex shrink-0 items-center justify-center rounded-xl border border-cream-border bg-cream-light hover:bg-cream-dark hover:border-accent text-charcoal transition-all cursor-pointer">
-                    <Plus className="w-5 h-5" />
-                  </button>
+              <div className="space-y-4 pt-1">
+                <div className="space-y-1.5 max-w-[200px]">
+                  <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase">
+                    {isEdit ? "Total Stock" : "Initial Total Stock"}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button type="button" 
+                      onClick={() => set('quantity', Math.max(0, (parseInt(form.quantity) || 0) - 1).toString())}
+                      className="w-12 h-12 flex shrink-0 items-center justify-center rounded-xl border border-cream-border bg-cream-light hover:bg-cream-dark hover:border-accent text-charcoal transition-all cursor-pointer">
+                      <Minus className="w-5 h-5" />
+                    </button>
+                    <input type="number" value={form.quantity}
+                      onChange={e => set('quantity', e.target.value)} placeholder="0"
+                      className="flex-1 w-full px-2 py-3 text-center rounded-xl bg-white border border-cream-border text-charcoal font-bold text-lg focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all duration-200"
+                    />
+                    <button type="button" 
+                      onClick={() => set('quantity', ((parseInt(form.quantity) || 0) + 1).toString())}
+                      className="w-12 h-12 flex shrink-0 items-center justify-center rounded-xl border border-cream-border bg-cream-light hover:bg-cream-dark hover:border-accent text-charcoal transition-all cursor-pointer">
+                      <Plus className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* ── SIZE-WISE STOCK BREAKDOWN ── */}
+                <div className="border-t border-cream-border pt-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase">
+                      Size Breakdown (Per-Size Quantities)
+                    </label>
+                    {Object.keys(sizeInventory).length > 0 && (
+                      <span className="text-[10px] text-accent font-bold">
+                        {Object.keys(sizeInventory).length} sizes configured
+                      </span>
+                    )}
+                  </div>
+
+                  {/* List of configured sizes */}
+                  {Object.entries(sizeInventory).length > 0 ? (
+                    <div className="space-y-2">
+                      {Object.entries(sizeInventory).map(([sKey, sItem]) => {
+                        const qty = typeof sItem === 'number' ? sItem : sItem?.quantity || 0;
+                        const stockCode = typeof sItem === 'object' ? sItem?.stockCode : null;
+
+                        return (
+                          <div key={sKey} className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-cream-light/60 border border-cream-border">
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-charcoal px-2.5 py-0.5 rounded-md bg-white border border-cream-border inline-block w-fit">
+                                {sKey}
+                              </span>
+                              {stockCode && (
+                                <span className="text-[9px] font-mono text-charcoal-muted mt-0.5">
+                                  {stockCode}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = {
+                                    ...sizeInventory,
+                                    [sKey]: {
+                                      quantity: Math.max(0, qty - 1),
+                                      stockCode: stockCode || null,
+                                    }
+                                  };
+                                  setSizeInventory(next);
+                                  const tot = sumSizeInventory(next);
+                                  set('quantity', tot.toString());
+                                  const activeSizes = Object.keys(next).filter(k => (next[k]?.quantity ?? 0) > 0);
+                                  if (activeSizes.length > 0) set('size', activeSizes.join(', '));
+                                }}
+                                className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-cream-border text-charcoal hover:border-accent cursor-pointer"
+                              >
+                                -
+                              </button>
+                              <span className="w-10 text-center text-xs font-bold text-charcoal">
+                                {qty}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = {
+                                    ...sizeInventory,
+                                    [sKey]: {
+                                      quantity: qty + 1,
+                                      stockCode: stockCode || null,
+                                    }
+                                  };
+                                  setSizeInventory(next);
+                                  const tot = sumSizeInventory(next);
+                                  set('quantity', tot.toString());
+                                  set('size', Object.keys(next).join(', '));
+                                }}
+                                className="w-7 h-7 flex items-center justify-center rounded-lg bg-white border border-cream-border text-charcoal hover:border-accent cursor-pointer"
+                              >
+                                +
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = { ...sizeInventory };
+                                  delete next[sKey];
+                                  setSizeInventory(next);
+                                  const tot = sumSizeInventory(next);
+                                  set('quantity', tot.toString());
+                                  const remaining = Object.keys(next);
+                                  set('size', remaining.length > 0 ? remaining.join(', ') : '');
+                                }}
+                                className="p-1.5 text-red-500 hover:text-red-700 cursor-pointer ml-1"
+                                title="Remove size"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-charcoal-muted italic">
+                      No per-size breakdown added. Add sizes below if this item has multiple sizes (e.g. S, M, L).
+                    </p>
+                  )}
+
+                  {/* Add size row */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="text"
+                      placeholder="Size (e.g. M)"
+                      value={newSizeKey}
+                      onChange={e => setNewSizeKey(e.target.value.toUpperCase())}
+                      className="w-20 px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-xs font-bold text-charcoal focus:outline-none focus:border-accent"
+                    />
+                    <input
+                      type="number"
+                      placeholder="Qty"
+                      min="1"
+                      value={newSizeQty}
+                      onChange={e => setNewSizeQty(e.target.value)}
+                      className="w-14 px-2 py-1.5 rounded-lg border border-cream-border bg-white text-xs font-bold text-charcoal text-center focus:outline-none focus:border-accent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const trimmed = newSizeKey.trim().toUpperCase();
+                        const qtyNum = parseInt(newSizeQty, 10);
+                        if (!trimmed || isNaN(qtyNum) || qtyNum < 0) return;
+                        const current = sizeInventory[trimmed];
+                        const next = {
+                          ...sizeInventory,
+                          [trimmed]: {
+                            quantity: (current?.quantity || 0) + qtyNum,
+                            stockCode: newSizeStockCode.trim() || current?.stockCode || null,
+                          }
+                        };
+                        setSizeInventory(next);
+                        const tot = sumSizeInventory(next);
+                        set('quantity', tot.toString());
+                        set('size', Object.keys(next).join(', '));
+                        setNewSizeKey('');
+                        setNewSizeQty('1');
+                        setNewSizeStockCode('');
+                      }}
+                      className="flex-1 py-1.5 px-3 rounded-lg bg-accent text-white text-xs font-bold hover:bg-accent/90 transition-colors cursor-pointer"
+                    >
+                      + Add Size
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1893,7 +2876,23 @@ export function ProductForm({ productId }: Props) {
 
           {/* Cover Image */}
           <Card className="p-6 space-y-3">
-            <h2 className="font-display text-base font-bold text-charcoal">Thumbnail</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="font-display text-base font-bold text-charcoal">Thumbnail</h2>
+              {generatedImages && Object.keys(generatedImages).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sortedList = Object.entries(generatedImages).sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0));
+                    const firstUrl = sortedList[0]?.[1]?.imageUrl;
+                    if (firstUrl) setCoverImage(firstUrl);
+                  }}
+                  className="text-[10px] px-2 py-1 rounded bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200 font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Make photo #1 the cover thumbnail"
+                >
+                  <Star className="w-3 h-3 text-amber-500 fill-current" /> Use Photo #1 as Cover
+                </button>
+              )}
+            </div>
             
             <div className="flex gap-3 items-end">
               <div className="flex-1">
@@ -1920,8 +2919,11 @@ export function ProductForm({ productId }: Props) {
             </div>
 
             {form.coverImageUrl && (
-              <div className="aspect-square rounded-xl overflow-hidden border border-cream-border bg-cream-light">
+              <div className="aspect-square rounded-xl overflow-hidden border border-cream-border bg-cream-light relative group">
                 <img src={form.coverImageUrl} alt="Cover" className="w-full h-full object-cover" />
+                <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-amber-400 text-amber-950 text-[10px] font-bold shadow-sm flex items-center gap-1">
+                  <Star className="w-3 h-3 fill-current" /> Cover Image
+                </div>
               </div>
             )}
           </Card>
@@ -1938,6 +2940,7 @@ export function ProductForm({ productId }: Props) {
                     <input
                       type="file"
                       accept="image/*"
+                      multiple
                       onChange={handleUploadCataloguePhoto}
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                       disabled={uploadingCatalogue}
@@ -1946,9 +2949,19 @@ export function ProductForm({ productId }: Props) {
                       type="button"
                       disabled={uploadingCatalogue}
                       className="text-[10px] px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-charcoal font-bold hover:bg-cream-light transition-all flex items-center gap-1 disabled:opacity-50 whitespace-nowrap"
+                      title="Upload one or multiple photos from your device"
                     >
-                      {uploadingCatalogue ? <Loader2 className="w-3 h-3 animate-spin shrink-0" /> : <Upload className="w-3 h-3 shrink-0" />}
-                      Upload Local
+                      {uploadingCatalogue && !catalogueUploadStatus?.startsWith('Drive') ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin shrink-0 text-accent" />
+                          <span>{catalogueUploadStatus ? `Uploading (${catalogueUploadStatus})` : 'Uploading...'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-3 h-3 shrink-0" />
+                          <span>Upload Local</span>
+                        </>
+                      )}
                     </button>
                   </div>
                   <button
@@ -1956,14 +2969,106 @@ export function ProductForm({ productId }: Props) {
                     onClick={handleOpenGooglePicker}
                     disabled={uploadingCatalogue}
                     className="text-[10px] px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-charcoal font-bold hover:bg-cream-light transition-all flex items-center gap-1 disabled:opacity-50 whitespace-nowrap"
+                    title="Select one or multiple photos from Google Drive"
                   >
-                    <svg viewBox="0 0 48 48" className="w-3 h-3 shrink-0">
-                      <path fill="#FFC107" d="M17 7.5L31 7.5 45 31.5 31 31.5z"></path>
-                      <path fill="#1976D2" d="M3.1 31.5L10.1 43.5 38.1 43.5 31.1 31.5z"></path>
-                      <path fill="#4CAF50" d="M17 7.5L3.1 31.5 10.1 43.5 24 19.5z"></path>
-                    </svg>
-                    Drive
+                    {uploadingCatalogue && catalogueUploadStatus?.startsWith('Drive') ? (
+                      <>
+                        <Loader2 className="w-3 h-3 animate-spin shrink-0 text-accent" />
+                        <span>{catalogueUploadStatus}</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg viewBox="0 0 48 48" className="w-3 h-3 shrink-0">
+                          <path fill="#FFC107" d="M17 7.5L31 7.5 45 31.5 31 31.5z"></path>
+                          <path fill="#1976D2" d="M3.1 31.5L10.1 43.5 38.1 43.5 31.1 31.5z"></path>
+                          <path fill="#4CAF50" d="M17 7.5L3.1 31.5 10.1 43.5 24 19.5z"></path>
+                        </svg>
+                        <span>Drive</span>
+                      </>
+                    )}
                   </button>
+                  {isPickingPhotos ? (
+                    <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 text-[10px] text-amber-900 font-semibold shadow-xs">
+                      {photosNeedsClickToOpen ? (
+                        <button
+                          type="button"
+                          onClick={openAuthorizedPhotosWindow}
+                          className="bg-accent text-white px-2 py-0.5 rounded font-bold hover:bg-accent/90 shadow-xs"
+                        >
+                          👉 Open Photos Window
+                        </button>
+                      ) : (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin shrink-0 text-amber-600" />
+                          <span className="truncate max-w-[160px]">{photosPickingStatus || 'Photos active...'}</span>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={cancelPhotosPicking}
+                        className="ml-1 text-slate-400 hover:text-rose-600 font-bold px-1 rounded cursor-pointer"
+                        title="Cancel selection"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={openPhotosPicker}
+                      disabled={uploadingCatalogue}
+                      className="text-[10px] px-2.5 py-1.5 rounded-lg border border-cream-border bg-white text-charcoal font-bold hover:bg-cream-light transition-all flex items-center gap-1.5 disabled:opacity-50 whitespace-nowrap"
+                      title="Select photos directly from Google Photos"
+                    >
+                      <svg viewBox="0 0 24 24" className="w-3 h-3 shrink-0">
+                        <path fill="#EA4335" d="M12 2a5 5 0 0 0-5 5v5h5a5 5 0 0 0 0-10z" />
+                        <path fill="#4285F4" d="M2 12a5 5 0 0 0 5 5h5v-5a5 5 0 0 0-10 0z" />
+                        <path fill="#FBBC04" d="M22 12a5 5 0 0 0-5-5h-5v5a5 5 0 0 0 10 0z" />
+                        <path fill="#34A853" d="M12 22a5 5 0 0 0 5-5v-5h-5a5 5 0 0 0 0 10z" />
+                      </svg>
+                      <span>Photos</span>
+                    </button>
+                  )}
+                  {generatedImages && Object.keys(generatedImages).length >= 2 ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowCollageModal(true)}
+                      className="text-[10px] px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-amber-500 via-rose-500 to-indigo-600 text-white font-bold hover:opacity-90 transition-all flex items-center gap-1 shadow-xs cursor-pointer whitespace-nowrap"
+                      title="Create wholesale catalogue sheet or social collage"
+                    >
+                      <Sparkles className="w-3 h-3 shrink-0" /> Collage
+                    </button>
+                  ) : generatedImages && Object.keys(generatedImages).length === 1 ? (
+                    <button
+                      type="button"
+                      disabled
+                      className="text-[10px] px-2 py-1.5 rounded-lg bg-cream-light border border-cream-border text-charcoal-muted font-medium flex items-center gap-1 cursor-not-allowed whitespace-nowrap opacity-60"
+                      title="Upload or generate at least 2 photos to create a collage"
+                    >
+                      <Sparkles className="w-3 h-3 shrink-0" /> Collage (Min 2)
+                    </button>
+                  ) : null}
+                  {generatedImages && Object.keys(generatedImages).length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleExportAlbumToGooglePhotos}
+                      disabled={exportingGooglePhotos}
+                      className="text-[10px] px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-700 transition-all flex items-center gap-1.5 disabled:opacity-50 whitespace-nowrap shadow-xs cursor-pointer"
+                      title={`Save all ${Object.keys(generatedImages).length} photos to Cloudflare R2 & Google Photos in album "${form.friendlyCode || form.stockCode || 'Code1'}"`}
+                    >
+                      {exportingGooglePhotos ? (
+                        <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                      ) : (
+                        <svg viewBox="0 0 24 24" className="w-3 h-3 shrink-0">
+                          <path fill="#EA4335" d="M12 2a5 5 0 0 0-5 5v5h5a5 5 0 0 0 0-10z" />
+                          <path fill="#4285F4" d="M2 12a5 5 0 0 0 5 5h5v-5a5 5 0 0 0-10 0z" />
+                          <path fill="#FBBC04" d="M22 12a5 5 0 0 0-5-5h-5v5a5 5 0 0 0 10 0z" />
+                          <path fill="#34A853" d="M12 22a5 5 0 0 0 5-5v-5h-5a5 5 0 0 0 0 10z" />
+                        </svg>
+                      )}
+                      <span>{exportingGooglePhotos ? 'Syncing...' : `Save to Photos (${form.friendlyCode || form.stockCode || 'Code1'})`}</span>
+                    </button>
+                  )}
                   <a href={`/admin/generate?productId=${productId}`}
                     className="text-[10px] px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold hover:bg-accent/90 transition-all flex items-center gap-1 whitespace-nowrap"
                     target="_blank" rel="noreferrer">
@@ -1973,33 +3078,187 @@ export function ProductForm({ productId }: Props) {
               )}
             </div>
 
+            {/* Google Photos Album Sync Success Feedback */}
+            {googlePhotosSuccess && (
+              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between gap-2 animate-fade-in">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <div>
+                    <span className="font-bold">Album Synced:</span> {googlePhotosSuccess.albumTitle} ({googlePhotosSuccess.photosUploaded} photos saved to Google Photos & R2)
+                  </div>
+                </div>
+                {googlePhotosSuccess.albumUrl && (
+                  <a
+                    href={googlePhotosSuccess.albumUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px] hover:bg-emerald-700 transition-colors whitespace-nowrap flex items-center gap-1"
+                  >
+                    <span>Open Album</span>
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                )}
+              </div>
+            )}
+
             {generatedImages && Object.keys(generatedImages).length > 0 ? (
               <>
-                <div className="grid grid-cols-2 gap-2">
-                  {Object.entries(generatedImages).map(([poseId, img], idx, arr) => (
-                    <div key={poseId} className="aspect-[3/4] rounded-xl overflow-hidden border border-cream-border bg-cream-light group relative">
-                      <img src={img.imageUrl} alt="Generated" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                      <div className="absolute top-2 left-2 w-6 h-6 bg-charcoal/80 backdrop-blur-sm rounded flex items-center justify-center text-white text-xs font-bold shadow-sm">
-                        {idx + 1}
+                <div className="grid grid-cols-2 gap-2.5">
+                  {cataloguePhotosList.map((item, idx) => {
+                    const isCover = item.isCover;
+                    return (
+                      <div
+                        key={item.poseId}
+                        className={`aspect-[3/4] rounded-2xl overflow-hidden border-2 transition-all duration-200 ${
+                          isCover
+                            ? 'border-amber-400 ring-2 ring-amber-300 shadow-md'
+                            : 'border-cream-border hover:border-accent/60 shadow-xs'
+                        } bg-cream-light group relative`}
+                      >
+                        {/* The Image (Click to View in Lightbox) */}
+                        <div
+                          onClick={() => setLightboxIndex(idx)}
+                          className="w-full h-full cursor-zoom-in relative"
+                          title="Click to view full photo"
+                        >
+                          <img
+                            src={item.imageUrl}
+                            alt={`Catalogue Photo #${idx + 1}`}
+                            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                          />
+
+                          {/* Hover Overlay with Click to View hint */}
+                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                            <div className="px-2.5 py-1 bg-black/75 backdrop-blur-md rounded-xl text-white text-[10px] font-bold flex items-center gap-1.5 shadow-md transform translate-y-1 group-hover:translate-y-0 transition-transform">
+                              <Eye className="w-3.5 h-3.5 text-accent" />
+                              <span>Click to View</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Top Left: Order Badge + Cover Tag */}
+                        <div className="absolute top-2 left-2 flex items-center gap-1 z-10 pointer-events-none">
+                          <div className="w-5 h-5 bg-charcoal/85 backdrop-blur-md rounded-md flex items-center justify-center text-white text-[10px] font-bold shadow-xs">
+                            {idx + 1}
+                          </div>
+                          {isCover && (
+                            <div className="px-1.5 py-0.5 bg-amber-400 text-amber-950 rounded-md text-[9px] font-extrabold shadow-xs flex items-center gap-0.5">
+                              <Star className="w-2.5 h-2.5 fill-current" /> COVER
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Top Right: Compact Action Buttons (View + Delete) */}
+                        <div className="absolute top-2 right-2 flex items-center gap-1 z-10">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLightboxIndex(idx);
+                            }}
+                            title="View Full Size Photo"
+                            className="w-6 h-6 rounded-md bg-black/65 hover:bg-white text-white hover:text-charcoal backdrop-blur-md flex items-center justify-center transition-colors shadow-xs cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm(`Delete Photo #${idx + 1}?`)) {
+                                deleteImage(item.poseId);
+                              }
+                            }}
+                            title="Delete photo"
+                            className="w-6 h-6 rounded-md bg-black/65 hover:bg-red-600 text-white backdrop-blur-md flex items-center justify-center transition-colors shadow-xs cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {/* Bottom Bar: Cover Setter & Reorder Controls */}
+                        <div className="absolute bottom-1.5 inset-x-1.5 flex items-center justify-between z-10">
+                          {/* Make Cover Button */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCoverImage(item.imageUrl);
+                            }}
+                            title={isCover ? "Current Cover Photo" : "Set as Cover Photo"}
+                            className={`px-2 py-1 rounded-md text-[9px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-xs ${
+                              isCover
+                                ? 'bg-amber-400 text-amber-950'
+                                : 'bg-black/65 hover:bg-amber-400 text-white hover:text-amber-950 backdrop-blur-md'
+                            }`}
+                          >
+                            <Star className={`w-3 h-3 ${isCover ? 'fill-current' : ''}`} />
+                            <span>{isCover ? 'Cover' : 'Set Cover'}</span>
+                          </button>
+
+                          {/* Reorder Arrows */}
+                          <div className="flex items-center gap-0.5 bg-black/65 backdrop-blur-md p-0.5 rounded-md shadow-xs">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveImage(item.poseId, 'up');
+                              }}
+                              disabled={idx === 0}
+                              title="Move photo earlier"
+                              className="w-5 h-5 flex items-center justify-center text-white hover:bg-white/30 rounded disabled:opacity-20 disabled:pointer-events-none transition-colors cursor-pointer"
+                            >
+                              <ArrowLeft className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                moveImage(item.poseId, 'down');
+                              }}
+                              disabled={idx === cataloguePhotosList.length - 1}
+                              title="Move photo later"
+                              className="w-5 h-5 flex items-center justify-center text-white hover:bg-white/30 rounded disabled:opacity-20 disabled:pointer-events-none transition-colors cursor-pointer"
+                            >
+                              <ArrowLeft className="w-3 h-3 rotate-180" />
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button type="button" onClick={() => moveImage(poseId, 'up')} disabled={idx === 0} className="p-1.5 bg-white/80 rounded hover:bg-white text-charcoal disabled:opacity-50">
-                          <ArrowLeft className="w-3.5 h-3.5" />
-                        </button>
-                        <button type="button" onClick={() => moveImage(poseId, 'down')} disabled={idx === arr.length - 1} className="p-1.5 bg-white/80 rounded hover:bg-white text-charcoal disabled:opacity-50">
-                          <ArrowLeft className="w-3.5 h-3.5 rotate-180" />
-                        </button>
-                        <button type="button" onClick={() => deleteImage(poseId)} className="p-1.5 bg-white/80 rounded hover:bg-red-50 text-red-600">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-                <p className="text-[10px] text-charcoal-muted text-center">Auto-synced from AI photoshoot session</p>
-                  <span className="text-[10px] text-charcoal-muted text-center block">
-                    Session Order ID: {linkedOrderId}
-                  </span>
+
+                {/* Wholesale Catalogue Collage Banner Action */}
+                {cataloguePhotosList.length >= 2 && (
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCollageModal(true)}
+                      className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 via-rose-500 to-indigo-600 hover:opacity-95 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer group"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-200 group-hover:rotate-12 transition-transform shrink-0" />
+                      <span>Create Wholesale Catalogue Collage ({cataloguePhotosList.length} Photos)</span>
+                      <span className="text-[10px] font-normal px-2 py-0.5 rounded-full bg-white/20 text-white ml-0.5">
+                        10 Layouts • WhatsApp & Print
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                <div className="space-y-0.5 text-center pt-1">
+                  <p className="text-[11px] font-semibold text-charcoal">
+                    {cataloguePhotosList.length} Catalogue Photo{cataloguePhotosList.length > 1 ? 's' : ''} (AI & Uploaded)
+                  </p>
+                  <p className="text-[10px] text-charcoal-muted">
+                    Click any photo to view full size. Photo #1 is default cover.
+                  </p>
+                  {linkedOrderId && (
+                    <span className="text-[10px] text-charcoal-muted block font-mono">
+                      Session: {linkedOrderId}
+                    </span>
+                  )}
+                </div>
               </>
             ) : (
               <div className="py-6 text-center space-y-3">
@@ -2018,5 +3277,169 @@ export function ProductForm({ productId }: Props) {
         </div>
       </div>
     </form>
+
+      {/* Wholesale & Social Collage Studio Modal */}
+      {showCollageModal && (
+        <CollageCreator
+          images={collageImagesList}
+          productName={form.title}
+          stockCode={form.stockCode || form.friendlyCode}
+          designNumber={form.designNumber}
+          isOpen={showCollageModal}
+          onClose={() => setShowCollageModal(false)}
+        />
+      )}
+
+      {/* ── HIGH-RES FULLSCREEN PHOTO VIEWER LIGHTBOX (CLICK TO VIEW) ── */}
+      {lightboxIndex !== null && cataloguePhotosList[lightboxIndex] && (
+        <div
+          className="fixed inset-0 z-[250] bg-black/92 backdrop-blur-xl flex flex-col p-3 sm:p-5 text-white animate-fade-in font-sans select-none"
+          onClick={() => setLightboxIndex(null)}
+        >
+          {/* Top Bar */}
+          <div
+            className="flex items-center justify-between gap-3 p-3 bg-white/10 backdrop-blur-md rounded-2xl border border-white/15 mb-3 shrink-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Left: Photo Info & Cover Status */}
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-accent animate-pulse" />
+              <div>
+                <h3 className="text-sm font-bold tracking-wide">
+                  Catalogue Photo {lightboxIndex + 1} of {cataloguePhotosList.length}
+                </h3>
+                <p className="text-[11px] text-white/60">
+                  {cataloguePhotosList[lightboxIndex].isCover ? 'Current Product Cover Image' : 'Click "Make Cover" to use as thumbnail'}
+                </p>
+              </div>
+            </div>
+
+            {/* Right: Actions */}
+            <div className="flex items-center gap-2">
+              {/* Set as Cover button */}
+              <button
+                type="button"
+                onClick={() => setCoverImage(cataloguePhotosList[lightboxIndex].imageUrl)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  cataloguePhotosList[lightboxIndex].isCover
+                    ? 'bg-amber-400 text-amber-950 shadow-md'
+                    : 'bg-white/15 hover:bg-amber-400 hover:text-amber-950 text-white'
+                }`}
+              >
+                <Star className={`w-3.5 h-3.5 ${cataloguePhotosList[lightboxIndex].isCover ? 'fill-current' : ''}`} />
+                <span>{cataloguePhotosList[lightboxIndex].isCover ? 'Cover Photo' : 'Make Cover Photo'}</span>
+              </button>
+
+              {/* Download Photo */}
+              <a
+                href={cataloguePhotosList[lightboxIndex].imageUrl}
+                download={`catalogue_photo_${lightboxIndex + 1}.jpg`}
+                target="_blank"
+                rel="noreferrer"
+                className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+                title="Download original photo"
+              >
+                <Download className="w-4 h-4" />
+              </a>
+
+              {/* Open in New Tab */}
+              <a
+                href={cataloguePhotosList[lightboxIndex].imageUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+                title="Open photo URL in new tab"
+              >
+                <ExternalLink className="w-4 h-4" />
+              </a>
+
+              {/* Close Button */}
+              <button
+                type="button"
+                onClick={() => setLightboxIndex(null)}
+                className="p-2 rounded-xl bg-white/10 hover:bg-white/25 text-white transition-colors cursor-pointer"
+                title="Close viewer (Esc)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Center Image Stage with Navigation Arrows */}
+          <div
+            className="flex-1 min-h-0 relative flex items-center justify-center p-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Prev Arrow */}
+            {lightboxIndex > 0 && (
+              <button
+                type="button"
+                onClick={() => setLightboxIndex(lightboxIndex - 1)}
+                className="absolute left-2 sm:left-6 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-black/60 hover:bg-white text-white hover:text-charcoal backdrop-blur-md flex items-center justify-center transition-all cursor-pointer shadow-xl border border-white/20 hover:scale-105"
+                title="Previous photo (←)"
+              >
+                <ChevronLeft className="w-6 h-6" />
+              </button>
+            )}
+
+            {/* Main High-Res Image */}
+            <div className="max-w-full max-h-full flex items-center justify-center relative">
+              <img
+                src={cataloguePhotosList[lightboxIndex].imageUrl}
+                alt={`Photo #${lightboxIndex + 1}`}
+                className="max-h-[75vh] max-w-[88vw] w-auto h-auto object-contain rounded-2xl shadow-2xl border border-white/10 transition-all duration-200"
+              />
+            </div>
+
+            {/* Next Arrow */}
+            {lightboxIndex < cataloguePhotosList.length - 1 && (
+              <button
+                type="button"
+                onClick={() => setLightboxIndex(lightboxIndex + 1)}
+                className="absolute right-2 sm:right-6 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-black/60 hover:bg-white text-white hover:text-charcoal backdrop-blur-md flex items-center justify-center transition-all cursor-pointer shadow-xl border border-white/20 hover:scale-105"
+                title="Next photo (→)"
+              >
+                <ChevronRight className="w-6 h-6" />
+              </button>
+            )}
+          </div>
+
+          {/* Bottom Thumbnail Strip */}
+          <div
+            className="flex items-center justify-center gap-2 p-2.5 bg-white/10 backdrop-blur-md rounded-2xl border border-white/15 mt-3 shrink-0 overflow-x-auto max-w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {cataloguePhotosList.map((photo, pIdx) => {
+              const isSelected = pIdx === lightboxIndex;
+              const isCover = photo.isCover;
+              return (
+                <button
+                  key={photo.poseId || pIdx}
+                  type="button"
+                  onClick={() => setLightboxIndex(pIdx)}
+                  className={`relative w-14 h-18 rounded-xl overflow-hidden shrink-0 transition-all cursor-pointer border-2 ${
+                    isSelected
+                      ? 'border-accent ring-2 ring-accent/60 scale-105 shadow-md'
+                      : isCover
+                      ? 'border-amber-400 opacity-80 hover:opacity-100'
+                      : 'border-white/20 opacity-60 hover:opacity-100'
+                  }`}
+                >
+                  <img src={photo.imageUrl} alt="" className="w-full h-full object-cover" />
+                  <div className="absolute top-1 left-1 bg-black/75 text-white text-[9px] font-bold px-1 rounded">
+                    #{pIdx + 1}
+                  </div>
+                  {isCover && (
+                    <div className="absolute bottom-1 right-1 bg-amber-400 text-amber-950 p-0.5 rounded">
+                      <Star className="w-2.5 h-2.5 fill-current" />
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </>
   );
 }

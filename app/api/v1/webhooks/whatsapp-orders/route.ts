@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import crypto from 'crypto';
 import { syncOrderToPactERP } from '@/lib/pact-sync';
+import { deductSizeStock, findSizeByStockCode } from '@/lib/size-inventory';
 
 // In-memory store for rate limiting (For production, use Redis/Upstash)
 const rateLimitMap = new Map<string, { count: number; lastReset: number }>();
@@ -106,16 +107,47 @@ export async function POST(request: Request) {
 
                   // 5. Transactional DB Updates
                   await prisma.$transaction(async (tx) => {
+                    // Handle size-specific SKU if passed as "SKU:SIZE" or item.size
+                    let requestedSize: string | null = (item.size || (item as any).variant_id) ? String(item.size || (item as any).variant_id).trim() : null;
+                    let targetIdentifier = stockCode;
+                    if (!requestedSize && stockCode.includes(':')) {
+                      const parts = stockCode.split(':');
+                      targetIdentifier = parts[0];
+                      requestedSize = parts[1];
+                    }
+
                     // Try to find by any of the stable IDs exported to the catalog
-                    const product = await tx.product.findFirst({ 
+                    let product = await tx.product.findFirst({ 
                       where: { 
                         OR: [
-                          { code1: stockCode },
-                          { productCode: stockCode },
-                          { stockCode: stockCode }
+                          { code1: targetIdentifier },
+                          { productCode: targetIdentifier },
+                          { stockCode: targetIdentifier }
                         ]
                       } 
                     });
+
+                    // If not found directly, check if targetIdentifier matches a variant barcode inside sizeInventory
+                    if (!product) {
+                      const possibleMatches = await tx.product.findMany({
+                        where: {
+                          sizeInventory: {
+                            not: null as any
+                          }
+                        },
+                        take: 100
+                      });
+                      for (const p of possibleMatches) {
+                        const foundSize = findSizeByStockCode(p.sizeInventory, targetIdentifier);
+                        if (foundSize) {
+                          product = p;
+                          if (!requestedSize) {
+                            requestedSize = foundSize.size;
+                          }
+                          break;
+                        }
+                      }
+                    }
                     
                     // Edge Case: Product Not Found
                     if (!product) {
@@ -126,15 +158,29 @@ export async function POST(request: Request) {
                     // Edge Case: Insufficient Stock
                     if (product.quantity < quantityOrdered) {
                       console.warn(`[Edge Case] Stock underflow attempted for ${stockCode}. Ordered: ${quantityOrdered}, Available: ${product.quantity}`);
-                      // Here you might trigger a "Sold Out" notification back to WhatsApp via API
                       return;
+                    }
+
+                    // Edge Case: Size-specific inventory check & deduction
+                    let updatedSizeInventory: any = product.sizeInventory;
+                    let newTotalQty = product.quantity - quantityOrdered;
+
+                    if (requestedSize) {
+                      const deductResult = deductSizeStock(product.sizeInventory, requestedSize, quantityOrdered);
+                      if (!deductResult.success) {
+                        console.warn(`[Edge Case] Size stock shortage: ${deductResult.error}`);
+                        return;
+                      }
+                      updatedSizeInventory = deductResult.sizeInventory;
+                      newTotalQty = deductResult.totalQuantity;
                     }
 
                     // Proceed with stock deduction
                     await tx.product.update({
                       where: { id: product.id },
                       data: {
-                          quantity: product.quantity - quantityOrdered,
+                          quantity: newTotalQty,
+                          sizeInventory: (updatedSizeInventory as any) ?? undefined,
                           reservedQty: product.reservedQty + quantityOrdered 
                       }
                     });
@@ -144,8 +190,8 @@ export async function POST(request: Request) {
                         productId: product.id,
                         action: 'whatsapp_sale',
                         qtyChange: -quantityOrdered,
-                        qtyAfter: product.quantity - quantityOrdered,
-                        note: `WhatsApp Order. Customer: ${customerPhone}`,
+                        qtyAfter: newTotalQty,
+                        note: `WhatsApp Order. Customer: ${customerPhone}${requestedSize ? ` (Size: ${requestedSize})` : ''}`,
                         source: 'whatsapp'
                       }
                     });
