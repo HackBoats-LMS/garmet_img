@@ -82,11 +82,20 @@ export function findSizeByStockCode(
   barcode: string
 ): { size: string; item: SizeInventoryItem } | null {
   if (!barcode) return null;
-  const cleanBarcode = String(barcode).trim();
+  const cleanBarcode = String(barcode).trim().toLowerCase();
   const normalized = normalizeSizeInventory(inv);
 
+  // 1. Exact match on variant stockCode (case-insensitive)
   for (const [size, item] of Object.entries(normalized)) {
-    if (item.stockCode && String(item.stockCode).trim() === cleanBarcode) {
+    if (item.stockCode && String(item.stockCode).trim().toLowerCase() === cleanBarcode) {
+      return { size, item };
+    }
+  }
+
+  // 2. Suffix match: e.g. barcode is "kpd-2-navy-xl" and size is "XL"
+  for (const [size, item] of Object.entries(normalized)) {
+    const sLower = size.toLowerCase();
+    if (cleanBarcode.endsWith(`-${sLower}`) || cleanBarcode.endsWith(`_${sLower}`) || cleanBarcode === sLower) {
       return { size, item };
     }
   }
@@ -147,14 +156,36 @@ export function deductSizeStock(
   }
 
   const query = String(sizeOrStockCode).trim().toUpperCase();
+  const queryLower = query.toLowerCase();
   
-  // 1. Try finding by size name (e.g. "XL")
+  // 1. Try finding by direct size name (e.g. "XL")
   let targetSize = map[query] ? query : null;
 
-  // 2. If not found by size name, try finding by barcode stockCode (e.g. "5270000094")
+  // 2. Try finding by case-insensitive key
+  if (!targetSize) {
+    for (const s of Object.keys(map)) {
+      if (s.toUpperCase() === query) {
+        targetSize = s;
+        break;
+      }
+    }
+  }
+
+  // 3. Try finding by barcode / variant stockCode (case-insensitive)
   if (!targetSize) {
     for (const [s, item] of Object.entries(map)) {
-      if (item.stockCode && String(item.stockCode).trim().toUpperCase() === query) {
+      if (item.stockCode && String(item.stockCode).trim().toLowerCase() === queryLower) {
+        targetSize = s;
+        break;
+      }
+    }
+  }
+
+  // 4. Try suffix match (e.g. "saree-05-cherry-red-m" -> size "M")
+  if (!targetSize) {
+    for (const s of Object.keys(map)) {
+      const sLower = s.toLowerCase();
+      if (queryLower.endsWith(`-${sLower}`) || queryLower.endsWith(`_${sLower}`)) {
         targetSize = s;
         break;
       }
@@ -196,14 +227,47 @@ export function deductSizeStock(
 }
 
 /**
+ * Generates a clean, unique stock code for a size variant based on code1 or stockCode:
+ * e.g. base: "saree-05-cherry-red", size: "XL" -> "saree-05-cherry-red-XL"
+ */
+export function generateVariantStockCode(baseCode: string | null | undefined, size: string): string {
+  const cleanBase = String(baseCode || '').trim();
+  const cleanSize = String(size || '').trim().toLowerCase();
+  if (!cleanBase) return cleanSize;
+  // If base already ends with the size (e.g. k-1-orchid-xl), avoid double suffixing
+  if (cleanBase.toLowerCase().endsWith(`-${cleanSize}`)) {
+    return cleanBase;
+  }
+  return `${cleanBase}-${cleanSize}`;
+}
+
+/**
+ * Normalizes and ensures all size entries have a unique variant stock code
+ * derived from code1 (or fallback stockCode).
+ */
+export function ensureVariantStockCodes(
+  sizeInventory: any,
+  baseCode: string | null | undefined
+): Record<string, SizeInventoryItem> {
+  const normalized = normalizeSizeInventory(sizeInventory);
+  const result: Record<string, SizeInventoryItem> = {};
+
+  for (const [sz, item] of Object.entries(normalized)) {
+    result[sz] = {
+      quantity: item.quantity,
+      // If explicit barcode/stockCode exists (e.g. from Excel column), use it; otherwise auto-generate from code1
+      stockCode: item.stockCode && item.stockCode.trim() !== ''
+        ? item.stockCode.trim()
+        : generateVariantStockCode(baseCode, sz),
+    };
+  }
+
+  return result;
+}
+
+/**
  * Consolidates multiple spreadsheet rows that belong to the same product
  * (e.g., rows having the same Code1 or StockCode with different sizes and quantities).
- * 
- * Returns a consolidated list where each unique product has:
- * - Combined `quantity` (sum of all sizes)
- * - Structured `sizeInventory` (e.g. {"XL": 3, "XXL": 3, "3XL": 3, ...})
- * - Comma-separated `length_Size` (e.g. "XL, XXL, 3XL, 4XL, 5X")
- * - Latest non-null product details and barcode
  */
 export function consolidateSpreadsheetRows<T extends {
   stockCode: string;
@@ -216,13 +280,11 @@ export function consolidateSpreadsheetRows<T extends {
 }>(rows: T[]): T[] {
   if (!rows || rows.length === 0) return [];
 
-  // Group by code1 if present, otherwise by stockCode
   const groupMap = new Map<string, T[]>();
 
   for (const row of rows) {
     const rawCode1 = row.code1 ? String(row.code1).trim() : '';
     const rawStock = row.stockCode ? String(row.stockCode).trim() : '';
-    // If code1 is valid and not empty, use code1 as primary stable grouping key
     const groupKey = rawCode1 || rawStock;
     if (!groupKey) continue;
 
@@ -238,23 +300,25 @@ export function consolidateSpreadsheetRows<T extends {
     if (groupRows.length === 1) {
       const single = { ...groupRows[0] };
       const rawSize = single.length_Size ? String(single.length_Size).trim() : null;
+      const baseCode = single.code1 || single.stockCode;
       if (rawSize && rawSize !== '-' && !single.sizeInventory) {
         single.sizeInventory = {
           [rawSize.toUpperCase()]: {
             quantity: single.quantity || 0,
-            stockCode: single.stockCode || null,
+            stockCode: single.stockCode || generateVariantStockCode(baseCode, rawSize),
           }
         };
+      } else if (single.sizeInventory) {
+        single.sizeInventory = ensureVariantStockCodes(single.sizeInventory, baseCode);
       }
       consolidated.push(single);
       continue;
     }
 
-    // Merge multiple rows into a single consolidated product
-    // Pick the primary row (first or latest with complete fields)
     const primary = { ...groupRows[0] };
     const mergedSizes: Record<string, SizeInventoryItem> = {};
     let totalQty = 0;
+    const baseCode = primary.code1 || primary.stockCode;
 
     for (const r of groupRows) {
       const q = typeof r.quantity === 'number' && !isNaN(r.quantity) ? r.quantity : 0;
@@ -266,12 +330,10 @@ export function consolidateSpreadsheetRows<T extends {
         const existingItem = mergedSizes[normSz];
         mergedSizes[normSz] = {
           quantity: (existingItem?.quantity || 0) + q,
-          // Preserve the barcode stockCode specific to this size
-          stockCode: r.stockCode || existingItem?.stockCode || null,
+          stockCode: r.stockCode || existingItem?.stockCode || generateVariantStockCode(r.code1 || baseCode, normSz),
         };
       }
 
-      // If subsequent row has fuller details, copy them over
       for (const [k, v] of Object.entries(r)) {
         if (((primary as any)[k] === null || (primary as any)[k] === undefined || (primary as any)[k] === '') && v !== null && v !== undefined && v !== '') {
           (primary as any)[k] = v;
@@ -280,7 +342,9 @@ export function consolidateSpreadsheetRows<T extends {
     }
 
     primary.quantity = totalQty;
-    primary.sizeInventory = Object.keys(mergedSizes).length > 0 ? mergedSizes : null;
+    primary.sizeInventory = Object.keys(mergedSizes).length > 0
+      ? ensureVariantStockCodes(mergedSizes, baseCode)
+      : null;
 
     if (Object.keys(mergedSizes).length > 0) {
       primary.length_Size = Object.keys(mergedSizes).join(', ');

@@ -108,11 +108,20 @@ export async function POST(req: NextRequest) {
       unitPrice = '',
       wholesalePrice = '',
       description = '',
+      keywords = '', // e.g. "chikankari, modal cotton, summer pastel"
     } = body;
 
     // Resolve prices cleanly
     const finalRetailPrice = retailPrice || price || '';
     const finalWholesalePrice = wholesalePrice || '';
+
+    // Clean user keywords (can be string or array)
+    const keywordsList: string[] = Array.isArray(keywords)
+      ? keywords.map((k: any) => String(k).trim()).filter(Boolean)
+      : typeof keywords === 'string'
+        ? keywords.split(',').map(k => k.trim()).filter(Boolean)
+        : [];
+    const keywordsStr = keywordsList.join(', ');
 
     // Pick best image URL
     const activeImageUrl = imageUrl || (Array.isArray(images) && images.length > 0 ? images[0] : null);
@@ -133,7 +142,7 @@ export async function POST(req: NextRequest) {
     const ai = new GoogleGenAI({ apiKey });
     const result: Record<string, any> = {};
 
-    // ─── 1. PRODUCT NAME GENERATION ──────────────────────────────────────────
+    // ─── 1. PRODUCT NAME & CATALOGUE TITLE GENERATION ─────────────────────────
     if (mode === 'name' || mode === 'both') {
       const namePrompt = `You are the product-namer for RGJ Dass — a 75-year-old Secunderabad women's everyday saree & kurti house. Look at the uploaded photo and give the piece a name.
 
@@ -152,10 +161,12 @@ NAMING RULES:
 - BANNED words (never use): Timeless, Elegance, Elegant, Ethereal, Grace, Graceful, Serene, Serenity, Bliss, Divine, Majestic, Eternal, Radiance, Essence, Charm, Allure, Whisper, Dream, Aura, Enchant.
 - Do NOT invent fabric, weave or origin — you cannot reliably see fabric, so never put it in the name.
 - Good examples: "Coral Bloom", "Quiet Monday", "Terracotta Noon", "Festive Ease", "Sunlit Daisy".
+${keywordsStr ? `- MANDATORY USER KEYWORDS: Incorporate or reflect these specific keywords in the naming or catalogue title where appropriate: "${keywordsStr}". (For example, if "chikankari" is requested, reflect it in the catalogue title like "<Name> — Chikankari Kurti Set").` : ''}
 
 Additional context if visible:
 Category: ${category || 'Saree'}
 Fabric/Details: ${clothType || ''} ${color ? `(Color: ${color})` : ''}
+${keywordsStr ? `User Requested Keywords: ${keywordsStr}` : ''}
 
 OUTPUT exactly this, nothing else:
 Name: <the design name>
@@ -220,6 +231,7 @@ PRODUCT DETAILS GIVEN:
 - Retail Price (B2C Customers): ${finalRetailPrice ? `₹${finalRetailPrice}` : 'Available on request'}
 - Dealer / Wholesale Price (B2B Only): ${finalWholesalePrice ? `₹${finalWholesalePrice}` : 'Available on request'}
 - Existing Notes: ${description || ''}
+${keywordsStr ? `- REQUIRED KEYWORDS TO FEATURE: "${keywordsStr}". (You MUST naturally weave these exact keywords or craft highlights into the captions, highlights, description and hashtags!).` : ''}
 
 PRICING RULES FOR EACH CAPTION (VERY IMPORTANT):
 1. "whatsappRetail": MUST use the Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : 'Price on request'}). NEVER mention wholesale or dealer price here under any circumstances.
@@ -227,14 +239,15 @@ PRICING RULES FOR EACH CAPTION (VERY IMPORTANT):
 3. "whatsappCatalogueTitle": Mention Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : ''}) if including price.
 4. "instagramCaption", "facebookCaption", "shopifyTitle": Use Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : ''}) if including price, NEVER wholesale price.
 
-${targetPlatform ? `TASK: Generate ONLY the caption for the platform: "${targetPlatform}". Return a JSON object with this single key.` : `TASK: Generate all platform captions for this product. Return your answer ONLY as a valid JSON object with the following exact keys:`}
+${targetPlatform ? `TASK: Generate ONLY the caption for the platform: "${targetPlatform}". Return a JSON object with this single key.` : `TASK: Generate all platform captions and a polished product description. Return your answer ONLY as a valid JSON object with the following exact keys:`}
 {
-  "whatsappRetail": "WhatsApp broadcast message for retail customers (warm, personal, boutique feel, 2-3 emojis, details product & retail price (₹${finalRetailPrice || 'on request'}), ends with 'The best 4 minutes of your day. R.G.J.Dass · Sindhi Colony, Secunderabad')",
+  "whatsappRetail": "WhatsApp broadcast message for retail customers (warm, personal, boutique feel, 2-3 emojis, details product & retail price (₹${finalRetailPrice || 'on request'}), naturally incorporates requested keywords '${keywordsStr || ''}', ends with 'The best 4 minutes of your day. R.G.J.Dass · Sindhi Colony, Secunderabad')",
   "whatsappWholesale": "WhatsApp message for B2B wholesale buyers/store owners (professional, design code, fabric/print, 4-colour pack, dealer price (₹${finalWholesalePrice || 'on inquiry'}), margin info, direct dispatch from Secunderabad warehouse)",
-  "whatsappCatalogueTitle": "Short catalogue listing title + 2-3 line searchable description with retail price",
-  "instagramCaption": "Engaging Instagram caption with a stop-scroll hook for our ICPs, quiet confident storytelling, 3-4 tasteful emojis, and 15-20 curated hashtags",
-  "facebookCaption": "Community-focused Facebook post highlighting 75 years of textile craft in Secunderabad, everyday wearability, engaging question, and store visit/order info",
-  "shopifyTitle": "SEO-optimised Shopify title and 3-paragraph product description (The Morning Drape, Fabric & Motifs, Occasion Styling & Specs)"
+  "whatsappCatalogueTitle": "Short catalogue listing title + 2-3 line searchable description with retail price and keywords",
+  "instagramCaption": "Engaging Instagram caption with a stop-scroll hook for our ICPs, quiet confident storytelling featuring keywords '${keywordsStr || ''}', 3-4 tasteful emojis, and 15-20 curated hashtags",
+  "facebookCaption": "Community-focused Facebook post highlighting 75 years of textile craft in Secunderabad, everyday wearability, requested keywords, engaging question, and store visit/order info",
+  "shopifyTitle": "SEO-optimised Shopify title and 3-paragraph product description (The Morning Drape, Fabric & Motifs, Occasion Styling & Specs)",
+  "productDescription": "A concise, evocative 2-3 sentence product description highlighting weave, craft${keywordsStr ? `, specifically featuring '${keywordsStr}'` : ''}, drape and feel for cataloguing and customer reference"
 }`;
 
       const captionParts: any[] = [{ text: captionsPrompt }];

@@ -3,7 +3,7 @@ import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import * as XLSX from 'xlsx';
 import { parseSheetSmart, mapSpreadsheetRow, MappedProduct } from '@/lib/spreadsheet-mapper';
-import { addOrUpdateSizeStock, consolidateSpreadsheetRows, normalizeSizeInventory, sumSizeInventory } from '@/lib/size-inventory';
+import { addOrUpdateSizeStock, consolidateSpreadsheetRows, normalizeSizeInventory, sumSizeInventory, ensureVariantStockCodes, generateVariantStockCode } from '@/lib/size-inventory';
 
 // POST /api/admin/products/import
 export async function POST(req: NextRequest) {
@@ -174,18 +174,27 @@ export async function POST(req: NextRequest) {
       let finalLengthSize = item.length_Size;
 
       if (existing) {
-        // Sync or merge incoming sizes into existing product's sizeInventory
+        // Restock case: If incoming item has a different stockCode (or explicit new batch) for the same Code1,
+        // we add the new arrival quantity to the existing stock (e.g. 4 + 2 = 6).
+        const isNewStockCodeBatch = item.stockCode && existing.stockCode && item.stockCode !== existing.stockCode;
         const existingInv = normalizeSizeInventory(existing.sizeInventory);
+
         if (itemSizeInventory) {
           const merged: Record<string, any> = { ...existingInv };
           for (const [sKey, sVal] of Object.entries(itemSizeInventory)) {
             const incomingQty = typeof sVal === 'number' ? sVal : (sVal as any)?.quantity || 0;
             const incomingStockCode = typeof sVal === 'object' ? (sVal as any)?.stockCode : null;
             const currentItem = merged[sKey] || { quantity: 0, stockCode: null };
-            // Set quantity to incoming sheet quantity (or keep current if incoming is 0), and map stockCode
+
+            // If it's a new batch with new stock code, ADD incoming quantity to current quantity
+            // Otherwise, set to incoming sheet quantity (or keep current if incoming is 0)
+            const targetQty = isNewStockCodeBatch
+              ? (currentItem.quantity || 0) + incomingQty
+              : (incomingQty > 0 ? incomingQty : (currentItem.quantity || 0));
+
             merged[sKey] = {
-              quantity: incomingQty > 0 ? incomingQty : (currentItem.quantity || 0),
-              stockCode: incomingStockCode || currentItem.stockCode || null,
+              quantity: targetQty,
+              stockCode: incomingStockCode || item.stockCode || currentItem.stockCode || null,
             };
           }
           finalSizeInventory = merged;
@@ -198,21 +207,29 @@ export async function POST(req: NextRequest) {
           const activeSizes = Object.keys(finalSizeInventory).filter(s => (finalSizeInventory[s]?.quantity ?? 0) > 0).join(', ');
           finalLengthSize = activeSizes || existing.length_Size || itemSize;
         } else {
+          // No size breakdown: Add incoming restock to existing total quantity if stockCode changed
           finalSizeInventory = existing.sizeInventory;
-          finalQuantity = item.quantity;
+          finalQuantity = isNewStockCodeBatch ? (existing.quantity + item.quantity) : item.quantity;
         }
       } else {
         if (!finalSizeInventory && itemSize && itemSize !== '-') {
+          const normSize = itemSize.toUpperCase();
           finalSizeInventory = {
-            [itemSize.toUpperCase()]: {
+            [normSize]: {
               quantity: item.quantity,
-              stockCode: item.stockCode || null,
+              stockCode: item.stockCode || generateVariantStockCode(item.code1 || stockCode, normSize),
             }
           };
         }
       }
 
+      // Auto-generate clean unique code for each size variant from code1 (or stockCode)
+      if (finalSizeInventory && typeof finalSizeInventory === 'object') {
+        finalSizeInventory = ensureVariantStockCodes(finalSizeInventory, item.code1 || stockCode);
+      }
+
       const productPayload = {
+        stockCode: stockCode, // Updates to latest stock code if new batch arrives
         productName: item.productName || `Product ${stockCode}`,
         productDescription: item.productDescription,
         color: item.color,

@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutGrid, Layers, Users, Cpu, LogOut, ChevronRight, Package, Tag, CalendarDays, ShieldCheck } from 'lucide-react';
+import { LayoutGrid, Layers, Users, Cpu, LogOut, ChevronRight, Package, Tag, CalendarDays, ShieldCheck, RefreshCw } from 'lucide-react';
 import { signOut } from 'next-auth/react';
 
 const NAV_ITEMS = [
@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { href: '/admin/model-selection', label: 'AI Engine & Models', icon: Cpu },
   { href: '/admin/models', label: 'Model Personas', icon: Users },
   { href: '/admin/admins', label: 'Admins', icon: ShieldCheck },
+  { href: '/admin/picky-test', label: 'Picky Assist Tester', icon: RefreshCw },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -86,8 +87,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 min-h-screen">
-        <div className="max-w-5xl mx-auto px-10 py-10">
+      <main className="flex-1 min-h-screen overflow-x-hidden">
+        <div className="max-w-[1440px] w-full mx-auto px-6 lg:px-8 py-8">
           {children}
         </div>
       </main>
