@@ -32,7 +32,7 @@ interface Product {
   mrp?: number | null;
   quantity: number;
   length_Size?: string | null;
-  sizeInventory?: Record<string, number> | null;
+  sizeInventory?: Record<string, any> | null;
   reservedQty: number;
   soldQty: number;
   status: 'ACTIVE' | 'OUT_OF_STOCK' | 'ARCHIVED' | 'DRAFT';

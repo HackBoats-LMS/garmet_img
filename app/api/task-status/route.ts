@@ -16,15 +16,18 @@ async function syncCompletedImageToProduct(
     const existingProduct = await prisma.product.findUnique({ where: { id: productId } });
     if (existingProduct) {
       const currentGen = (existingProduct.generatedImages as Record<string, any>) || {};
-      const keyExists = currentGen[poseId] && currentGen[poseId].imageUrl !== permanentUrl;
-      const finalPoseKey = keyExists ? `${poseId}_${Date.now()}` : poseId;
+      const cleanedGen: Record<string, any> = {};
+      for (const [k, v] of Object.entries(currentGen)) {
+        const u = typeof v === 'string' ? v : (v as any)?.imageUrl;
+        if (u !== permanentUrl) {
+          cleanedGen[k] = v;
+        }
+      }
+      cleanedGen[poseId] = { imageUrl: permanentUrl, generatedAt: new Date().toISOString() };
       await prisma.product.update({
         where: { id: productId },
         data: {
-          generatedImages: {
-            ...currentGen,
-            [finalPoseKey]: { imageUrl: permanentUrl, generatedAt: new Date().toISOString() },
-          },
+          generatedImages: cleanedGen,
           linkedOrderId: orderId !== 'order' ? orderId : existingProduct.linkedOrderId,
         },
       });

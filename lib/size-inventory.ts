@@ -8,6 +8,7 @@
 export interface SizeInventoryItem {
   quantity: number;
   stockCode?: string | null;
+  stockCodes?: string[];
 }
 
 export type SizeInventoryMap = Record<string, SizeInventoryItem | number>;
@@ -16,7 +17,8 @@ export type SizeInventoryMap = Record<string, SizeInventoryItem | number>;
  * Normalizes any incoming size inventory representation into a clean Record<string, SizeInventoryItem>.
  * Supports:
  * - Legacy format: {"XL": 3, "XXL": 2}
- * - Detailed format: {"XL": { quantity: 3, stockCode: "5270000094" }, "XXL": { quantity: 2, stockCode: "5270000095" }}
+ * - Single stockCode format: {"XL": { quantity: 3, stockCode: "5270000094" }}
+ * - Multi-stockCode format: {"XL": { quantity: 5, stockCode: "5270000094, 5270000102", stockCodes: ["5270000094", "5270000102"] }}
  * - JSON string, existing object, or null/undefined.
  */
 export function normalizeSizeInventory(raw: any): Record<string, SizeInventoryItem> {
@@ -44,13 +46,31 @@ export function normalizeSizeInventory(raw: any): Record<string, SizeInventoryIt
       result[trimmedSize] = {
         quantity: Math.max(0, val),
         stockCode: null,
+        stockCodes: [],
       };
     } else if (typeof val === 'object' && val !== null) {
       const q = parseInt(String((val as any).quantity ?? (val as any).qty ?? 0), 10);
-      const sCode = (val as any).stockCode ? String((val as any).stockCode).trim() : null;
+      const rawCode = (val as any).stockCode ? String((val as any).stockCode).trim() : null;
+      const rawCodes = Array.isArray((val as any).stockCodes)
+        ? (val as any).stockCodes.map((s: any) => String(s).trim()).filter(Boolean)
+        : [];
+
+      const codesSet = new Set<string>();
+      for (const c of rawCodes) {
+        if (c) codesSet.add(c);
+      }
+      if (rawCode) {
+        rawCode.split(/[,;|\s]+/).forEach(s => {
+          const t = s.trim();
+          if (t) codesSet.add(t);
+        });
+      }
+
+      const allCodes = Array.from(codesSet);
       result[trimmedSize] = {
         quantity: isNaN(q) ? 0 : Math.max(0, q),
-        stockCode: sCode,
+        stockCode: allCodes.length > 0 ? allCodes.join(', ') : null,
+        stockCodes: allCodes,
       };
     } else {
       const q = parseInt(String(val), 10);
@@ -58,6 +78,7 @@ export function normalizeSizeInventory(raw: any): Record<string, SizeInventoryIt
         result[trimmedSize] = {
           quantity: Math.max(0, q),
           stockCode: null,
+          stockCodes: [],
         };
       }
     }
@@ -85,10 +106,18 @@ export function findSizeByStockCode(
   const cleanBarcode = String(barcode).trim().toLowerCase();
   const normalized = normalizeSizeInventory(inv);
 
-  // 1. Exact match on variant stockCode (case-insensitive)
+  // 1. Exact match on variant stockCodes array or stockCode string
   for (const [size, item] of Object.entries(normalized)) {
-    if (item.stockCode && String(item.stockCode).trim().toLowerCase() === cleanBarcode) {
-      return { size, item };
+    if (item.stockCodes && item.stockCodes.length > 0) {
+      if (item.stockCodes.some(c => c.toLowerCase() === cleanBarcode)) {
+        return { size, item };
+      }
+    }
+    if (item.stockCode) {
+      const codes = item.stockCode.split(/[,;|\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+      if (codes.includes(cleanBarcode)) {
+        return { size, item };
+      }
     }
   }
 
@@ -105,7 +134,7 @@ export function findSizeByStockCode(
 
 /**
  * Merges or increments a specific size into an existing sizeInventory map.
- * Returns the new map and the new total quantity.
+ * Returns the new map and the new total quantity, keeping all stockCodes.
  */
 export function addOrUpdateSizeStock(
   currentMap: any,
@@ -116,12 +145,17 @@ export function addOrUpdateSizeStock(
   const map = { ...normalizeSizeInventory(currentMap) };
   const normalizedSize = String(size).trim().toUpperCase();
 
-  const currentItem = map[normalizedSize] || { quantity: 0, stockCode: null };
+  const currentItem = map[normalizedSize] || { quantity: 0, stockCode: null, stockCodes: [] };
   const updatedQty = Math.max(0, currentItem.quantity + quantityToAdd);
   
+  const currentCodes = currentItem.stockCodes || (currentItem.stockCode ? currentItem.stockCode.split(/[,;|\s]+/).map(s => s.trim()).filter(Boolean) : []);
+  const newCodes = stockCode ? String(stockCode).split(/[,;|\s]+/).map(s => s.trim()).filter(Boolean) : [];
+  const mergedCodes = Array.from(new Set([...currentCodes, ...newCodes]));
+
   map[normalizedSize] = {
     quantity: updatedQty,
-    stockCode: stockCode !== undefined ? stockCode : currentItem.stockCode,
+    stockCode: mergedCodes.length > 0 ? mergedCodes.join(', ') : null,
+    stockCodes: mergedCodes,
   };
 
   const totalQuantity = sumSizeInventory(map);
@@ -174,7 +208,14 @@ export function deductSizeStock(
   // 3. Try finding by barcode / variant stockCode (case-insensitive)
   if (!targetSize) {
     for (const [s, item] of Object.entries(map)) {
-      if (item.stockCode && String(item.stockCode).trim().toLowerCase() === queryLower) {
+      const allCodes: string[] = [];
+      if (item.stockCodes && Array.isArray(item.stockCodes)) {
+        allCodes.push(...item.stockCodes);
+      }
+      if (item.stockCode) {
+        allCodes.push(...String(item.stockCode).split(/[,;|\s]+/));
+      }
+      if (allCodes.some(c => c.trim().toLowerCase() === queryLower)) {
         targetSize = s;
         break;
       }
@@ -243,7 +284,7 @@ export function generateVariantStockCode(baseCode: string | null | undefined, si
 
 /**
  * Normalizes and ensures all size entries have a unique variant stock code
- * derived from code1 (or fallback stockCode).
+ * derived from code1 (or fallback stockCode) while retaining all existing stockCodes.
  */
 export function ensureVariantStockCodes(
   sizeInventory: any,
@@ -253,12 +294,18 @@ export function ensureVariantStockCodes(
   const result: Record<string, SizeInventoryItem> = {};
 
   for (const [sz, item] of Object.entries(normalized)) {
+    const existingCodes = item.stockCodes && item.stockCodes.length > 0
+      ? item.stockCodes
+      : (item.stockCode ? item.stockCode.split(/[,;|\s]+/).map(s => s.trim()).filter(Boolean) : []);
+
+    const finalCodes = existingCodes.length > 0
+      ? existingCodes
+      : [generateVariantStockCode(baseCode, sz)];
+
     result[sz] = {
       quantity: item.quantity,
-      // If explicit barcode/stockCode exists (e.g. from Excel column), use it; otherwise auto-generate from code1
-      stockCode: item.stockCode && item.stockCode.trim() !== ''
-        ? item.stockCode.trim()
-        : generateVariantStockCode(baseCode, sz),
+      stockCode: finalCodes.join(', '),
+      stockCodes: finalCodes,
     };
   }
 
@@ -268,6 +315,7 @@ export function ensureVariantStockCodes(
 /**
  * Consolidates multiple spreadsheet rows that belong to the same product
  * (e.g., rows having the same Code1 or StockCode with different sizes and quantities).
+ * Retains all unique stockCodes under each size variant.
  */
 export function consolidateSpreadsheetRows<T extends {
   stockCode: string;
@@ -302,10 +350,12 @@ export function consolidateSpreadsheetRows<T extends {
       const rawSize = single.length_Size ? String(single.length_Size).trim() : null;
       const baseCode = single.code1 || single.stockCode;
       if (rawSize && rawSize !== '-' && !single.sizeInventory) {
+        const initialCode = single.stockCode || generateVariantStockCode(baseCode, rawSize);
         single.sizeInventory = {
           [rawSize.toUpperCase()]: {
             quantity: single.quantity || 0,
-            stockCode: single.stockCode || generateVariantStockCode(baseCode, rawSize),
+            stockCode: initialCode,
+            stockCodes: initialCode ? [initialCode] : [],
           }
         };
       } else if (single.sizeInventory) {
@@ -328,9 +378,15 @@ export function consolidateSpreadsheetRows<T extends {
       if (sz && sz !== '-') {
         const normSz = sz.toUpperCase();
         const existingItem = mergedSizes[normSz];
+        const existingCodes = existingItem?.stockCodes || (existingItem?.stockCode ? String(existingItem.stockCode).split(/[,;|\s]+/).map(s => s.trim()).filter(Boolean) : []);
+        const incomingCode = r.stockCode ? String(r.stockCode).trim() : null;
+        const newCodes = incomingCode ? [incomingCode] : [];
+        const mergedCodes = Array.from(new Set([...existingCodes, ...newCodes]));
+
         mergedSizes[normSz] = {
           quantity: (existingItem?.quantity || 0) + q,
-          stockCode: r.stockCode || existingItem?.stockCode || generateVariantStockCode(r.code1 || baseCode, normSz),
+          stockCode: mergedCodes.join(', ') || generateVariantStockCode(r.code1 || baseCode, normSz),
+          stockCodes: mergedCodes.length > 0 ? mergedCodes : [generateVariantStockCode(r.code1 || baseCode, normSz)],
         };
       }
 

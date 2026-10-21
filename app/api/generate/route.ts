@@ -753,10 +753,22 @@ async function saveGeneratedOrder(params: {
             }
           }
 
-          const mergedGen = {
-            ...existingProductGen,
-            ...orderedNewImages,
-          };
+          const mergedGen: Record<string, any> = {};
+          const seenGenUrls = new Set<string>();
+          for (const [k, v] of Object.entries(orderedNewImages)) {
+            const u = (v as any)?.imageUrl ? String((v as any).imageUrl).trim() : null;
+            if (u) seenGenUrls.add(u);
+            mergedGen[k] = v;
+          }
+          for (const [k, v] of Object.entries(existingProductGen)) {
+            const u = (v as any)?.imageUrl ? String((v as any).imageUrl).trim() : null;
+            if (u && !seenGenUrls.has(u)) {
+              seenGenUrls.add(u);
+              mergedGen[k] = v;
+            } else if (!u && !mergedGen[k]) {
+              mergedGen[k] = v;
+            }
+          }
 
           const sortedList = Object.entries(mergedGen)
             .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
@@ -819,10 +831,22 @@ async function saveGeneratedOrder(params: {
             }
           }
 
-          const mergedGen = {
-            ...existingProductGen,
-            ...orderedNewImages,
-          };
+          const mergedGen: Record<string, any> = {};
+          const seenGenUrls = new Set<string>();
+          for (const [k, v] of Object.entries(orderedNewImages)) {
+            const u = (v as any)?.imageUrl ? String((v as any).imageUrl).trim() : null;
+            if (u) seenGenUrls.add(u);
+            mergedGen[k] = v;
+          }
+          for (const [k, v] of Object.entries(existingProductGen)) {
+            const u = (v as any)?.imageUrl ? String((v as any).imageUrl).trim() : null;
+            if (u && !seenGenUrls.has(u)) {
+              seenGenUrls.add(u);
+              mergedGen[k] = v;
+            } else if (!u && !mergedGen[k]) {
+              mergedGen[k] = v;
+            }
+          }
 
           const sortedList = Object.entries(mergedGen)
             .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
