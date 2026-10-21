@@ -1,88 +1,109 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
+import { parsePickyAssistWebhookBody, processPickyAssistOrder } from '@/lib/picky-assist-orders';
+import { saveRequest, RecordedRequest } from '@/app/api/admin/picky-test/logStore';
 
 export async function POST(req: NextRequest) {
-  try {
-    // Security: Verify Bearer token
-    const authHeader = req.headers.get('authorization');
-    const expectedToken = process.env.PICKY_ASSIST_API_TOKEN;
-    if (!expectedToken || authHeader !== `Bearer ${expectedToken}`) {
-      console.warn('[Picky Assist Webhook] Unauthorized attempt');
+  return handleWebhook(req);
+}
+
+export async function GET(req: NextRequest) {
+  return handleWebhook(req);
+}
+
+export async function PUT(req: NextRequest) {
+  return handleWebhook(req);
+}
+
+async function handleWebhook(req: NextRequest) {
+  const timestamp = new Date().toISOString();
+  const id = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const method = req.method;
+  const url = req.nextUrl.pathname + req.nextUrl.search;
+  const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1';
+
+  // Security: Verify token only if configured in environment
+  const expectedToken = process.env.PICKY_ASSIST_API_TOKEN;
+  if (expectedToken) {
+    const authHeader = req.headers.get('authorization') || '';
+    const apiKeyHeader = req.headers.get('x-api-key') || '';
+    const tokenParam = req.nextUrl.searchParams.get('token') || '';
+    const isValid =
+      authHeader === `Bearer ${expectedToken}` ||
+      authHeader === expectedToken ||
+      apiKeyHeader === expectedToken ||
+      tokenParam === expectedToken;
+
+    if (!isValid) {
+      console.warn(`[Picky Assist Webhook] Unauthorized attempt from IP: ${ip}`);
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-
-    const payload = await req.json();
-    
-    // Picky Assist will send code1 and the updated quantity.
-    // Ensure we have both fields before proceeding.
-    const code1 = payload.code1;
-    const newQuantity = payload.quantity;
-
-    if (!code1 || typeof newQuantity !== 'number') {
-      return NextResponse.json(
-        { error: 'Invalid payload. Expected code1 and quantity (number).' },
-        { status: 400 }
-      );
-    }
-
-    // Find the product by code1
-    const product = await prisma.product.findFirst({
-      where: { code1: code1 },
-    });
-
-    if (!product) {
-      console.warn(`[Picky Assist Webhook] Product not found for code1: ${code1}`);
-      return NextResponse.json(
-        { error: 'Product not found' },
-        { status: 404 }
-      );
-    }
-
-    // Calculate the difference for the inventory log
-    const qtyChange = newQuantity - product.quantity;
-    
-    // Only update if there's actually a change in quantity
-    if (qtyChange !== 0) {
-      // Auto-update status if quantity hits 0
-      let autoStatus = product.status;
-      if (newQuantity === 0 && autoStatus === 'ACTIVE') {
-        autoStatus = 'OUT_OF_STOCK';
-      } else if (newQuantity > 0 && autoStatus === 'OUT_OF_STOCK') {
-        autoStatus = 'ACTIVE';
-      }
-
-      // Update the product and create an inventory log in a transaction
-      await prisma.$transaction([
-        prisma.product.update({
-          where: { id: product.id },
-          data: {
-            quantity: newQuantity,
-            status: autoStatus,
-          },
-        }),
-        prisma.inventoryLog.create({
-          data: {
-            productId: product.id,
-            action: qtyChange > 0 ? 'restock' : 'sale',
-            qtyChange: qtyChange,
-            qtyAfter: newQuantity,
-            note: 'WhatsApp Catalog Sale / Picky Assist Webhook',
-            source: 'whatsapp',
-          },
-        }),
-      ]);
-      
-      console.log(`[Picky Assist Webhook] ✅ Updated quantity for ${code1} to ${newQuantity}`);
-    } else {
-      console.log(`[Picky Assist Webhook] ℹ️ Quantity for ${code1} is already ${newQuantity}. No change made.`);
-    }
-
-    return NextResponse.json({ success: true, message: 'Inventory updated successfully' });
-  } catch (error: any) {
-    console.error('[Picky Assist Webhook] ❌ Error processing webhook:', error);
-    return NextResponse.json(
-      { error: 'Internal Server Error', details: error.message },
-      { status: 500 }
-    );
   }
+
+  // Parse body (handles JSON, URLSearchParams, form-urlencoded, raw strings)
+  const { parsedBody, rawBody, contentType } = await parsePickyAssistWebhookBody(req);
+
+  // Capture headers
+  const headers: Record<string, string> = {};
+  req.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+
+  // Capture query params
+  const query: Record<string, string> = {};
+  req.nextUrl.searchParams.forEach((val, key) => {
+    query[key] = val;
+  });
+
+  // Combine query and parsedBody if GET or empty body
+  const effectivePayload = method === 'GET' ? { ...query, ...parsedBody } : parsedBody;
+
+  let processResult: any = null;
+  let status = 200;
+
+  try {
+    // Process order & update database quantity
+    processResult = await processPickyAssistOrder(effectivePayload);
+    status = processResult.success ? 200 : (processResult.actionTaken === 'PRODUCTS_NOT_FOUND' ? 404 : 200);
+  } catch (err: any) {
+    console.error('[Picky Assist Webhook] Processing error:', err);
+    processResult = {
+      success: false,
+      actionTaken: 'ERROR',
+      summaryMessage: `Error: ${err.message}`,
+      itemsProcessed: [],
+    };
+    status = 500;
+  }
+
+  // Record request for inspection in /admin/picky-test
+  try {
+    const recorded: RecordedRequest = {
+      id,
+      timestamp,
+      method,
+      url,
+      ip,
+      headers,
+      query,
+      body: effectivePayload,
+      rawBody: rawBody || undefined,
+      responseStatus: status,
+      mappingResult: processResult,
+    };
+    saveRequest(recorded);
+  } catch (err) {
+    console.error('[Picky Assist Webhook] Failed to save to logStore:', err);
+  }
+
+  return NextResponse.json(
+    {
+      success: processResult.success,
+      actionTaken: processResult.actionTaken,
+      message: processResult.summaryMessage,
+      order_reference: processResult.orderMeta?.orderId,
+      results: processResult.itemsProcessed,
+      fieldMappings: processResult.fieldMappings,
+    },
+    { status }
+  );
 }

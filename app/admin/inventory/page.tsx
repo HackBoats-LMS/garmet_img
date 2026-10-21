@@ -6,7 +6,7 @@ import {
   Plus, Search, Filter, Package, RefreshCw, Archive, Camera,
   ChevronUp, ChevronDown, AlertCircle, CheckCircle2,
   XCircle, Layers, Edit2, MoreHorizontal, Tag,
-  Upload, FileSpreadsheet
+  Upload, FileSpreadsheet, Play, Pause, Square, Sparkles, Check, X, Globe, ShoppingBag
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
@@ -264,6 +264,236 @@ export default function AdminInventoryPage() {
     fetchProducts();
   };
 
+  // Picky Assist Sync state
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [syncNotice, setSyncNotice] = useState<{
+    id: string;
+    success: boolean;
+    actionTaken?: string;
+    message: string;
+    diff?: any;
+  } | null>(null);
+
+  // Picky Assist Smart Sync All Modal State
+  const [showSyncAllModal, setShowSyncAllModal] = useState(false);
+  const [syncCandidatesLoading, setSyncCandidatesLoading] = useState(false);
+  const [syncCandidateStats, setSyncCandidateStats] = useState<{ total: number; unsyncedCount: number; modifiedCount: number }>({
+    total: 0,
+    unsyncedCount: 0,
+    modifiedCount: 0,
+  });
+  const [syncCandidateList, setSyncCandidateList] = useState<any[]>([]);
+  const [syncFilterMode, setSyncFilterMode] = useState<'all' | 'unsynced'>('all');
+  const [syncQueueActive, setSyncQueueActive] = useState(false);
+  const [syncQueuePaused, setSyncQueuePaused] = useState(false);
+  const [syncQueueProgress, setSyncQueueProgress] = useState({ current: 0, total: 0 });
+  const [syncQueueStats, setSyncQueueStats] = useState({ updated: 0, added: 0, failed: 0 });
+  const [syncLogs, setSyncLogs] = useState<Array<{ id: string; time: string; text: string; type: 'updated' | 'added' | 'failed' | 'info' }>>([]);
+  const abortSyncRef = useRef(false);
+  const pausedSyncRef = useRef(false);
+
+  const fetchSyncCandidates = async () => {
+    setSyncCandidatesLoading(true);
+    try {
+      const res = await fetch('/api/admin/picky-assist/sync?action=candidates');
+      const data = await res.json();
+      if (data.success) {
+        setSyncCandidateStats({
+          total: data.total || 0,
+          unsyncedCount: data.unsyncedCount || 0,
+          modifiedCount: data.modifiedCount || 0,
+        });
+        setSyncCandidateList(data.products || []);
+      }
+    } catch (err) {
+      console.error('Failed to load sync candidates:', err);
+    } finally {
+      setSyncCandidatesLoading(false);
+    }
+  };
+
+  const openSyncAllModal = () => {
+    setShowSyncAllModal(true);
+    fetchSyncCandidates();
+  };
+
+  const handleSyncProduct = async (product: Product) => {
+    setSyncingId(product.id);
+    setSyncNotice(null);
+    try {
+      const res = await fetch('/api/admin/picky-assist/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: product.id, action: 'sync' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      }
+      setSyncNotice({
+        id: product.id,
+        success: data.success,
+        actionTaken: data.actionTaken,
+        message: data.message || `Successfully synced ${product.stockCode} with Picky Assist`,
+        diff: data.diff,
+      });
+      fetchProducts();
+    } catch (err: any) {
+      console.error('Picky Assist sync error:', err);
+      setSyncNotice({
+        id: product.id,
+        success: false,
+        message: err.message || 'Failed to sync with Picky Assist',
+      });
+    } finally {
+      setSyncingId(null);
+      setTimeout(() => {
+        setSyncNotice((prev) => (prev?.id === product.id ? null : prev));
+      }, 7000);
+    }
+  };
+
+  const startSyncQueue = async () => {
+    let itemsToProcess = [...syncCandidateList];
+    if (syncFilterMode === 'unsynced') {
+      itemsToProcess = syncCandidateList.filter(
+        (p) => !p.syncedAt || (p.updatedAt && new Date(p.updatedAt).getTime() > new Date(p.syncedAt).getTime() + 1000)
+      );
+    }
+
+    if (itemsToProcess.length === 0) {
+      alert('No products match the selected sync filter.');
+      return;
+    }
+
+    abortSyncRef.current = false;
+    pausedSyncRef.current = false;
+    setSyncQueueActive(true);
+    setSyncQueuePaused(false);
+    setSyncQueueProgress({ current: 0, total: itemsToProcess.length });
+    setSyncQueueStats({ updated: 0, added: 0, failed: 0 });
+    setSyncLogs([
+      {
+        id: `log_${Date.now()}`,
+        time: new Date().toLocaleTimeString(),
+        text: `Starting Smart Sync for ${itemsToProcess.length} products. (Searching Picky Assist before creating to prevent duplicates)...`,
+        type: 'info',
+      },
+    ]);
+
+    let updatedCount = 0;
+    let addedCount = 0;
+    let failedCount = 0;
+
+    for (let i = 0; i < itemsToProcess.length; i++) {
+      if (abortSyncRef.current) {
+        setSyncLogs((prev) => [
+          {
+            id: `log_${Date.now()}_abort`,
+            time: new Date().toLocaleTimeString(),
+            text: '🛑 Sync was stopped by user.',
+            type: 'info',
+          },
+          ...prev,
+        ]);
+        break;
+      }
+
+      // Check pause state
+      while (pausedSyncRef.current && !abortSyncRef.current) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      if (abortSyncRef.current) break;
+
+      const item = itemsToProcess[i];
+      const code = item.code1 || item.stockCode;
+
+      try {
+        const res = await fetch('/api/admin/picky-assist/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ productId: item.id, action: 'sync' }),
+        });
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+          if (data.actionTaken === 'updated') {
+            updatedCount++;
+            setSyncLogs((prev) => [
+              {
+                id: `log_${Date.now()}_${i}`,
+                time: new Date().toLocaleTimeString(),
+                text: `✅ [UPDATED] ${code}: Found in Picky Assist ➔ Updated stock & details`,
+                type: 'updated',
+              },
+              ...prev.slice(0, 99),
+            ]);
+          } else {
+            addedCount++;
+            setSyncLogs((prev) => [
+              {
+                id: `log_${Date.now()}_${i}`,
+                time: new Date().toLocaleTimeString(),
+                text: `➕ [CREATED] ${code}: Not in Picky Assist ➔ Added as new product`,
+                type: 'added',
+              },
+              ...prev.slice(0, 99),
+            ]);
+          }
+        } else {
+          failedCount++;
+          setSyncLogs((prev) => [
+            {
+              id: `log_${Date.now()}_${i}`,
+              time: new Date().toLocaleTimeString(),
+              text: `⚠️ [FAILED] ${code}: ${data.message || data.error || 'Failed to sync'}`,
+              type: 'failed',
+            },
+            ...prev.slice(0, 99),
+          ]);
+        }
+      } catch (err: any) {
+        failedCount++;
+        setSyncLogs((prev) => [
+          {
+            id: `log_${Date.now()}_${i}`,
+            time: new Date().toLocaleTimeString(),
+            text: `❌ [ERROR] ${code}: ${err.message || 'Network error'}`,
+            type: 'failed',
+          },
+          ...prev.slice(0, 99),
+        ]);
+      }
+
+      setSyncQueueProgress({ current: i + 1, total: itemsToProcess.length });
+      setSyncQueueStats({ updated: updatedCount, added: addedCount, failed: failedCount });
+    }
+
+    setSyncQueueActive(false);
+    fetchProducts();
+    fetchSyncCandidates();
+  };
+
+  const togglePauseSync = () => {
+    pausedSyncRef.current = !pausedSyncRef.current;
+    setSyncQueuePaused(pausedSyncRef.current);
+    setSyncLogs((prev) => [
+      {
+        id: `log_${Date.now()}`,
+        time: new Date().toLocaleTimeString(),
+        text: pausedSyncRef.current ? '⏸️ Sync queue paused.' : '▶️ Sync queue resumed.',
+        type: 'info',
+      },
+      ...prev,
+    ]);
+  };
+
+  const stopSyncQueue = () => {
+    abortSyncRef.current = true;
+    pausedSyncRef.current = false;
+    setSyncQueuePaused(false);
+  };
+
   const stats = {
     total: total,
     inStock: products.filter(p => p.status === 'ACTIVE').length,
@@ -296,6 +526,16 @@ export default function AdminInventoryPage() {
           >
             {importing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
             {importing ? (importProgress || 'Importing...') : 'Import Excel'}
+          </button>
+          {/* Sync All with Picky Assist (Opens Smart Sync Queue Modal) */}
+          <button
+            type="button"
+            onClick={openSyncAllModal}
+            title="Sync products with Picky Assist (searches Picky first to prevent duplicates)"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-emerald-300 bg-emerald-50 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 hover:border-emerald-500 transition-all cursor-pointer shadow-xs"
+          >
+            <RefreshCw className="w-4 h-4 text-emerald-600" />
+            <span>Sync All to Picky</span>
           </button>
           <Link href="/admin/categories">
             <Button variant="secondary" size="md">
@@ -464,13 +704,13 @@ export default function AdminInventoryPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-cream-border bg-cream-light">
-                  <th className="text-left px-5 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted whitespace-nowrap">Product</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Stock Code</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Category</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Price</th>
-                  <th className="text-center px-4 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Qty</th>
-                  <th className="text-left px-4 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Status</th>
-                  <th className="text-right px-5 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Actions</th>
+                  <th className="text-left px-4 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted whitespace-nowrap">Product</th>
+                  <th className="text-left px-3 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted whitespace-nowrap">Stock Code</th>
+                  <th className="text-left px-3 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Category</th>
+                  <th className="text-left px-3 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Price</th>
+                  <th className="text-center px-2 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Qty</th>
+                  <th className="text-center px-2 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Status</th>
+                  <th className="text-right px-4 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-cream-border/50">
@@ -612,32 +852,77 @@ export default function AdminInventoryPage() {
                       </td>
 
                       {/* Status */}
-                      <td className="px-4 py-4">
-                        <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full border ${statusCfg.color}`}>
-                          <StatusIcon className="w-2.5 h-2.5" />
-                          {statusCfg.label}
-                        </span>
+                      <td className="px-4 py-4 text-center">
+                        <div className="inline-flex items-center justify-center">
+                          <span
+                            className={`w-3 h-3 rounded-full transition-transform hover:scale-125 inline-block ${
+                              product.status === 'ACTIVE'
+                                ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] ring-2 ring-emerald-200'
+                                : 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)] ring-2 ring-red-200'
+                            }`}
+                            title={`${statusCfg.label}${isLowStock ? ' (Low stock)' : ''}`}
+                          />
+                        </div>
                         {isLowStock && (
-                          <p className="text-[9px] text-amber-600 font-semibold mt-0.5">Low stock</p>
+                          <p className="text-[9px] text-amber-600 font-semibold mt-0.5 whitespace-nowrap">Low</p>
                         )}
                       </td>
 
                       {/* Actions */}
-                      <td className="px-5 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
+                      <td className="px-4 py-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5 flex-nowrap">
+                          {/* Picky Assist Sync Button */}
+                          <button
+                            type="button"
+                            onClick={() => handleSyncProduct(product)}
+                            disabled={syncingId === product.id}
+                            title="Sync with Picky Assist (Searches webhook, adds if new, updates diff if changed)"
+                            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer shadow-xs ${
+                              syncingId === product.id
+                                ? 'bg-amber-50 text-amber-700 border-amber-300'
+                                : syncNotice?.id === product.id && syncNotice.success
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                : syncNotice?.id === product.id && !syncNotice.success
+                                ? 'bg-red-50 text-red-700 border-red-300'
+                                : 'bg-white text-charcoal border-cream-border hover:border-emerald-600 hover:text-emerald-700'
+                            }`}
+                          >
+                            <RefreshCw className={`w-3 h-3 ${syncingId === product.id ? 'animate-spin text-amber-600' : 'text-emerald-600'}`} />
+                            <span>{syncingId === product.id ? 'Syncing...' : 'Sync'}</span>
+                          </button>
+
                           <Link href={`/admin/generate?productId=${product.id}`}>
-                            <button className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-white border border-transparent bg-accent hover:bg-accent/90 transition-all cursor-pointer shadow-sm">
-                              <Camera className="w-3 h-3" />
-                              Generate AI
+                            <button
+                              title="Generate AI"
+                              className="px-2.5 py-1.5 rounded-lg text-xs font-bold text-white border border-transparent bg-accent hover:bg-accent/90 transition-all cursor-pointer shadow-sm"
+                            >
+                              AI
                             </button>
                           </Link>
                           <Link href={`/admin/inventory/${product.id}`}>
-                            <button className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-charcoal border border-cream-border hover:border-accent hover:text-accent transition-all cursor-pointer bg-white">
+                            <button className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-charcoal border border-cream-border hover:border-accent hover:text-accent transition-all cursor-pointer bg-white">
                               <Edit2 className="w-3 h-3" />
                               Edit
                             </button>
                           </Link>
                         </div>
+                        {syncNotice?.id === product.id && (
+                          <div className={`mt-1.5 text-[11px] font-medium text-left px-2 py-1 rounded-lg border flex items-start gap-1 max-w-[290px] ml-auto animate-fade-in ${
+                            syncNotice.success ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'
+                          }`}>
+                            {syncNotice.success ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5 text-emerald-600" /> : <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-red-600" />}
+                            <div className="min-w-0">
+                              {syncNotice.actionTaken && (
+                                <span className={`inline-block text-[9px] font-bold px-1.5 py-0.2 rounded uppercase mr-1 ${
+                                  syncNotice.actionTaken === 'updated' ? 'bg-emerald-600 text-white' : 'bg-blue-600 text-white'
+                                }`}>
+                                  {syncNotice.actionTaken === 'updated' ? 'Updated Existing' : 'Added New'}
+                                </span>
+                              )}
+                              <span className="truncate block" title={syncNotice.message}>{syncNotice.message}</span>
+                            </div>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -672,6 +957,231 @@ export default function AdminInventoryPage() {
           </div>
         )}
       </Card>
+
+      {/* ── PICKY ASSIST SMART SYNC ALL QUEUE MODAL ── */}
+      {showSyncAllModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in font-sans">
+          <div className="bg-white rounded-2xl shadow-2xl border border-cream-border max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="px-6 py-4.5 bg-gradient-to-r from-emerald-900 via-slate-900 to-charcoal text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center">
+                  <RefreshCw className={`w-5 h-5 text-emerald-400 ${syncQueueActive && !syncQueuePaused ? 'animate-spin' : ''}`} />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-base flex items-center gap-2">
+                    Picky Assist Smart Sync
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      SEARCH-BEFORE-CREATE
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-white/70 mt-0.5">
+                    Checks Picky Assist catalog first: updates existing products, creates only new ones.
+                  </p>
+                </div>
+              </div>
+              {!syncQueueActive && (
+                <button
+                  type="button"
+                  onClick={() => setShowSyncAllModal(false)}
+                  className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5 overflow-y-auto flex-1">
+              {/* Filter Selector (When not running) */}
+              {!syncQueueActive && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-charcoal uppercase tracking-wider">
+                    Select Products to Sync
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSyncFilterMode('all')}
+                      className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                        syncFilterMode === 'all'
+                          ? 'border-emerald-500 bg-emerald-50/60 ring-2 ring-emerald-500/20'
+                          : 'border-cream-border bg-white hover:border-emerald-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold text-xs text-charcoal flex items-center gap-1.5">
+                          <Package className="w-4 h-4 text-emerald-600" /> All Products
+                        </span>
+                        <span className="text-xs font-mono font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                          {syncCandidateStats.total}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-charcoal-muted">
+                        Full catalog audit. Checks every product and size variant in Picky Assist.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSyncFilterMode('unsynced')}
+                      className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                        syncFilterMode === 'unsynced'
+                          ? 'border-accent bg-accent-bg/40 ring-2 ring-accent/20'
+                          : 'border-cream-border bg-white hover:border-accent/40'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold text-xs text-charcoal flex items-center gap-1.5">
+                          <Sparkles className="w-4 h-4 text-accent" /> Unsynced & Modified
+                        </span>
+                        <span className="text-xs font-mono font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">
+                          {syncCandidateStats.unsyncedCount + syncCandidateStats.modifiedCount}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-charcoal-muted">
+                        Only syncs new arrivals ({syncCandidateStats.unsyncedCount}) or edited stock ({syncCandidateStats.modifiedCount}).
+                      </p>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Progress Bar & Counters */}
+              {(syncQueueActive || syncQueueProgress.current > 0) && (
+                <div className="space-y-3 p-4 rounded-xl bg-slate-50 border border-slate-200">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-charcoal flex items-center gap-1.5">
+                      {syncQueueActive ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                          <span>Sync in progress...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Sync complete!</span>
+                        </>
+                      )}
+                    </span>
+                    <span className="font-mono font-bold text-charcoal">
+                      {syncQueueProgress.current} / {syncQueueProgress.total} ({syncQueueProgress.total > 0 ? Math.round((syncQueueProgress.current / syncQueueProgress.total) * 100) : 0}%)
+                    </span>
+                  </div>
+
+                  {/* Progress Bar Track */}
+                  <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      className="bg-emerald-500 h-full transition-all duration-300 rounded-full"
+                      style={{
+                        width: `${syncQueueProgress.total > 0 ? (syncQueueProgress.current / syncQueueProgress.total) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+
+                  {/* Stat Chips */}
+                  <div className="grid grid-cols-3 gap-2 pt-1 text-center">
+                    <div className="p-2 rounded-lg bg-emerald-100/70 border border-emerald-300">
+                      <span className="text-[10px] uppercase font-bold text-emerald-800 block">Updated Existing</span>
+                      <span className="text-sm font-bold text-emerald-950 font-mono">{syncQueueStats.updated}</span>
+                    </div>
+                    <div className="p-2 rounded-lg bg-blue-100/70 border border-blue-300">
+                      <span className="text-[10px] uppercase font-bold text-blue-800 block">Created New</span>
+                      <span className="text-sm font-bold text-blue-950 font-mono">{syncQueueStats.added}</span>
+                    </div>
+                    <div className="p-2 rounded-lg bg-red-100/70 border border-red-300">
+                      <span className="text-[10px] uppercase font-bold text-red-800 block">Failed</span>
+                      <span className="text-sm font-bold text-red-950 font-mono">{syncQueueStats.failed}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Real-time Activity Terminal Feed */}
+              {syncLogs.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] text-charcoal-muted">
+                    <span className="font-bold uppercase tracking-wider">Live Activity Feed</span>
+                    <span>{syncLogs.length} events logged</span>
+                  </div>
+                  <div className="bg-slate-950 text-slate-200 font-mono text-[11px] p-3 rounded-xl border border-slate-800 h-48 overflow-y-auto space-y-1.5 select-text shadow-inner">
+                    {syncLogs.map((log) => (
+                      <div
+                        key={log.id}
+                        className={`leading-relaxed flex items-start gap-2 ${
+                          log.type === 'updated'
+                            ? 'text-emerald-400'
+                            : log.type === 'added'
+                            ? 'text-blue-400'
+                            : log.type === 'failed'
+                            ? 'text-red-400'
+                            : 'text-amber-300'
+                        }`}
+                      >
+                        <span className="text-slate-500 text-[10px] shrink-0">[{log.time}]</span>
+                        <span className="flex-1 break-words">{log.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer Controls */}
+            <div className="px-6 py-4 bg-cream-light/60 border-t border-cream-border flex items-center justify-between gap-3 shrink-0">
+              <div>
+                {syncCandidatesLoading && (
+                  <span className="text-xs text-charcoal-muted flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Counting candidates...
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {!syncQueueActive ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setShowSyncAllModal(false)}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-charcoal border border-cream-border bg-white hover:bg-cream-light transition-all cursor-pointer shadow-2xs"
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      onClick={startSyncQueue}
+                      disabled={syncCandidatesLoading || syncCandidateStats.total === 0}
+                      className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-all cursor-pointer shadow-xs flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Play className="w-3.5 h-3.5" />
+                      <span>Start Smart Sync</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={togglePauseSync}
+                      className="px-4 py-2 rounded-xl text-xs font-bold text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                    >
+                      {syncQueuePaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                      <span>{syncQueuePaused ? 'Resume' : 'Pause'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={stopSyncQueue}
+                      className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                    >
+                      <Square className="w-3.5 h-3.5" />
+                      <span>Stop Sync</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

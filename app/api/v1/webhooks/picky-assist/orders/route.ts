@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { syncOrderToPactERP } from '@/lib/pact-sync';
+import { findSizeByStockCode, deductSizeStock } from '@/lib/size-inventory';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/webhooks/picky-assist/orders
@@ -110,8 +111,8 @@ export async function POST(request: Request) {
 
     try {
       await prisma.$transaction(async (tx) => {
-        // Find by any of our stable identifiers
-        const product = await tx.product.findFirst({
+        // Find by any of our stable identifiers or size-specific stock code
+        let product = await tx.product.findFirst({
           where: {
             OR: [
               { stockCode },
@@ -120,6 +121,24 @@ export async function POST(request: Request) {
             ],
           },
         });
+
+        let orderedSize = (item as any).size ? String((item as any).size).trim().toUpperCase() : null;
+
+        // If not found directly, check variant barcode inside sizeInventory
+        if (!product) {
+          const possible = await tx.product.findMany({
+            where: { sizeInventory: { not: null as any } },
+            take: 100,
+          });
+          for (const p of possible) {
+            const found = findSizeByStockCode(p.sizeInventory, stockCode);
+            if (found) {
+              product = p;
+              if (!orderedSize) orderedSize = found.size;
+              break;
+            }
+          }
+        }
 
         if (!product) {
           results.push({ stock_code: stockCode, status: 'error', reason: 'Product not found in database' });
@@ -136,11 +155,24 @@ export async function POST(request: Request) {
           return;
         }
 
+        // Deduct size-specific stock if sizeInventory is present
+        let nextSizeInv = product.sizeInventory;
+        let finalQty = product.quantity - qty;
+
+        if (orderedSize && product.sizeInventory) {
+          const deductRes = deductSizeStock(product.sizeInventory, orderedSize, qty);
+          if (deductRes.success) {
+            nextSizeInv = deductRes.sizeInventory as any;
+            finalQty = deductRes.totalQuantity;
+          }
+        }
+
         // Deduct stock + increment reserved
         await tx.product.update({
           where: { id: product.id },
           data: {
-            quantity:    product.quantity - qty,
+            quantity:    finalQty,
+            sizeInventory: (nextSizeInv as any) ?? undefined,
             reservedQty: product.reservedQty + qty,
           },
         });
@@ -150,8 +182,8 @@ export async function POST(request: Request) {
             productId: product.id,
             action:    'picky_assist_sale',
             qtyChange: -qty,
-            qtyAfter:  product.quantity - qty,
-            note:      `Picky Assist Order ${orderRef}. Customer: ${customerPhone}. ${notes || ''}`.trim(),
+            qtyAfter:  finalQty,
+            note:      `Picky Assist Order ${orderRef}. Customer: ${customerPhone}.${orderedSize ? ` Size: ${orderedSize}.` : ''} ${notes || ''}`.trim(),
             source:    'picky_assist',
           },
         });

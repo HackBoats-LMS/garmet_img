@@ -9,7 +9,7 @@ import {
   Plus, Minus, X, Info, RefreshCw, AlertCircle, CheckCircle2,
   ChevronDown, ChevronUp, Trash2, Settings2, MessageSquare,
   ShoppingBag, Share2, ThumbsUp, Globe, Smartphone, Upload, Loader2,
-  Copy, Check, Star, Eye, Maximize2, ChevronLeft, ChevronRight, Download, ExternalLink, ZoomIn
+  Copy, Check, Star, Eye, Maximize2, ChevronLeft, ChevronRight, Download, ExternalLink, ZoomIn, Key
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
@@ -242,6 +242,9 @@ export function ProductForm({ productId }: Props) {
   const [nameSuggestions, setNameSuggestions] = useState<{ productName: string; catalogueTitle: string } | null>(null);
   const [nameSavedNotice, setNameSavedNotice] = useState<string | null>(null);
 
+  const [aiKeywords, setAiKeywords] = useState(''); // Custom keywords e.g. "chikankari, pure organza, handloom"
+
+  const [generatingDescription, setGeneratingDescription] = useState(false);
   const [generatingCaptions, setGeneratingCaptions] = useState(false);
   const [draftCaptions, setDraftCaptions] = useState<Record<string, string> | null>(null);
   const [captionsAppliedNotice, setCaptionsAppliedNotice] = useState(false);
@@ -483,6 +486,51 @@ export function ProductForm({ productId }: Props) {
     }
   };
 
+  // Picky Assist Sync inside ProductForm
+  const [syncingPicky, setSyncingPicky] = useState(false);
+  const [autoSyncOnSave, setAutoSyncOnSave] = useState(true);
+  const [pickySyncResult, setPickySyncResult] = useState<{
+    success: boolean;
+    message: string;
+    diff?: any;
+    actionTaken?: 'added' | 'updated' | 'no_change';
+  } | null>(null);
+
+  const handleSyncToPickyAssist = async (targetId?: string) => {
+    const idToSync = targetId || productId;
+    if (!idToSync) return;
+    setSyncingPicky(true);
+    setPickySyncResult(null);
+    try {
+      const res = await fetch('/api/admin/picky-assist/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: idToSync, action: 'sync' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      }
+      setPickySyncResult({
+        success: data.success,
+        message: data.message || 'Synced successfully with Picky Assist',
+        diff: data.diff,
+        actionTaken: data.actionTaken,
+      });
+    } catch (err: any) {
+      console.error('Picky sync failed:', err);
+      setPickySyncResult({
+        success: false,
+        message: err.message || 'Failed to sync with Picky Assist',
+      });
+    } finally {
+      setSyncingPicky(false);
+      setTimeout(() => {
+        setPickySyncResult(null);
+      }, 8000);
+    }
+  };
+
   const deleteImage = (poseId: string) => {
     if (!generatedImages) return;
     const deletedUrl = generatedImages[poseId]?.imageUrl;
@@ -548,6 +596,7 @@ export function ProductForm({ productId }: Props) {
           cutStyle: form.cutStyle,
           border: form.border,
           description: form.description,
+          keywords: aiKeywords,
         }),
       });
       const data = await res.json();
@@ -570,6 +619,49 @@ export function ProductForm({ productId }: Props) {
     set('title', chosenName);
     setNameSavedNotice(`Applied "${chosenName}" to product name!`);
     setTimeout(() => setNameSavedNotice(null), 3000);
+  };
+
+  const handleGenerateDescription = async () => {
+    setGeneratingDescription(true);
+    setError(null);
+    try {
+      const catName = categories.find(c => c.id === form.categoryId)?.name || 'Saree';
+      const res = await fetch('/api/admin/products/generate-ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'captions',
+          imageUrl: activeProductImage,
+          productName: form.title,
+          color: form.color,
+          clothType: form.clothType,
+          category: catName,
+          embroideryType: form.embroideryType,
+          cutStyle: form.cutStyle,
+          border: form.border,
+          kurtaLength: form.kurtaLength,
+          pantStyle: form.pantStyle,
+          stockCode: form.stockCode,
+          designNumber: form.designNumber,
+          price: form.mrp || form.price,
+          retailPrice: form.mrp,
+          unitPrice: form.price,
+          wholesalePrice: form.wholesalePrice,
+          description: form.description,
+          keywords: aiKeywords,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to generate description');
+      const d = json.data || {};
+      if (d.productDescription) {
+        set('description', d.productDescription);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Error generating description');
+    } finally {
+      setGeneratingDescription(false);
+    }
   };
 
   const handleGenerateAllCaptions = async () => {
@@ -600,6 +692,7 @@ export function ProductForm({ productId }: Props) {
           unitPrice: form.price,
           wholesalePrice: form.wholesalePrice,
           description: form.description,
+          keywords: aiKeywords,
         }),
       });
       const json = await res.json();
@@ -623,6 +716,9 @@ export function ProductForm({ productId }: Props) {
     if (draftCaptions.instagramCaption) set('instagramCaption', draftCaptions.instagramCaption);
     if (draftCaptions.facebookCaption) set('facebookCaption', draftCaptions.facebookCaption);
     if (draftCaptions.shopifyTitle) set('shopifyTitle', draftCaptions.shopifyTitle);
+    if (draftCaptions.productDescription && !form.description) {
+      set('description', draftCaptions.productDescription);
+    }
     setDraftCaptions(null);
     setCaptionsAppliedNotice(true);
     setTimeout(() => setCaptionsAppliedNotice(false), 4000);
@@ -668,6 +764,7 @@ export function ProductForm({ productId }: Props) {
           unitPrice: form.price,
           wholesalePrice: form.wholesalePrice,
           description: form.description,
+          keywords: aiKeywords,
         }),
       });
       const json = await res.json();
@@ -1065,7 +1162,30 @@ export function ProductForm({ productId }: Props) {
             {isEdit ? 'Edit Product' : 'Add New Product'}
           </h1>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {isEdit && (
+            <button
+              type="button"
+              onClick={() => handleSyncToPickyAssist()}
+              disabled={syncingPicky || saving}
+              title="Sync this product to Picky Assist (searches first, adds if new, updates diff if changed)"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-cream-border bg-white text-charcoal hover:border-emerald-600 hover:text-emerald-700 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${syncingPicky ? 'animate-spin text-amber-600' : 'text-emerald-600'}`} />
+              <span>{syncingPicky ? 'Syncing...' : 'Sync to Picky Assist'}</span>
+            </button>
+          )}
+
+          <label className="flex items-center gap-1.5 text-xs text-charcoal cursor-pointer select-none bg-cream-light/60 px-2.5 py-1.5 rounded-lg border border-cream-border">
+            <input
+              type="checkbox"
+              checked={autoSyncOnSave}
+              onChange={(e) => setAutoSyncOnSave(e.target.checked)}
+              className="accent-accent w-3.5 h-3.5 rounded"
+            />
+            <span className="font-medium text-[11px]">Auto-sync on save</span>
+          </label>
+
           {success && (
             <span className="flex items-center gap-1.5 text-sm text-emerald-700 font-semibold">
               <CheckCircle2 className="w-4 h-4" /> Saved!
@@ -1077,6 +1197,44 @@ export function ProductForm({ productId }: Props) {
           </Button>
         </div>
       </div>
+
+      {pickySyncResult && (
+        <div className={`p-4 rounded-xl text-sm flex items-start gap-2.5 border shadow-xs animate-fade-in ${
+          pickySyncResult.success ? 'bg-emerald-50 text-emerald-900 border-emerald-200' : 'bg-red-50 text-red-900 border-red-200'
+        }`}>
+          {pickySyncResult.success ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+          ) : (
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <p className="font-bold">{pickySyncResult.success ? 'Picky Assist Sync Success' : 'Picky Assist Sync Failed'}</p>
+              {pickySyncResult.actionTaken === 'updated' && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-600 text-white">
+                  VERIFIED & UPDATED EXISTING IN PICKY
+                </span>
+              )}
+              {pickySyncResult.actionTaken === 'added' && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-600 text-white">
+                  NOT FOUND & CREATED NEW IN PICKY
+                </span>
+              )}
+            </div>
+            <p className="text-xs">{pickySyncResult.message}</p>
+            {pickySyncResult.diff && Object.keys(pickySyncResult.diff).length > 0 && (
+              <div className="mt-2 text-[11px] font-mono bg-white/70 p-2 rounded-lg border border-emerald-300">
+                <span className="font-bold text-emerald-950 block mb-1">Updated Fields in Picky Assist:</span>
+                {Object.entries(pickySyncResult.diff).map(([k, v]: any) => (
+                  <div key={k}>
+                    <span className="font-bold">{k}:</span> {JSON.stringify(v.remote)} &rarr; {JSON.stringify(v.local)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm flex items-center gap-2">
@@ -1159,11 +1317,13 @@ export function ProductForm({ productId }: Props) {
                           type="button"
                           onClick={() => {
                             const current = sizeInventory[sz];
+                            const baseCode = form.friendlyCode || form.stockCode || 'item';
+                            const defaultVariantCode = current?.stockCode || `${baseCode}-${sz}`;
                             const next = {
                               ...sizeInventory,
                               [sz]: {
                                 quantity: (current?.quantity || 0) + 1,
-                                stockCode: current?.stockCode || null,
+                                stockCode: defaultVariantCode,
                               }
                             };
                             setSizeInventory(next);
@@ -1369,11 +1529,13 @@ export function ProductForm({ productId }: Props) {
                           const qtyNum = parseInt(newSizeQty, 10);
                           if (!trimmed || isNaN(qtyNum) || qtyNum < 0) return;
                           const currentItem = sizeInventory[trimmed];
+                          const baseCode = form.friendlyCode || form.stockCode || 'item';
+                          const generatedCode = newSizeStockCode.trim() || currentItem?.stockCode || `${baseCode}-${trimmed}`;
                           const next = {
                             ...sizeInventory,
                             [trimmed]: {
                               quantity: (currentItem?.quantity || 0) + qtyNum,
-                              stockCode: newSizeStockCode.trim() || currentItem?.stockCode || null,
+                              stockCode: generatedCode,
                             }
                           };
                           setSizeInventory(next);
@@ -1589,9 +1751,80 @@ export function ProductForm({ productId }: Props) {
                     </div>
                   )}
                 </div>
-                <Textarea label="productDescription (used for caption generation)" value={form.description}
-                  onChange={e => set('description', e.target.value)}
-                  placeholder="Describe the product — weave, work, occasions, feel..." rows={4} />
+
+                {/* AI Feature Keywords */}
+                <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                      <Key className="w-3.5 h-3.5 text-amber-700" />
+                      Special Craft & Feature Keywords (Included in AI Name, Description & Captions)
+                    </label>
+                    {aiKeywords && (
+                      <button
+                        type="button"
+                        onClick={() => setAiKeywords('')}
+                        className="text-[10px] text-amber-700 hover:text-amber-900 font-semibold cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={aiKeywords}
+                    onChange={e => setAiKeywords(e.target.value)}
+                    placeholder="e.g. chikankari, handloom cotton, Lucknowi work, summer pastel, zari border..."
+                    className="w-full px-3 py-2 rounded-lg border border-amber-300 bg-white text-xs text-charcoal placeholder:text-slate-400 focus:outline-none focus:border-amber-600"
+                  />
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-amber-800">
+                    <span className="font-medium text-amber-900">Suggestions:</span>
+                    {['Chikankari', 'Kanjivaram', 'Handloom', 'Zari Border', 'Modal Cotton', 'Banarasi Weave'].map(kw => (
+                      <button
+                        key={kw}
+                        type="button"
+                        onClick={() => {
+                          const current = aiKeywords.split(',').map(s => s.trim()).filter(Boolean);
+                          if (!current.some(c => c.toLowerCase() === kw.toLowerCase())) {
+                            setAiKeywords([...current, kw].join(', '));
+                          }
+                        }}
+                        className="px-2 py-0.5 rounded-full bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-[10px] font-medium transition-colors cursor-pointer"
+                      >
+                        + {kw}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase">
+                      productDescription (used for caption generation)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleGenerateDescription}
+                      disabled={generatingDescription}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 text-[11px] font-bold transition-all cursor-pointer disabled:opacity-50"
+                      title="Generate a 2-3 sentence product description with your keywords"
+                    >
+                      {generatingDescription ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                          <span>Writing description...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                          <span>✨ AI Description</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <Textarea value={form.description}
+                    onChange={e => set('description', e.target.value)}
+                    placeholder="Describe the product — weave, work, occasions, feel..." rows={4} />
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                   {/* Colour */}
@@ -1761,6 +1994,15 @@ export function ProductForm({ productId }: Props) {
                         <strong> The Home CEO</strong> and <strong>Professional Connoisseur</strong> personas, and the 
                         <em> 4-minute morning drape</em> ritual (strict banned words filter applied).
                       </p>
+                      {aiKeywords && (
+                        <div className="flex items-center gap-1.5 text-xs text-amber-900 font-semibold pt-1">
+                          <Key className="w-3.5 h-3.5 text-amber-700" />
+                          <span>Active Keywords:</span>
+                          <span className="px-2 py-0.5 rounded-md bg-amber-200/70 text-amber-950 text-[11px] font-bold font-mono">
+                            {aiKeywords}
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     <button

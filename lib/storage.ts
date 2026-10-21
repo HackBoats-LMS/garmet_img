@@ -89,7 +89,29 @@ export async function uploadToStorage(
   }
 
   try {
-    const { buffer, mime, ext } = await getImageBuffer(fileInput);
+    let { buffer, mime, ext } = await getImageBuffer(fileInput);
+
+    // Always ensure the image is in high-quality JPEG format (.jpg) and well within Picky Assist's 5MB limit
+    // Uses Studio Master Quality (Q=92, mozjpeg, full 4:4:4 color chroma) to preserve 100% visual fidelity
+    try {
+      const sharp = require('sharp');
+      const jpegBuffer = await sharp(buffer)
+        .resize({ width: 2560, height: 2560, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 92, mozjpeg: true, progressive: true, chromaSubsampling: '4:4:4' })
+        .toBuffer();
+
+      buffer = jpegBuffer;
+      mime = 'image/jpeg';
+      ext = 'jpg';
+    } catch (sharpErr) {
+      console.warn('[Storage] Sharp conversion fallback:', (sharpErr as any)?.message);
+      // Fallback: if already jpeg, keep it; otherwise leave buffer intact
+      if (mime !== 'image/jpeg') {
+        mime = 'image/jpeg';
+        ext = 'jpg';
+      }
+    }
+
     const fileName = options.publicId ? `${options.publicId}.${ext}` : `${Date.now()}.${ext}`;
     const objectKey = options.folder ? `${options.folder}/${fileName}` : fileName;
     const targetBucket = options.bucket || R2_GENERATED_BUCKET;
