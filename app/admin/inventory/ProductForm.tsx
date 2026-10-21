@@ -261,14 +261,25 @@ export function ProductForm({ productId }: Props) {
 
   const cataloguePhotosList = useMemo(() => {
     if (!generatedImages) return [];
-    return Object.entries(generatedImages)
-      .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
-      .map(([poseId, img], idx) => ({
-        poseId,
-        imageUrl: img.imageUrl,
-        order: idx,
-        isCover: form.coverImageUrl === img.imageUrl,
-      }));
+    const seenUrls = new Set<string>();
+    const deduplicatedEntries: [string, any][] = [];
+
+    const sorted = Object.entries(generatedImages).sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0));
+    for (const [poseId, img] of sorted) {
+      if (!img?.imageUrl) continue;
+      const u = img.imageUrl.trim();
+      if (!seenUrls.has(u)) {
+        seenUrls.add(u);
+        deduplicatedEntries.push([poseId, img]);
+      }
+    }
+
+    return deduplicatedEntries.map(([poseId, img], idx) => ({
+      poseId,
+      imageUrl: img.imageUrl,
+      order: idx,
+      isCover: form.coverImageUrl === img.imageUrl,
+    }));
   }, [generatedImages, form.coverImageUrl]);
 
   const collageImagesList: CollageInputImage[] = useMemo(() => {
@@ -381,7 +392,21 @@ export function ProductForm({ productId }: Props) {
             shopifyTitle: p.shopifyTitle || '',
             whatsappCatalogueTitle: p.whatsappCatalogueTitle || '',
           });
-          setGeneratedImages(genImgs);
+          let dedupedGenImgs: Record<string, any> | null = null;
+          if (genImgs && typeof genImgs === 'object') {
+            const seen = new Set<string>();
+            dedupedGenImgs = {};
+            for (const [k, v] of Object.entries(genImgs)) {
+              const u = v?.imageUrl ? String(v.imageUrl).trim() : null;
+              if (u && !seen.has(u)) {
+                seen.add(u);
+                dedupedGenImgs[k] = v;
+              } else if (!u && !dedupedGenImgs[k]) {
+                dedupedGenImgs[k] = v;
+              }
+            }
+          }
+          setGeneratedImages(dedupedGenImgs);
           setLinkedOrderId(p.linkedOrderId || null);
           if (p.sizeInventory) {
             setSizeInventory(normalizeSizeInventory(p.sizeInventory));
@@ -1011,8 +1036,15 @@ export function ProductForm({ productId }: Props) {
     }
 
     const albumTitle = form.friendlyCode || form.stockCode || form.title || 'Product';
+    const seenExportUrls = new Set<string>();
     const imagesToExport = Object.entries(generatedImages)
-      .filter(([, v]) => Boolean(v?.imageUrl))
+      .filter(([, v]) => {
+        if (!v?.imageUrl) return false;
+        const u = v.imageUrl.trim();
+        if (seenExportUrls.has(u)) return false;
+        seenExportUrls.add(u);
+        return true;
+      })
       .map(([poseId, v], idx) => ({
         imageUrl: v.imageUrl,
         filename: `${(form.friendlyCode || form.stockCode || 'photo').toLowerCase().replace(/[^a-z0-9_-]+/g, '_')}_${idx + 1}.jpg`,
@@ -1346,6 +1378,9 @@ export function ProductForm({ productId }: Props) {
                       {Object.entries(sizeInventory).map(([sKey, sItem]) => {
                         const qty = typeof sItem === 'number' ? sItem : sItem?.quantity || 0;
                         const stockCode = typeof sItem === 'object' ? sItem?.stockCode : null;
+                        const stockCodesList: string[] = typeof sItem === 'object' && Array.isArray((sItem as any)?.stockCodes) && (sItem as any).stockCodes.length > 0
+                          ? (sItem as any).stockCodes
+                          : (stockCode ? String(stockCode).split(/[,;]+/).map((s: string) => s.trim()).filter(Boolean) : []);
 
                         return (
                           <div
@@ -1354,30 +1389,48 @@ export function ProductForm({ productId }: Props) {
                           >
                             <div className="flex items-start justify-between gap-1 mb-2">
                               <div className="flex-1 pr-1">
-                                <span className="text-sm font-black text-charcoal px-2.5 py-1 rounded-lg bg-amber-100/80 border border-amber-200/80 inline-block">
-                                  {sKey}
-                                </span>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-sm font-black text-charcoal px-2.5 py-1 rounded-lg bg-amber-100/80 border border-amber-200/80 inline-block">
+                                    {sKey}
+                                  </span>
+                                  {stockCodesList.length > 1 && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200">
+                                      {stockCodesList.length} codes
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="mt-1.5">
                                   <label className="text-[10px] font-bold text-amber-900/80 uppercase tracking-wider block mb-0.5">
-                                    StockCode:
+                                    Stock Code(s):
                                   </label>
+                                  {stockCodesList.length > 1 && (
+                                    <div className="flex flex-wrap gap-1 mb-1.5">
+                                      {stockCodesList.map((code, cIdx) => (
+                                        <span key={cIdx} className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">
+                                          {code}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
                                   <input
                                     type="text"
                                     value={stockCode || ''}
-                                    placeholder="e.g. 5150000065"
+                                    placeholder="e.g. 5150000065, 5150000088"
                                     onChange={e => {
-                                      const nextVal = e.target.value.trim();
+                                      const nextVal = e.target.value;
+                                      const parsedCodes = nextVal.split(/[,;]+/).map(s => s.trim()).filter(Boolean);
                                       const next = {
                                         ...sizeInventory,
                                         [sKey]: {
                                           quantity: qty,
                                           stockCode: nextVal || null,
+                                          stockCodes: parsedCodes,
                                         }
                                       };
                                       setSizeInventory(next);
                                       // If top-level stockCode is empty, auto-populate with first size's stockCode
-                                      if (!form.stockCode && nextVal) {
-                                        set('stockCode', nextVal);
+                                      if (!form.stockCode && parsedCodes[0]) {
+                                        set('stockCode', parsedCodes[0]);
                                       }
                                     }}
                                     className="w-full px-2 py-1 text-xs font-mono font-bold text-charcoal bg-amber-50/70 border border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:bg-white transition-all placeholder:font-sans placeholder:font-normal placeholder:text-charcoal-muted/60"
@@ -2732,9 +2785,13 @@ export function ProductForm({ productId }: Props) {
                                 {sKey}
                               </span>
                               {stockCode && (
-                                <span className="text-[9px] font-mono text-charcoal-muted mt-0.5">
-                                  {stockCode}
-                                </span>
+                                <div className="flex flex-wrap gap-1 mt-1 max-w-[260px]">
+                                  {stockCode.split(/[,;]+/).map((c: string, idx: number) => (
+                                    <span key={idx} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/90 border border-cream-border text-charcoal font-semibold">
+                                      {c.trim()}
+                                    </span>
+                                  ))}
+                                </div>
                               )}
                             </div>
                             <div className="flex items-center gap-1.5">

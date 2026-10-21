@@ -78,7 +78,19 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           setOrderId(d.product.linkedOrderId);
         }
         if (d.product.generatedImages && typeof d.product.generatedImages === 'object') {
-          setGeneratedImages(d.product.generatedImages);
+          const rawGen = d.product.generatedImages as Record<string, any>;
+          const seen = new Set<string>();
+          const dedupedGen: Record<string, { imageUrl: string; prompt: string }> = {};
+          for (const [k, v] of Object.entries(rawGen)) {
+            const u = v?.imageUrl ? String(v.imageUrl).trim() : null;
+            if (u && !seen.has(u)) {
+              seen.add(u);
+              dedupedGen[k] = v;
+            } else if (!u && !dedupedGen[k]) {
+              dedupedGen[k] = v;
+            }
+          }
+          setGeneratedImages(dedupedGen);
         }
         if (d.product.referenceImages && Array.isArray(d.product.referenceImages)) {
           const restoredUploads: Record<string, string> = {};
@@ -826,14 +838,19 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       if (finalUrl) {
         finalUrl = finalUrl.trim().replace(/[\\'";,\s]+$/, '').replace(/%5C$/i, '');
         
-        // Create the updated images object with a unique timestamp key to allow multiple generations of the same pose
-        const uniqueKey = `${poseId}_${Date.now()}`;
-        const updatedImages = { ...generatedImages, [uniqueKey]: { imageUrl: finalUrl, prompt } };
-        setGeneratedImages(updatedImages);
+        // Save under the canonical poseId and clean up any stale/duplicate keys for this pose or imageUrl
+        const cleanedImages: Record<string, { imageUrl: string; prompt: string }> = {};
+        for (const [k, v] of Object.entries(generatedImages)) {
+          if (k !== poseId && !k.startsWith(`${poseId}_`) && v?.imageUrl !== finalUrl) {
+            cleanedImages[k] = v;
+          }
+        }
+        cleanedImages[poseId] = { imageUrl: finalUrl, prompt };
+        setGeneratedImages(cleanedImages);
         
         // Auto-save immediately so the image shows up in the gallery
         // even if the user navigates away before clicking "Save & Download"
-        await handleSaveOrder(updatedImages);
+        await handleSaveOrder(cleanedImages);
         
         setGenStatus(`${pose.name} generated!`);
         setTimeout(() => setGenStatus(null), 3000);
@@ -917,8 +934,15 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
   // Export all generated images to both Cloudflare R2 and Google Photos in an album titled as Code1
   const handleExportToGooglePhotos = async () => {
+    const seenUrls = new Set<string>();
     const validImages = Object.entries(generatedImages)
-      .filter(([, data]) => Boolean(data?.imageUrl))
+      .filter(([, data]) => {
+        if (!data?.imageUrl) return false;
+        const u = data.imageUrl.trim();
+        if (seenUrls.has(u)) return false;
+        seenUrls.add(u);
+        return true;
+      })
       .map(([poseId, data], idx) => {
         const pose = template?.poses.find(p => p.id === poseId || poseId.startsWith(`${p.id}_`));
         return {
