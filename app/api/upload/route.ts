@@ -6,6 +6,7 @@ import {
   uploadCustomerSwatchAsset,
   uploadGeneratedAsset,
   uploadToStorage,
+  deleteFromStorage,
 } from '@/lib/storage';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 
@@ -20,7 +21,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const session = await auth();
+    const session = await auth().catch(() => null);
     const body = await req.json();
     const { file, type, templateSlug, assetName, modelName, orderId, slotId, poseId, customFolder } = body;
 
@@ -77,5 +78,40 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     console.error('[API /upload Error]:', error);
     return NextResponse.json({ error: error?.message || 'Failed to upload image' }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const ip = getClientIp(req);
+    const rateCheck = checkRateLimit('api:upload:delete', ip, { windowMs: 60 * 1000, max: 60 });
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { error: 'Too many delete requests. Please wait a moment.' },
+        { status: 429 }
+      );
+    }
+
+    const session = await auth().catch(() => null);
+    const body = await req.json();
+    const { url, key, bucket } = body || {};
+
+    const target = url || key;
+    if (!target) {
+      return NextResponse.json({ error: 'URL or key is required for deletion' }, { status: 400 });
+    }
+
+    console.log('[API /upload DELETE] Deleting image:', target);
+    const res = await deleteFromStorage(target, bucket);
+
+    return NextResponse.json({
+      ...res,
+    });
+  } catch (error: any) {
+    console.error('[API /upload DELETE Error]:', error);
+    return NextResponse.json(
+      { error: error?.message || 'Failed to delete image from storage' },
+      { status: 500 }
+    );
   }
 }

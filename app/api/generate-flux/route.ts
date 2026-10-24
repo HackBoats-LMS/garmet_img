@@ -64,6 +64,8 @@ export async function POST(req: NextRequest) {
       icp,
       occasion,
       fabricType,
+      sareeDesignType,
+      promptSuggestions,
       selectedModelId,
       selectedOptions,
       crop = false,
@@ -224,8 +226,21 @@ export async function POST(req: NextRequest) {
         `You MUST use the EXACT colors, patterns, motifs, weave texture, and design from these fabric swatches. ` +
         `Instruction: ${garmentMapping}. ` +
         `Do NOT invent new patterns or colors for the provided swatches. The generated garment sections must be a pixel-accurate replication of the provided fabric images.\n` +
-        `CRITICAL: If any optional garment component (like Pant, Bottoms, or Dupatta) is NOT provided in the images above, you MUST automatically design and generate them to perfectly complement the provided body fabric according to high-end fashion taste.\n` +
-        `CRITICAL: DO NOT add tassels, fringes, or latkans to the end of the pallu or borders UNLESS they are explicitly visible in the provided reference images. Do not invent them.`;
+        `CRITICAL: DO NOT add beads, hanging pearl drops, tassels, fringes, pom-poms, or latkans to the end of the pallu or the bottom hem of the saree UNLESS they are clearly and explicitly present in the provided reference images. Do NOT invent beads or hanging ornaments; keep hems and pallu ends cleanly stitched and flat.`;
+
+      // Add saree design type specific draping instructions
+      if (sareeDesignType === 'contrast_pallu') {
+        imageInstructions += `\nSAREE DRAPE LAYOUT (CONTRAST PALLU — STRICT PLACEMENT): The saree body and pallu have COMPLETELY DIFFERENT designs/patterns. CRITICAL RULES: (1) BODY & DIAGONAL CHEST PLACEMENT: The main Body fabric (the body swatch pattern/dots) must cover the lower skirt, front waist pleats, and wrap diagonally ACROSS THE FRONT CHEST/TORSO to the left shoulder. (2) SINGLE-EDGE CHEST BORDER: The decorative border runs along ONE EDGE ONLY of the diagonal chest wrap (the outer diagonal edge across the bust). The neckline/collarbone stays clean body fabric with no border. The bottom skirt hem at the feet has the horizontal border. The right hip stays clean body fabric with no extra patches. (3) PALLU PLACEMENT & WAIST TRANSITION: From left shoulder to waist level, the hanging drape is body fabric. From waist level down to the floor, it transitions into the contrasting Pallu artwork. (4) NO INVENTED BEADS OR TASSELS: Keep the bottom hem of the saree and the end of the pallu clean, flat, and straight. DO NOT add hanging beads, tassels, pearls, or latkans unless explicitly visible in the uploaded fabric photos. (5) BLOUSE PLACEMENT: The blouse swatch must be used solely for the fitted stitched blouse top. Maintain crisp, clean separation without blending.`;
+      } else if (sareeDesignType === 'half_half') {
+        imageInstructions += `\nSAREE DRAPE LAYOUT (HALF-AND-HALF): This saree has two distinctly different halves. The LOWER half (from waist down to feet, including pleats) uses one design/color, and the UPPER half (chest drape and pallu from shoulder) uses a different design/color. The transition between the two halves should be a clean horizontal boundary approximately at the hip/waist level. Both halves must retain their individual patterns without blending.`;
+      }
+    }
+
+    // User prompt suggestions & cross-pose swatch corrections
+    if (promptSuggestions && typeof promptSuggestions === 'string' && promptSuggestions.trim()) {
+      imageInstructions += `\n\nCRITICAL USER CORRECTIONS & SWATCH DIRECTION (STRICTLY APPLY ACROSS ALL POSES):
+${promptSuggestions.trim()}
+MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (Image 1, Image 2, Image 3...), motifs, borders, fabric placements, and drape alignment are maintained consistently across all camera angles and poses without deviation.`;
     }
 
     // Dynamic Background & Vibe Logic
@@ -256,7 +271,7 @@ export async function POST(req: NextRequest) {
     // Default template fallbacks (if not configured in DB)
     const fallbackSystemPrompt = 'Commercial fashion photoshoot for luxury Indian garments brand. Masterpiece, ultra-sharp focus, photorealistic 8k resolution, editorial Vogue India and Harpers Bazaar style.';
     const fallbackCamera = 'Shot on Hasselblad H6D-100c medium format camera paired with HC 100mm f/2.2 portrait lens. Superb optical sharpness, razor-sharp focus, crisp details, hyper-realistic depth of field, 8K UHD commercial fashion catalogue photography, true color reproduction, zero digital artifacting. Eye-level (peer POV), face always visible.';
-    const fallbackNegative = 'bad anatomy, deformed fingers, fused fingers, too many fingers, missing fingers, broken wrist, extra limbs, mutated hands, plastic skin, doll-like face, mannequin, oversaturated cartoon, 3d render, CGI, digital drawing, blur, out of focus, soft focus, low resolution, artifacts, poorly drawn face, asymmetric eyes, distorted fabric patterns, floating jewelry, melting jewelry, unnatural fabric tension, watermark, signature, blurry text, cropped head, unnatural poses, bright flash, evening bulb light, garish colors, pattern behind print';
+    const fallbackNegative = 'bad anatomy, deformed fingers, fused fingers, too many fingers, missing fingers, broken wrist, extra limbs, mutated hands, plastic skin, doll-like face, mannequin, oversaturated cartoon, 3d render, CGI, digital drawing, blur, out of focus, soft focus, low resolution, artifacts, poorly drawn face, asymmetric eyes, distorted fabric patterns, floating jewelry, melting jewelry, unnatural fabric tension, watermark, signature, blurry text, cropped head, unnatural poses, bright flash, evening bulb light, garish colors, pattern behind print, hanging beads, beads at hem, dangling beads, unwanted tassels, fringe, latkans, pom-poms at hem, dangling tassels at saree border';
     
     const sysPrompt = template?.systemPrompt || fallbackSystemPrompt;
     const camSettings = template?.cameraSettings || fallbackCamera;

@@ -608,19 +608,39 @@ export async function processPickyAssistOrder(
       const cleanCode = code.trim();
       const cleanCodeLower = cleanCode.toLowerCase();
 
-      // 1. Check all products for matching variant barcode / stockCode in sizeInventory
-      const allProductsWithSizes = await prisma.product.findMany({
-        where: { sizeInventory: { not: null as any } },
-      });
+      // 1. Check for matching variant barcode / stockCode in sizeInventory (OPTIMIZED: Push to PostgreSQL)
+      // Uses jsonb_each to search inside sizeInventory JSONB without loading all products into memory
+      const variantMatch = await prisma.$queryRaw<{
+        id: string;
+        stockCode: string;
+        code1: string | null;
+        productName: string;
+        quantity: number;
+        sizeInventory: any;
+      }[]>`
+        SELECT id, "stockCode", "code1", "productName", quantity, "sizeInventory"
+        FROM "Product"
+        WHERE "sizeInventory" IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM jsonb_each("sizeInventory") AS kv(key, val)
+            WHERE (val->>'stockCode') ILIKE ${cleanCode}
+          )
+        LIMIT 1
+      `;
 
-      for (const p of allProductsWithSizes) {
-        const found = findSizeByStockCode(p.sizeInventory, cleanCode);
-        if (found) {
-          product = p;
-          detectedSize = found.size;
-          variantStockCode = found.item.stockCode || cleanCode;
-          matchMethod = 'variant_barcode_match';
-          break;
+      if (variantMatch.length > 0) {
+        const matched = variantMatch[0];
+        product = matched;
+        matchMethod = 'variant_barcode_match';
+        // Extract the matched size key from sizeInventory
+        const sizeInv = matched.sizeInventory as Record<string, any>;
+        for (const [sizeKey, sizeVal] of Object.entries(sizeInv)) {
+          if (sizeVal?.stockCode && String(sizeVal.stockCode).toLowerCase() === cleanCodeLower) {
+            detectedSize = sizeKey.toUpperCase();
+            variantStockCode = sizeVal.stockCode;
+            break;
+          }
         }
       }
 

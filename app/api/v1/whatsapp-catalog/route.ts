@@ -43,36 +43,74 @@ export async function GET(request: Request) {
        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // 3. Pagination Support (Edge case: thousands of products crashing the API)
+    // 3. Pagination Support - Cursor-based (preferred) with offset fallback
     const url = new URL(request.url);
-    const limit = parseInt(url.searchParams.get('limit') || '500', 10);
+    const limit = Math.min(parseInt(url.searchParams.get('limit') || '500', 10), 1000);
     const offset = parseInt(url.searchParams.get('offset') || '0', 10);
+    const cursorId = url.searchParams.get('cursor'); // CUID cursor
+
+    // Use cursor pagination if cursor provided, otherwise fall back to offset
+    const useCursor = !!cursorId;
+    const take = limit + 1;
 
     // Fetch active products with constraints
-    const products = await prisma.product.findMany({
-      where: {
-        status: 'ACTIVE',
-      },
-      select: {
-        stockCode: true,
-        code1: true,
-        productCode: true,
-        whatsappCatalogueTitle: true,
-        productName: true,
-        whatsappRetail: true,
-        unitPrice: true,
-        quantity: true,
-        generatedImages: true,
-        length_Size: true,
-        sizeInventory: true,
-      },
-      take: limit > 1000 ? 1000 : limit, // Max limit 1000 per request
-      skip: offset,
-      orderBy: { updatedAt: 'desc' } // Give the freshest items first
-    });
+    let products;
+    if (useCursor) {
+      products = await prisma.product.findMany({
+        where: { status: 'ACTIVE' },
+        select: {
+          id: true,
+          stockCode: true,
+          code1: true,
+          productCode: true,
+          whatsappCatalogueTitle: true,
+          productName: true,
+          whatsappRetail: true,
+          unitPrice: true,
+          quantity: true,
+          generatedImages: true,
+          length_Size: true,
+          sizeInventory: true,
+        },
+        orderBy: { id: 'desc' },
+        cursor: { id: cursorId },
+        take,
+      });
+    } else {
+      products = await prisma.product.findMany({
+        where: { status: 'ACTIVE' },
+        select: {
+          id: true,
+          stockCode: true,
+          code1: true,
+          productCode: true,
+          whatsappCatalogueTitle: true,
+          productName: true,
+          whatsappRetail: true,
+          unitPrice: true,
+          quantity: true,
+          generatedImages: true,
+          length_Size: true,
+          sizeInventory: true,
+        },
+        orderBy: { id: 'desc' },
+        take: limit > 1000 ? 1000 : limit,
+        skip: offset,
+      });
+    }
+
+    // Determine if there's a next page
+    const hasNextPage = products.length > limit;
+    const items = hasNextPage ? products.slice(0, limit) : products;
+
+    // Generate next cursor from last item
+    let nextCursor: string | null = null;
+    if (hasNextPage && items.length > 0) {
+      nextCursor = items[items.length - 1].id;
+    }
 
     // 4. Data Mapping
-    const catalogFeed = products.map((product) => {
+    const catalogFeed = items.map((product) => {
       let primaryImageUrl = '';
       if (product.generatedImages && typeof product.generatedImages === 'object') {
          const imagesObj = product.generatedImages as Record<string, any>;
@@ -110,7 +148,9 @@ export async function GET(request: Request) {
         metadata: {
             count: catalogFeed.length,
             limit,
-            offset
+            nextCursor,
+            hasNextPage,
+            ...(!useCursor && { offset }),
         },
         products: catalogFeed 
     }, { status: 200 });
