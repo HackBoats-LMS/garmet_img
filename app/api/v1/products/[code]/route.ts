@@ -23,23 +23,21 @@ export async function GET(
   try {
     const { code } = await params;
 
-    const product = await prisma.product.findFirst({
-      where: {
-        OR: [
-          { stockCode: code },
-          { code1: code },
-          { id: code },
-        ],
-      },
-      include: {
-        category: { select: { name: true, slug: true } },
-        subCategory: { select: { name: true, slug: true } },
-      },
-    });
+    // OPTIMIZED: Short-circuit unique index lookups instead of OR query
+    // Each findUnique uses a unique index (O(log n)) — deterministic, no plan instability
+    let product = await prisma.product.findUnique({ where: { stockCode: code } });
+    if (!product) product = await prisma.product.findUnique({ where: { code1: code } });
+    if (!product && code.length >= 20) product = await prisma.product.findUnique({ where: { id: code } });
 
     if (!product) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 });
     }
+
+    // Fetch relations only after product found (2 extra indexed lookups)
+    const [category, subCategory] = await Promise.all([
+      product.categoryId ? prisma.category.findUnique({ where: { id: product.categoryId }, select: { name: true, slug: true } }) : null,
+      product.subCategoryId ? prisma.subCategory.findUnique({ where: { id: product.subCategoryId }, select: { name: true, slug: true } }) : null,
+    ]);
 
     const genObj = (product.generatedImages as Record<string, any>) || {};
     const sortedGenEntries = Object.entries(genObj)
@@ -64,6 +62,8 @@ export async function GET(
 
     const formattedProduct = {
       ...product,
+      category: category ? { name: category.name, slug: category.slug } : null,
+      subCategory: subCategory ? { name: subCategory.name, slug: subCategory.slug } : null,
       coverImageUrl: cover,
       images,
       generatedImages: Object.fromEntries(sortedGenEntries),
@@ -93,9 +93,9 @@ export async function PATCH(
     const body = await req.json();
     const { quantity, adjustment, note } = body;
 
-    const product = await prisma.product.findFirst({
-      where: { OR: [{ stockCode: code }, { code1: code }] },
-    });
+    // OPTIMIZED: Short-circuit unique index lookups
+    let product = await prisma.product.findUnique({ where: { stockCode: code } });
+    if (!product) product = await prisma.product.findUnique({ where: { code1: code } });
 
     if (!product) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 });
