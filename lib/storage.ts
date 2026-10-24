@@ -17,9 +17,9 @@ export const R2_MODELS_PUBLIC_URL = (process.env.R2_MODELS_PUBLIC_URL || process
  * Prevents cold-start undefined endpoint bugs on Vercel serverless functions.
  */
 export function getS3Client(): S3Client | null {
-  const accountId = process.env.R2_ACCOUNT_ID || '';
-  const accessKeyId = process.env.R2_ACCESS_KEY_ID || '';
-  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY || '';
+  const accountId = (process.env.R2_ACCOUNT_ID || '').trim().replace(/^["']|["']$/g, '');
+  const accessKeyId = (process.env.R2_ACCESS_KEY_ID || '').trim().replace(/^["']|["']$/g, '');
+  const secretAccessKey = (process.env.R2_SECRET_ACCESS_KEY || '').trim().replace(/^["']|["']$/g, '');
 
   if (!accountId || !accessKeyId || !secretAccessKey) {
     return null;
@@ -32,6 +32,9 @@ export function getS3Client(): S3Client | null {
       accessKeyId,
       secretAccessKey,
     },
+    // Required for Cloudflare R2 compatibility: disables modern AWS CRC32 checksum headers that trigger SignatureDoesNotMatch in R2
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
   });
 }
 
