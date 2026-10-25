@@ -80,7 +80,7 @@ export const CATEGORY_POSES_MAP: Record<string, PoseDefinition[]> = {
       category: 'seated',
       name: '4. The Verandah Hostess',
       description: 'Seated gracefully with teacup in sunlit living room — natural seated pleat fan',
-      promptSnippet: 'Medium shot, seated gracefully on a classic teak armchair in a sunlit living room or verandah. The saree pleats are neatly and naturally fanned across her lap and legs, showing how the fabric drapes comfortably in real life. Holding a porcelain tea cup or resting hand on armrest, wearing delicate gold bangles, looking slightly off-camera with a warm, welcoming smile.',
+      promptSnippet: 'Medium shot, seated gracefully on a classic teak armchair in a sunlit living room or verandah. The saree pleats are neatly and naturally fanned across her lap and legs, with the all-over body fabric motifs and printed pattern clearly and continuously visible across the entire lap, thighs, and every pleat from waist to hem (absolutely no plain, solid, blank, or unprinted dark fabric patches on the lap). Holding a porcelain tea cup or resting hand on armrest, wearing delicate gold bangles, looking slightly off-camera with a warm, welcoming smile.',
       defaultSample: '/poses/saree_pose_3.jpg',
     },
     {

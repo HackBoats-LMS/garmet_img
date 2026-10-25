@@ -99,7 +99,7 @@ export function useGooglePhotosPicker({
         const res = await fetch('/api/google/photos/session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: accessToken }),
+          body: JSON.stringify({ token: accessToken, maxItems }),
         });
 
         const data = await res.json();
@@ -137,6 +137,59 @@ export function useGooglePhotosPicker({
 
         setPickingStatus('Select photos in Google Photos & click Done');
 
+        // Helper to download items sequentially via optimized backend endpoint
+        const downloadAndProcessItems = async (items: any[]) => {
+          const downloaded: PickedPhoto[] = [];
+          const total = items.length;
+
+          for (let i = 0; i < total; i++) {
+            const item = items[i];
+            if (item.base64) {
+              downloaded.push(item);
+              continue;
+            }
+
+            if (item.baseUrl) {
+              setPickingStatus(`Downloading photo ${i + 1} of ${total}...`);
+              try {
+                const dlRes = await fetch('/api/google/photos/download', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    baseUrl: item.baseUrl,
+                    token: accessToken,
+                    filename: item.filename,
+                    mimeType: item.mimeType,
+                    maxDimension: 2048,
+                  }),
+                });
+
+                if (dlRes.ok) {
+                  const dlData = await dlRes.json();
+                  if (dlData.base64) {
+                    downloaded.push({
+                      filename: dlData.filename || item.filename || `google_photo_${i + 1}.jpg`,
+                      mimeType: dlData.mimeType || item.mimeType || 'image/jpeg',
+                      base64: dlData.base64,
+                    });
+                  }
+                } else {
+                  console.warn(`[Google Photos Download] Failed item ${i + 1}:`, await dlRes.text());
+                }
+              } catch (dlErr) {
+                console.warn(`[Google Photos Download] Error on item ${i + 1}:`, dlErr);
+              }
+            }
+          }
+
+          // Cleanup session on backend in background
+          fetch(`/api/google/photos/session?sessionId=${sessionId}&token=${accessToken}`, {
+            method: 'DELETE',
+          }).catch(() => null);
+
+          return downloaded;
+        };
+
         // 3. Poll for session completion every 4 seconds
         let pollAttempts = 0;
         const maxPollAttempts = 150; // ~10 minutes max
@@ -162,7 +215,10 @@ export function useGooglePhotosPicker({
                 setPickingStatus('Importing chosen photos...');
 
                 if (Array.isArray(pollData.items) && pollData.items.length > 0) {
-                  await onPhotosSelected(pollData.items);
+                  const downloaded = await downloadAndProcessItems(pollData.items);
+                  if (downloaded.length > 0) {
+                    await onPhotosSelected(downloaded);
+                  }
                 }
 
                 cleanup();
@@ -184,7 +240,10 @@ export function useGooglePhotosPicker({
                   );
                   const finalData = await finalCheck.json();
                   if (finalData.mediaItemsSet && Array.isArray(finalData.items)) {
-                    await onPhotosSelected(finalData.items);
+                    const downloaded = await downloadAndProcessItems(finalData.items);
+                    if (downloaded.length > 0) {
+                      await onPhotosSelected(downloaded);
+                    }
                   }
                 } finally {
                   cleanup();

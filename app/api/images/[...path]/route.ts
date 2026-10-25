@@ -41,10 +41,10 @@ function getMimeType(filename: string): string {
 
 export async function GET(
   req: NextRequest,
-  context: { params: Promise<{ path: string[] }> | { path: string[] } }
+  context: { params: Promise<{ path: string[] }> }
 ) {
   try {
-    const resolvedParams = await Promise.resolve(context.params);
+    const resolvedParams = await context.params;
     const key = Array.isArray(resolvedParams.path)
       ? resolvedParams.path.join('/')
       : (resolvedParams.path as any);
