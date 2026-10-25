@@ -107,23 +107,25 @@ export async function uploadToStorage(
   try {
     let { buffer, mime, ext } = await getImageBuffer(fileInput);
 
-    // Uses Studio Master Quality (Q=92, mozjpeg, full 4:4:4 color chroma) to preserve 100% visual fidelity
+    // Studio Master Quality: Bypass re-compression if image is already within 2560px
     try {
       const sharp = require('sharp');
-      const jpegBuffer = await sharp(buffer)
-        .resize({ width: 2560, height: 2560, fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 92, mozjpeg: true, progressive: true, chromaSubsampling: '4:4:4' })
-        .toBuffer();
+      const meta = await sharp(buffer).metadata();
+      const needsDownscale = Boolean((meta.width && meta.width > 2560) || (meta.height && meta.height > 2560));
+      const isStandardWeb = mime === 'image/jpeg' || mime === 'image/png' || mime === 'image/webp';
 
-      buffer = jpegBuffer;
-      mime = 'image/jpeg';
-      ext = 'jpg';
-    } catch (sharpErr: any) {
-      console.warn('[Storage] Sharp conversion fallback/skipped:', sharpErr?.message);
-      if (mime !== 'image/jpeg') {
+      if (needsDownscale || !isStandardWeb) {
+        const jpegBuffer = await sharp(buffer)
+          .resize({ width: 2560, height: 2560, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 95, mozjpeg: true, progressive: true, chromaSubsampling: '4:4:4' })
+          .toBuffer();
+
+        buffer = jpegBuffer;
         mime = 'image/jpeg';
         ext = 'jpg';
       }
+    } catch (sharpErr: any) {
+      console.warn('[Storage] Sharp inspection fallback/skipped:', sharpErr?.message);
     }
 
     const fileName = options.publicId ? `${options.publicId}.${ext}` : `${Date.now()}.${ext}`;
