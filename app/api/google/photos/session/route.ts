@@ -148,8 +148,8 @@ export async function GET(req: NextRequest) {
       };
 
       try {
-        // Try optimized web dimension =w1600 (~150-250KB each)
-        let imgRes = await fetchBuffer(`${baseUrl}=w1600`);
+        // Request 2K Studio Master dimensions (=w2048-h2048) directly from Google Photos CDN
+        let imgRes = await fetchBuffer(`${baseUrl}=w2048-h2048`);
 
         // Fallback to original =d
         if (!imgRes) {

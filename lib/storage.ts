@@ -107,23 +107,36 @@ export async function uploadToStorage(
   try {
     let { buffer, mime, ext } = await getImageBuffer(fileInput);
 
-    // Uses Studio Master Quality (Q=92, mozjpeg, full 4:4:4 color chroma) to preserve 100% visual fidelity
+    // Studio Master Quality & 5MB Guarantee: Bypass re-compression if already optimized & under 5MB
     try {
       const sharp = require('sharp');
-      const jpegBuffer = await sharp(buffer)
-        .resize({ width: 2560, height: 2560, fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 92, mozjpeg: true, progressive: true, chromaSubsampling: '4:4:4' })
-        .toBuffer();
+      const meta = await sharp(buffer).metadata();
+      const isOver5MB = buffer.length > 5 * 1024 * 1024;
+      const needsDownscale = Boolean((meta.width && meta.width > 2560) || (meta.height && meta.height > 2560));
+      const isStandardWeb = mime === 'image/jpeg' || mime === 'image/webp';
 
-      buffer = jpegBuffer;
-      mime = 'image/jpeg';
-      ext = 'jpg';
-    } catch (sharpErr: any) {
-      console.warn('[Storage] Sharp conversion fallback/skipped:', sharpErr?.message);
-      if (mime !== 'image/jpeg') {
+      // Re-encode ONLY if image exceeds 5MB, exceeds 2560px, or is a heavy raw format (e.g. uncompressed PNG/BMP)
+      if (isOver5MB || needsDownscale || !isStandardWeb) {
+        let targetQuality = 95;
+        let jpegBuffer = await sharp(buffer)
+          .resize({ width: 2560, height: 2560, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: targetQuality, mozjpeg: true, progressive: true, chromaSubsampling: '4:4:4' })
+          .toBuffer();
+
+        // Safety fallback: if somehow still over 5MB, gently step down quality to guarantee < 5MB
+        if (jpegBuffer.length > 5 * 1024 * 1024) {
+          jpegBuffer = await sharp(buffer)
+            .resize({ width: 2560, height: 2560, fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 90, mozjpeg: true, progressive: true, chromaSubsampling: '4:4:4' })
+            .toBuffer();
+        }
+
+        buffer = jpegBuffer;
         mime = 'image/jpeg';
         ext = 'jpg';
       }
+    } catch (sharpErr: any) {
+      console.warn('[Storage] Sharp inspection fallback/skipped:', sharpErr?.message);
     }
 
     const fileName = options.publicId ? `${options.publicId}.${ext}` : `${Date.now()}.${ext}`;

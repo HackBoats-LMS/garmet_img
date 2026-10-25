@@ -839,14 +839,16 @@ export function ProductForm({ productId }: Props) {
 
   const [uploadingCover, setUploadingCover] = useState(false);
 
-  const compressImageFile = (file: File, maxDim = 2048, quality = 0.85): Promise<string> => {
+  const compressImageFile = (file: File, maxDim = 2560, quality = 0.95): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onerror = (err) => reject(err);
       reader.onload = (e) => {
         const dataUrl = e.target?.result as string;
         if (!dataUrl) return reject(new Error('Failed to read file'));
-        if (file.type === 'image/svg+xml' || file.size < 400 * 1024) {
+        // If file is SVG or already under 3.5MB, DO NOT re-compress on canvas!
+        // Preserves 100% original raw quality and avoids double-compression.
+        if (file.type === 'image/svg+xml' || file.size < 3.5 * 1024 * 1024) {
           return resolve(dataUrl);
         }
         const img = new Image();
