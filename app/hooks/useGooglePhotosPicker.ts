@@ -140,12 +140,16 @@ export function useGooglePhotosPicker({
         // 3. Poll for session completion every 2 seconds
         let pollAttempts = 0;
         let closedWindowTicks = 0;
+        let isRequestInFlight = false;
+        let isFinished = false;
         const maxPollAttempts = 180; // ~6 minutes max
         const maxClosedWindowTicks = 15; // Keep polling for up to 30 seconds after window closes
 
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
 
         pollIntervalRef.current = setInterval(async () => {
+          if (isRequestInFlight || isFinished) return;
+
           pollAttempts++;
           if (pollAttempts > maxPollAttempts) {
             console.warn('[Google Photos Hook] Max polling attempts reached.');
@@ -166,6 +170,7 @@ export function useGooglePhotosPicker({
             }
           }
 
+          isRequestInFlight = true;
           try {
             console.log(`[Google Photos Hook] Poll #${pollAttempts} (closedTicks: ${closedWindowTicks})...`);
             const pollRes = await fetch(
@@ -175,7 +180,15 @@ export function useGooglePhotosPicker({
             if (pollRes.ok) {
               const pollData = await pollRes.json();
               console.log('[Google Photos Hook] Poll result:', pollData);
+
+              if (pollData.completed || pollData.status === 'EXPIRED_OR_COMPLETED') {
+                isFinished = true;
+                cleanup();
+                return;
+              }
+
               if (pollData.mediaItemsSet) {
+                isFinished = true;
                 if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
                 setPickingStatus('Importing chosen photos...');
 
@@ -190,10 +203,12 @@ export function useGooglePhotosPicker({
                 return;
               }
             } else {
-              console.warn('[Google Photos Hook] Poll request failed:', pollRes.status, await pollRes.text().catch(() => ''));
+              console.warn('[Google Photos Hook] Poll request status:', pollRes.status);
             }
           } catch (pollErr) {
             console.warn('[Google Photos Poll Error]:', pollErr);
+          } finally {
+            isRequestInFlight = false;
           }
         }, 2000);
       } catch (err: any) {

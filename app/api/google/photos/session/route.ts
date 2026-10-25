@@ -70,6 +70,14 @@ export async function GET(req: NextRequest) {
     });
 
     if (!sessionRes.ok) {
+      if (sessionRes.status === 404) {
+        // Session was already consumed and cleaned up, or expired
+        return NextResponse.json({
+          mediaItemsSet: false,
+          status: 'EXPIRED_OR_COMPLETED',
+          completed: true,
+        });
+      }
       const errData = await sessionRes.json().catch(() => ({}));
       console.warn('[Google Photos Poll] Session status check failed:', sessionRes.status, errData);
       return NextResponse.json(
