@@ -14,20 +14,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Google OAuth access token is required' }, { status: 400 });
     }
 
-    const payload: any = {};
-    if (body.maxItems && typeof body.maxItems === 'number' && body.maxItems > 0) {
-      payload.pickingConfig = {
-        maxItemCount: String(Math.min(body.maxItems, 2000)),
-      };
-    }
-
     const res = await fetch(`${PICKER_API_BASE}/sessions`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({}),
     });
 
     const data = await res.json();
@@ -55,7 +48,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET /api/google/photos/session?sessionId=...&token=... — polls session and fetches items metadata when user completes selection
+// GET /api/google/photos/session?sessionId=...&token=... — polls session and fetches items when done
 export async function GET(req: NextRequest) {
   try {
     const session = await auth().catch(() => null);
@@ -92,8 +85,8 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // 2. Fetch selected media items metadata (up to 100 items)
-    const itemsRes = await fetch(`${PICKER_API_BASE}/mediaItems?sessionId=${sessionId}&pageSize=100`, {
+    // 2. Fetch selected media items
+    const itemsRes = await fetch(`${PICKER_API_BASE}/mediaItems?sessionId=${sessionId}`, {
       headers: {
         'Authorization': `Bearer ${token}`,
       },
@@ -110,45 +103,59 @@ export async function GET(req: NextRequest) {
     const itemsData = await itemsRes.json();
     const rawItems = itemsData.mediaItems || [];
 
-    // Return lightweight item references so that Vercel's 4.5MB response limit is never breached
-    const items = rawItems.map((item: any, idx: number) => ({
-      id: item.id || `photo_${idx}`,
-      filename: item.mediaFile?.filename || `google_photo_${idx + 1}.jpg`,
-      mimeType: item.mediaFile?.mimeType || 'image/jpeg',
-      baseUrl: item.mediaFile?.baseUrl || '',
-    }));
+    // 3. Download images in parallel with optimized size (=w1600) to keep total payload safely below 4MB
+    const downloadPromises = rawItems.map(async (item: any, idx: number) => {
+      if (!item.mediaFile?.baseUrl) return null;
+      try {
+        // Use =w1600 so each image is ~150-250KB from Google CDN instead of 25MB camera RAW (=d)
+        let imgFetch = await fetch(`${item.mediaFile.baseUrl}=w1600`, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+
+        // Fallback to original =d if dimension parameter fails
+        if (!imgFetch.ok) {
+          imgFetch = await fetch(`${item.mediaFile.baseUrl}=d`, {
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+        }
+
+        if (imgFetch.ok) {
+          const arrayBuffer = await imgFetch.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          const mime = item.mediaFile.mimeType || imgFetch.headers.get('content-type') || 'image/jpeg';
+          return {
+            filename: item.mediaFile.filename || `google_photo_${Date.now()}_${idx + 1}.jpg`,
+            mimeType: mime,
+            base64: `data:${mime};base64,${buffer.toString('base64')}`,
+          };
+        }
+      } catch (err) {
+        console.warn(`[Google Photos] Download item ${idx + 1} failed:`, err);
+      }
+      return null;
+    });
+
+    const results = await Promise.all(downloadPromises);
+    const processedItems = results.filter(Boolean);
+
+    // 4. Clean up session on Google backend
+    try {
+      await fetch(`${PICKER_API_BASE}/sessions/${sessionId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+    } catch {
+      // Best-effort cleanup
+    }
 
     return NextResponse.json({
       mediaItemsSet: true,
       status: 'COMPLETED',
-      totalPicked: items.length,
-      items,
+      totalPicked: processedItems.length,
+      items: processedItems,
     });
   } catch (error: any) {
     console.error('[Google Photos Session Poll Error]:', error);
     return NextResponse.json({ error: error.message || 'Internal error' }, { status: 500 });
-  }
-}
-
-// DELETE /api/google/photos/session?sessionId=...&token=... — cleans up session after client downloads items
-export async function DELETE(req: NextRequest) {
-  try {
-    const session = await auth().catch(() => null);
-    const { searchParams } = req.nextUrl;
-    const sessionId = searchParams.get('sessionId');
-    const token = searchParams.get('token') || (session?.user as any)?.accessToken;
-
-    if (!sessionId || !token) {
-      return NextResponse.json({ error: 'sessionId and token are required' }, { status: 400 });
-    }
-
-    await fetch(`${PICKER_API_BASE}/sessions/${sessionId}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${token}` },
-    }).catch(() => null);
-
-    return NextResponse.json({ success: true });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
