@@ -1061,9 +1061,40 @@ export function ProductForm({ productId }: Props) {
       if (!photos || photos.length === 0) return;
       const files: File[] = [];
       for (let i = 0; i < photos.length; i++) {
-        const p = photos[i];
+        const p = photos[i] as any;
         try {
-          const arr = p.base64.split(',');
+          let b64 = p?.base64;
+          // Fallback download if base64 is missing but baseUrl is present
+          if (!b64 && p?.baseUrl) {
+            try {
+              const cachedToken = typeof window !== 'undefined' ? sessionStorage.getItem('gphotos_token') : null;
+              const token = (session?.user as any)?.accessToken || cachedToken;
+              const dlRes = await fetch('/api/google/photos/download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  baseUrl: p.baseUrl,
+                  token,
+                  filename: p.filename,
+                  mimeType: p.mimeType,
+                  maxDimension: 2048,
+                }),
+              });
+              if (dlRes.ok) {
+                const dlData = await dlRes.json();
+                b64 = dlData?.base64;
+              }
+            } catch (dlErr) {
+              console.warn(`[Photos Picker] Fallback download failed for photo ${i + 1}:`, dlErr);
+            }
+          }
+
+          if (!b64 || typeof b64 !== 'string') {
+            console.warn(`[Photos Picker] Skipping photo ${i + 1}: No valid base64 or baseUrl available`);
+            continue;
+          }
+
+          const arr = b64.split(',');
           const mime = p.mimeType || arr[0]?.match(/:(.*?);/)?.[1] || 'image/jpeg';
           const bstr = atob(arr[1] || arr[0]);
           let n = bstr.length;

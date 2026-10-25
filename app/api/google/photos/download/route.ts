@@ -12,35 +12,53 @@ export async function POST(req: NextRequest) {
     const baseUrl = body.baseUrl;
     const maxDimension = body.maxDimension || 2048;
 
-    if (!baseUrl || !token) {
-      return NextResponse.json({ error: 'baseUrl and token are required' }, { status: 400 });
+    if (!baseUrl) {
+      return NextResponse.json({ error: 'baseUrl is required' }, { status: 400 });
     }
 
-    // Appending =w2048-h2048 requests a high-quality web-optimized image scaled down to 2048px max
-    // directly from Google Photos CDN (~300KB-600KB instead of 25MB uncompressed camera raw).
-    const downloadUrl = `${baseUrl}=w${maxDimension}-h${maxDimension}`;
+    // Resilient fetch helper: tries with Bearer token, then falls back to direct fetch
+    const fetchImageWithFallback = async (url: string) => {
+      if (token) {
+        try {
+          const res = await fetch(url, {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+          });
+          if (res.ok) return res;
+        } catch (e) {
+          console.warn('[Google Photos Download] Token fetch error:', e);
+        }
+      }
 
-    let imgRes = await fetch(downloadUrl, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-    });
+      try {
+        const directRes = await fetch(url);
+        if (directRes.ok) return directRes;
+      } catch (e) {
+        console.warn('[Google Photos Download] Direct fetch error:', e);
+      }
 
-    // If dimension parameters fail, fallback to =d
-    if (!imgRes.ok) {
-      console.warn(`[Google Photos Download] Dimension fetch failed (${imgRes.status}), attempting fallback =d`);
-      imgRes = await fetch(`${baseUrl}=d`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
+      return null;
+    };
+
+    // 1. Try dimension-scaled image (optimized 2048px for fast download and clean payload)
+    let imgRes = await fetchImageWithFallback(`${baseUrl}=w${maxDimension}-h${maxDimension}`);
+
+    // 2. If dimension scaling fails, fallback to =d (original download)
+    if (!imgRes) {
+      console.warn(`[Google Photos Download] Dimension fetch failed, attempting fallback =d`);
+      imgRes = await fetchImageWithFallback(`${baseUrl}=d`);
     }
 
-    if (!imgRes.ok) {
-      const errText = await imgRes.text().catch(() => '');
+    // 3. If still fails, try raw baseUrl
+    if (!imgRes) {
+      imgRes = await fetchImageWithFallback(baseUrl);
+    }
+
+    if (!imgRes || !imgRes.ok) {
       return NextResponse.json(
-        { error: `Google Photos fetch error (${imgRes.status}): ${errText}` },
-        { status: imgRes.status }
+        { error: 'Failed to download image from Google Photos' },
+        { status: 502 }
       );
     }
 

@@ -46,6 +46,7 @@ export const ReferenceSlotCard: React.FC<ReferenceSlotCardProps> = ({
   const onFileSelectFromPhotos = (photos: PickedPhoto[]) => {
     if (!photos || photos.length === 0) return;
     const p = photos[0];
+    if (!p?.base64 || typeof p.base64 !== 'string') return;
     try {
       const arr = p.base64.split(',');
       const mime = p.mimeType || arr[0]?.match(/:(.*?);/)?.[1] || 'image/jpeg';
