@@ -1058,6 +1058,7 @@ export function ProductForm({ productId }: Props) {
     cancelPicking: cancelPhotosPicking,
   } = useGooglePhotosPicker({
     onPhotosSelected: async (photos) => {
+      console.log('[ProductForm] onPhotosSelected called with photos count:', photos?.length);
       if (!photos || photos.length === 0) return;
       const files: File[] = [];
       for (let i = 0; i < photos.length; i++) {
@@ -1066,6 +1067,7 @@ export function ProductForm({ productId }: Props) {
           let b64 = p?.base64;
           // Fallback download if base64 is missing but baseUrl is present
           if (!b64 && p?.baseUrl) {
+            console.log(`[ProductForm] Photo ${i + 1} has no base64, fetching via fallback...`);
             try {
               const cachedToken = typeof window !== 'undefined' ? sessionStorage.getItem('gphotos_token') : null;
               const token = (session?.user as any)?.accessToken || cachedToken;
@@ -1107,6 +1109,7 @@ export function ProductForm({ productId }: Props) {
           console.warn('Failed to convert photo base64 to file', convErr);
         }
       }
+      console.log(`[ProductForm] Ready to upload ${files.length} catalogue files to Cloudflare R2`);
       if (files.length > 0) {
         await uploadCatalogueFiles(files);
       }
