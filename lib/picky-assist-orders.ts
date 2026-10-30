@@ -657,8 +657,11 @@ export async function processPickyAssistOrder(
           productName: string;
           quantity: number;
           sizeInventory: any;
+          reservedQty: number | null;
+          soldQty: number | null;
+          status: string;
         }[]>`
-          SELECT id, "stockCode", "code1", "productName", quantity, "sizeInventory"
+          SELECT id, "stockCode", "code1", "productName", quantity, "sizeInventory", "reservedQty", "soldQty", status
           FROM "Product"
           WHERE "sizeInventory" IS NOT NULL
             AND jsonb_typeof("sizeInventory") = 'object'
@@ -871,8 +874,8 @@ export async function processPickyAssistOrder(
           where: { id: product.id },
           data: {
             quantity: finalQty,
-            reservedQty: product.reservedQty + qty,
-            soldQty: product.soldQty + qty,
+            reservedQty: (product.reservedQty ?? 0) + qty,
+            soldQty: (product.soldQty ?? 0) + qty,
             sizeInventory: (nextSizeInv as any) ?? undefined,
             status: autoStatus,
           },
