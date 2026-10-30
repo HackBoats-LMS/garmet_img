@@ -692,35 +692,38 @@ export async function processPickyAssistOrder(
         console.warn(`[Picky Assist Orders] variant barcode raw query skipped for ${cleanCode}`);
       }
 
-      // 2. If not found by variant barcode, check if code contains a size suffix:
-      // e.g. "KPD-2-NAVY-XL", "saree-05-cherry-red-m", "KP-39-MAROON-3XL", "5020000204-5XL"
+      // 2. If not found by variant barcode, check for code1 + size pattern
+      // Supports separators: '-', '+', '_', ' ', or direct attachment (e.g. "K-2-AQUA BLUE+XL", "K-2-AQUA BLUE-XL", "K-2-AQUA BLUE XL")
       if (!product) {
-        const lastDash = Math.max(cleanCode.lastIndexOf('-'), cleanCode.lastIndexOf('_'));
-        if (lastDash > 0) {
-          const potentialBase = cleanCode.slice(0, lastDash).trim();
-          const potentialSize = cleanCode.slice(lastDash + 1).trim().toUpperCase();
+        const KNOWN_SIZES = ['5XL', '5X', '4XL', '3XL', '2XL', 'XXL', '6XL', 'XL', 'XS', 'FS', 'S', 'M', 'L', 'FREE'];
+        for (const sz of KNOWN_SIZES) {
+          const szLower = sz.toLowerCase();
+          const separators = ['-', '+', '_', ' ', ''];
+          for (const sep of separators) {
+            const ending = sep + szLower;
+            if (cleanCodeLower.endsWith(ending) && cleanCodeLower.length > ending.length) {
+              const potentialBase = cleanCode.slice(0, cleanCode.length - ending.length).trim();
+              if (potentialBase) {
+                const pCandidate = await prisma.product.findFirst({
+                  where: {
+                    OR: [
+                      { code1: { equals: potentialBase, mode: 'insensitive' } },
+                      { stockCode: { equals: potentialBase, mode: 'insensitive' } },
+                      { productCode: { equals: potentialBase, mode: 'insensitive' } },
+                    ],
+                  },
+                });
 
-          const pCandidate = await prisma.product.findFirst({
-            where: {
-              OR: [
-                { code1: { equals: potentialBase, mode: 'insensitive' } },
-                { stockCode: { equals: potentialBase, mode: 'insensitive' } },
-                { productCode: { equals: potentialBase, mode: 'insensitive' } },
-              ],
-            },
-          });
-
-          if (pCandidate) {
-            product = pCandidate;
-            matchMethod = 'variant_suffix_match';
-            // Verify if potentialSize exists in sizeInventory
-            const norm = pCandidate.sizeInventory ? Object.keys(pCandidate.sizeInventory as any).map(s => s.toUpperCase()) : [];
-            if (norm.includes(potentialSize)) {
-              detectedSize = potentialSize;
-            } else if (!detectedSize) {
-              detectedSize = potentialSize;
+                if (pCandidate) {
+                  product = pCandidate;
+                  detectedSize = sz;
+                  matchMethod = 'code1_size_resolver';
+                  break;
+                }
+              }
             }
           }
+          if (product) break;
         }
       }
 
