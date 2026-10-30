@@ -73,6 +73,24 @@ export async function POST(req: NextRequest) {
       steps = 30,
       aspectRatio = '3:4',
       productId,
+      // V2 Structured Saree Fields:
+      nanoBananaV2 = false,
+      sareeFabricType,
+      palluSize,
+      borderWidth,
+      borderEdges,
+      tassels,
+      tasselColor,
+      tasselLocation,
+      blouseRule,
+      bodyDescription,
+      palluDescription,
+      borderDescription,
+      approvedGarmentRefUrl,
+      approvedRearGarmentRefUrl,
+      includeOriginalSwatches = true,
+      sendPosePreview = false,
+      selectedBackgroundPreset,
     } = body;
 
     const userId = reqUserId || (session?.user as any)?.id || 'anonymous_user';
@@ -405,19 +423,227 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       finalKieModel = kieModelId.replace('image-to-image', 'text-to-image');
     }
 
-    // Map pro to flex if that's the correct Kie.ai identifier for image-to-image
-    // Removed override to allow pro-image-to-image.
-    
     let actualModelStr = finalKieModel;
-    let isNanoBanana = finalKieModel.toLowerCase().includes('nano-banana');
+    const isNanoBanana = finalKieModel.toLowerCase().includes('nano-banana');
     if (isNanoBanana) {
       actualModelStr = 'nano-banana-2-1';
+    }
+
+    // V2 Check: Defaults to OFF. Operators opt in via UI toggle (nanoBananaV2 === true)
+    const useNanoBananaV2 = isNanoBanana && nanoBananaV2 === true;
+    console.log(`[API /generate] Generator Version: ${useNanoBananaV2 ? 'V2 (Clean Pipeline)' : 'V1 (Legacy Pipeline)'}`);
+
+    let activePrompt = fluxPrompt;
+    let activeInputUrls = inputUrls;
+
+    if (useNanoBananaV2) {
+      // 1. Resolve Model Persona Anchor
+      let modelAnchor = 'a radiant Indian female fashion model with natural skin texture, serene facial expression, and elegant posture';
+      if (selectedModelId) {
+        try {
+          const dbModel = await prisma.aIModel.findUnique({ where: { id: selectedModelId } });
+          if (dbModel?.promptAnchor) {
+            modelAnchor = dbModel.promptAnchor;
+          }
+        } catch (mErr) {
+          console.warn('[V2] Could not fetch dbModel promptAnchor:', mErr);
+        }
+      }
+
+      // 2. Identify Pose Type
+      const isRearPose = (dbPose?.name || '').toLowerCase().includes('pallu cascade') ||
+        (dbPose?.promptSnippet || '').toLowerCase().includes('rear') ||
+        (dbPose?.promptSnippet || '').toLowerCase().includes('back');
+
+      const isMirrorPose = (dbPose?.name || '').toLowerCase().includes('mirror') ||
+        (dbPose?.promptSnippet || '').toLowerCase().includes('mirror');
+
+      // 3. Assemble Ordered Image List & Descriptions
+      const v2Items: { source: string; label: string }[] = [];
+      const activeGarmentRef = (isRearPose && approvedRearGarmentRefUrl) ? approvedRearGarmentRefUrl : approvedGarmentRefUrl;
+
+      if (activeGarmentRef) {
+        v2Items.push({
+          source: activeGarmentRef,
+          label: isRearPose
+            ? 'the complete saree reference, rear view showing full pallu fall and proportion.'
+            : 'the complete saree reference, showing correct proportion and drape layout.'
+        });
+      }
+
+      if (!activeGarmentRef || includeOriginalSwatches) {
+        const uploadedKeys = Object.keys(uploadedImages || {});
+        const bodyKey = uploadedKeys.find(k => k.toLowerCase().includes('body') || k.toLowerCase().includes('garment') || k.toLowerCase().includes('view')) || uploadedKeys[0];
+        const palluKey = uploadedKeys.find(k => k !== bodyKey && (k.toLowerCase().includes('pallu') || k.toLowerCase().includes('border'))) || (uploadedKeys.length > 1 ? uploadedKeys[1] : null);
+        const blouseKey = uploadedKeys.find(k => k !== bodyKey && k !== palluKey && k.toLowerCase().includes('blouse')) || (uploadedKeys.length > 2 ? uploadedKeys[2] : null);
+
+        if (bodyKey && uploadedImages[bodyKey]) {
+          v2Items.push({ source: uploadedImages[bodyKey], label: 'saree body fabric.' });
+        }
+        if (palluKey && uploadedImages[palluKey]) {
+          v2Items.push({ source: uploadedImages[palluKey], label: 'pallu and border.' });
+        }
+        if (blouseKey && uploadedImages[blouseKey]) {
+          v2Items.push({ source: uploadedImages[blouseKey], label: 'blouse fabric.' });
+        }
+      }
+
+      // Add model face (exactly ONE face, deduplicated!)
+      if (modelFaceUrl) {
+        v2Items.push({ source: modelFaceUrl, label: "the model's face, for identity only, not clothing." });
+      }
+
+      // Optional pose preview (default OFF, enabled only if sendPosePreview is true)
+      if (sendPosePreview && posePreviewUrl) {
+        v2Items.push({ source: posePreviewUrl, label: 'pose reference silhouette, for body posture only, not clothing.' });
+      }
+
+      // Upload and generate dynamic image map text
+      const v2UploadedUrls: string[] = [];
+      const imageMapLines: string[] = [];
+      for (const item of v2Items) {
+        let finalUrl = '';
+        if (item.source.startsWith('http')) {
+          finalUrl = item.source;
+        } else {
+          const resolved = resolveImageToDataUrl(item.source);
+          if (resolved) {
+            try {
+              finalUrl = await uploadReferenceImageToKie(resolved, kieApiKeyBearer);
+            } catch (uErr) {
+              console.warn('[V2] Failed to upload image item:', uErr);
+            }
+          }
+        }
+        if (finalUrl) {
+          v2UploadedUrls.push(finalUrl);
+          imageMapLines.push(`Image ${v2UploadedUrls.length}: ${item.label}`);
+        }
+      }
+
+      activeInputUrls = v2UploadedUrls;
+
+      // 4. Build Saree Lines (only confirmed fields!)
+      const sareeLines: string[] = [];
+      if (sareeFabricType && sareeFabricType.trim()) {
+        sareeLines.push(`- Fabric: ${sareeFabricType.trim()}`);
+      }
+      if (bodyDescription && bodyDescription.trim()) {
+        sareeLines.push(`- Body: ${bodyDescription.trim()}`);
+      }
+
+      // Unified Border Line & Drape Rule (aligned, no contradictions or wording glitches)
+      const bWidth = borderWidth || 'medium';
+      const bDesc = borderDescription && borderDescription.trim() ? `${borderDescription.trim()}, ` : '';
+
+      let borderLine = '';
+      let drapeRule = '';
+
+      if (sareeDesignType === 'contrast_pallu') {
+        const bEdge = borderEdges && borderEdges.trim() ? borderEdges.trim() : 'along the outer edge of the chest wrap and the bottom hem';
+        borderLine = `- Border: ${bDesc}${bWidth} border, ${bEdge}`;
+        drapeRule = 'Body fabric covers the skirt, front pleats and the chest wrap. The border runs along the outer edge of the chest wrap only. From the waist down, the hanging pallu shows the pallu artwork.';
+      } else if (sareeDesignType === 'half_half') {
+        const bEdge = borderEdges && borderEdges.trim() ? borderEdges.trim() : 'along the lower hem and outer pallu drape';
+        borderLine = `- Border: ${bDesc}${bWidth} border, ${bEdge}`;
+        drapeRule = 'Lower half from waist to hem uses the body fabric and pleats. Upper half across chest drape and shoulder uses the contrast fabric with a clean horizontal boundary at the waist.';
+      } else {
+        const bEdge = borderEdges && borderEdges.trim() ? borderEdges.trim() : 'along the bottom hem and outer pallu edge';
+        borderLine = `- Border: ${bDesc}${bWidth} border, ${bEdge}`;
+        drapeRule = 'Body fabric motifs continue across the skirt, waist pleats, and chest wrap in a continuous traditional drape.';
+      }
+      sareeLines.push(borderLine);
+
+      const pRatio = palluSize === 'small' ? '1/4' : palluSize === 'large' ? '1/2' : '1/3';
+      const pDesc = palluDescription && palluDescription.trim() ? `${palluDescription.trim()}, ` : '';
+      sareeLines.push(`- Pallu: ${pDesc}covering about ${pRatio} of the saree length`);
+
+      let bRuleText = 'fitted tailored blouse matching the blouse swatch reference';
+      if (blouseRule === 'plain_contrast') bRuleText = 'plain contrast tailored blouse complementing the saree border';
+      else if (blouseRule === 'same_as_body') bRuleText = 'tailored blouse crafted from the same fabric as the saree body';
+      sareeLines.push(`- Blouse: ${bRuleText}`);
+
+      let endsRuleText = 'Hem and pallu end are plain, flat, finished edges.';
+      if (tassels && tassels !== 'none') {
+        const tCol = tasselColor && tasselColor.trim() ? `${tasselColor.trim()} ` : '';
+        endsRuleText = `Tassels (${tCol}matching) hang only along ${tasselLocation || 'pallu end'}, as in the reference.`;
+      }
+      sareeLines.push(`- Ends: ${endsRuleText}`);
+
+      // 5. Pose snippet with positive phrasing & deduplicated props
+      let sanitizedPoseSnippet = dbPose?.promptSnippet || '';
+      if (!sanitizedPoseSnippet) {
+        sanitizedPoseSnippet = 'Full-length front standing portrait at eye-level, poised and dignified posture.';
+      }
+
+      if (sanitizedPoseSnippet.toLowerCase().includes('verandah hostess') || sanitizedPoseSnippet.toLowerCase().includes('seated') || sanitizedPoseSnippet.toLowerCase().includes('armchair')) {
+        sanitizedPoseSnippet = sanitizedPoseSnippet
+          .replace(/\(absolutely no plain.*?\)/gi, '')
+          .replace(/never leave the lap.*?\./gi, '')
+          .trim();
+        if (!sanitizedPoseSnippet.includes('print continuing across the lap') && !sanitizedPoseSnippet.includes('print continues across the lap')) {
+          sanitizedPoseSnippet += ' The body fabric print continues across the lap, thighs, and pleats from waist to hem.';
+        }
+      }
+
+      const mirrorText = isMirrorPose
+        ? '\nOptical mirror physics: The reflection in the mirror shows the model looking into her own eyes with exact physical symmetry, matched hand position, and matching directional lighting.'
+        : '';
+
+      // 6. Single unified background & lighting source
+      let settingLocation = 'Living room verandah with clean natural architecture';
+      let settingLighting = 'soft natural daylight';
+
+      if (selectedBackgroundPreset) {
+        settingLocation = selectedBackgroundPreset;
+      } else if (occasion === 'Onam / festival') {
+        settingLocation = 'Courtyard with traditional heritage pillars';
+        settingLighting = 'warm festive morning daylight';
+      } else if (occasion === 'Kitty party') {
+        settingLocation = 'Sunlit modern cafe lounge';
+        settingLighting = 'bright ambient daylight';
+      } else if (occasion === 'Parent-teacher meet') {
+        settingLocation = 'Home entrance with clean stone doorway';
+        settingLighting = 'crisp natural daylight';
+      } else if (occasion === 'Small get-together') {
+        settingLocation = 'Spacious living room verandah';
+        settingLighting = 'soft unhurried daylight';
+      } else if (occasion === 'Workday') {
+        settingLocation = 'Minimalist contemporary office corridor';
+        settingLighting = 'diffused neutral daylight';
+      }
+
+      // 7. Styling (props isolated to pose, not duplicated here)
+      let stylingText = 'Small gold jhumkas, single delicate gold bangle, small round bindi, neat low bun.';
+      if (icp === 'professional') {
+        stylingText = 'Subtle gold studs, classic wrist watch, neat hairstyle, understated elegance.';
+      }
+
+      const userNotes = promptSuggestions && promptSuggestions.trim()
+        ? `\nUser notes: ${promptSuggestions.trim()}`
+        : '';
+
+      activePrompt = `Photorealistic fashion catalogue photograph of ${modelAnchor}, wearing the saree shown in the reference images.
+
+Reference images, in order:
+${imageMapLines.join(' ')}
+
+Saree (copy exactly from the references; do not simplify or invent motifs):
+${sareeLines.join('\n')}
+${drapeRule}
+
+Pose: ${sanitizedPoseSnippet}${mirrorText}
+Setting: ${settingLocation}. Lighting: ${settingLighting}.
+Styling: ${stylingText}${userNotes}
+Photo quality: natural skin texture, realistic hands, sharp visible fabric weave and print detail. No text, logos or watermarks.`;
+
+      console.log(`[API /generate] V2 Clean Prompt (${activePrompt.length} chars):\n`, activePrompt);
     }
 
     const kieRequestBody: any = {
       model: actualModelStr,
       input: {
-        prompt: fluxPrompt,
+        prompt: activePrompt,
         aspect_ratio: aspectRatio || '3:4',
         resolution: isNanoBanana ? '2K' : '1K',
       },
@@ -430,13 +656,13 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       kieRequestBody.input.negative_prompt = negPrompt;
     }
 
-    if (inputUrls.length > 0) {
+    if (activeInputUrls.length > 0) {
       if (isNanoBanana) {
-        kieRequestBody.input.image_input = inputUrls;
+        kieRequestBody.input.image_input = activeInputUrls;
         // output format for nano-banana
         kieRequestBody.input.output_format = "png";
       } else {
-        kieRequestBody.input.input_urls = inputUrls;
+        kieRequestBody.input.input_urls = activeInputUrls;
       }
     }
 
@@ -609,7 +835,10 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
             orderId,
             poseId,
             permanentUrl,
-            prompt: cleanPrompt,
+            prompt: useNanoBananaV2 ? activePrompt : cleanPrompt,
+            finalPrompt: activePrompt,
+            orderedImageList: activeInputUrls,
+            generatorVersion: useNanoBananaV2 ? 'v2' : 'v1',
             productName,
             stockCode,
             description,
@@ -623,6 +852,9 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
             imageUrl: permanentUrl,
             provider: 'kie-ai',
             taskId,
+            generatorVersion: useNanoBananaV2 ? 'v2' : 'v1',
+            finalPrompt: activePrompt,
+            orderedImageList: activeInputUrls,
           });
         } else {
           const errMsg = `Kie.ai completed but no image data was found in output: ${JSON.stringify(checkData.data || output)}`;
@@ -694,6 +926,9 @@ async function saveGeneratedOrder(params: {
   poseId?: string;
   permanentUrl: string;
   prompt: string;
+  finalPrompt?: string;
+  orderedImageList?: string[];
+  generatorVersion?: string;
   productName?: string;
   stockCode?: string;
   description?: string;
@@ -709,6 +944,9 @@ async function saveGeneratedOrder(params: {
     poseId,
     permanentUrl,
     prompt,
+    finalPrompt,
+    orderedImageList,
+    generatorVersion,
     productName,
     stockCode,
     description,
@@ -732,6 +970,9 @@ async function saveGeneratedOrder(params: {
         [currentPoseKey]: {
           imageUrl: permanentUrl,
           prompt,
+          finalPrompt: finalPrompt || prompt,
+          orderedImageList: orderedImageList || [],
+          generatorVersion: generatorVersion || 'v1',
           generatedAt: new Date().toISOString(),
         },
       };

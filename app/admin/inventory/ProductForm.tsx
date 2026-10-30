@@ -141,6 +141,35 @@ export function ProductForm({ productId }: Props) {
   const isEdit = !!productId;
 
   const [categories, setCategories] = useState<Category[]>([]);
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [creatingCategory, setCreatingCategory] = useState(false);
+
+  const handleCreateCategory = async () => {
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) return;
+    setCreatingCategory(true);
+    try {
+      const res = await fetch('/api/admin/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create category');
+
+      const newCat = data.category;
+      setCategories(prev => [...prev, newCat]);
+      setForm(prev => ({ ...prev, categoryId: newCat.id, subCategoryId: '' }));
+      setNewCategoryName('');
+      setShowAddCategory(false);
+    } catch (err: any) {
+      alert(err.message || 'Error adding category');
+    } finally {
+      setCreatingCategory(false);
+    }
+  };
+
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(isEdit);
   const [error, setError] = useState<string | null>(null);
@@ -1378,6 +1407,112 @@ export function ProductForm({ productId }: Props) {
             <SectionHeader id="core" title="Stock Codes & Identity" icon={Tag} />
             {openSections.core && (
               <div className="space-y-4 pt-1">
+                {/* ── GARMENT / PRODUCT TYPE SELECTOR (TOP OF FORM) ── */}
+                <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200/90 shadow-2xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-amber-950 uppercase tracking-wider">
+                        Garment Type *
+                      </span>
+                      <span className="text-[10px] text-amber-800 font-semibold px-2.5 py-0.5 rounded-full bg-amber-200/70 border border-amber-300">
+                        {form.categoryId ? (categories.find(c => c.id === form.categoryId)?.name || 'Selected') : 'Please select'}
+                      </span>
+                    </div>
+                    {!showAddCategory && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAddCategory(true)}
+                        className="text-[11px] font-bold text-accent hover:text-accent-hover flex items-center gap-1 cursor-pointer transition-colors bg-white px-2.5 py-1 rounded-lg border border-amber-200 shadow-2xs"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add New Type
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Selectable Type Pills */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {categories.map((cat) => {
+                      const isSelected = form.categoryId === cat.id;
+                      return (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => {
+                            set('categoryId', cat.id);
+                            set('subCategoryId', '');
+                          }}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
+                            isSelected
+                              ? 'bg-amber-600 text-white border-amber-600 shadow-sm scale-[1.02]'
+                              : 'bg-white text-charcoal border-amber-200/80 hover:border-amber-400 hover:bg-amber-50/50'
+                          }`}
+                        >
+                          <span>{cat.name}</span>
+                          {isSelected && <Check className="w-3.5 h-3.5 stroke-[2.5]" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Inline Add New Category Input */}
+                  {showAddCategory && (
+                    <div className="flex items-center gap-2 pt-2 border-t border-amber-200/70 animate-fade-in">
+                      <input
+                        type="text"
+                        placeholder="e.g. Lehenga, Lungi, Dupatta"
+                        value={newCategoryName}
+                        onChange={(e) => setNewCategoryName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleCreateCategory();
+                          }
+                        }}
+                        className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-accent bg-white text-charcoal focus:outline-none"
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCreateCategory}
+                        disabled={creatingCategory || !newCategoryName.trim()}
+                        className="px-3.5 py-1.5 bg-accent text-white rounded-lg text-xs font-bold hover:bg-accent/90 disabled:opacity-50 cursor-pointer shadow-2xs"
+                      >
+                        {creatingCategory ? 'Adding...' : 'Save Type'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAddCategory(false);
+                          setNewCategoryName('');
+                        }}
+                        className="px-2.5 py-1.5 border border-cream-border bg-white text-charcoal-muted hover:text-charcoal rounded-lg text-xs font-medium cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Sub-Category selector if category has subCategories */}
+                  {subCategories.length > 0 && (
+                    <div className="pt-2 border-t border-amber-200/70 flex items-center gap-2">
+                      <label className="text-[11px] font-semibold text-charcoal-muted">Sub-type:</label>
+                      <select
+                        value={form.subCategoryId}
+                        onChange={(e) => set('subCategoryId', e.target.value)}
+                        className="px-2.5 py-1 text-xs rounded-lg border border-cream-border bg-white text-charcoal focus:outline-none focus:border-accent"
+                      >
+                        <option value="">All / None</option>
+                        {subCategories.map((sub) => (
+                          <option key={sub.id} value={sub.id}>
+                            {sub.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <Input label="stockCode (Default / Master)" value={form.stockCode}

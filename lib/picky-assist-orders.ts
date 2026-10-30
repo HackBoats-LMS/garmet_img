@@ -208,8 +208,38 @@ export function extractOrderFromPayload(rawPayload: any): {
   const fieldMappings: FieldMappingEntry[] = [];
   const p = cleanPayloadKeys(rawPayload || {});
 
+  // Support WhatsApp Cloud API / Meta message structure
+  // e.g. entry[0].changes[0].value.messages[0].order
+  let waOrder: any = null;
+  let waSender: any = null;
+  if (Array.isArray(p.entry)) {
+    for (const ent of p.entry) {
+      if (Array.isArray(ent?.changes)) {
+        for (const ch of ent.changes) {
+          const val = ch?.value;
+          if (val) {
+            if (val.contacts && val.contacts[0]) {
+              waSender = val.contacts[0];
+            }
+            if (Array.isArray(val.messages)) {
+              for (const msg of val.messages) {
+                if (msg?.order) {
+                  waOrder = msg.order;
+                  if (!waSender && msg.from) {
+                    waSender = { phone: msg.from };
+                  }
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Find root object if wrapped
-  const target = p.order || p.data || p.result || p;
+  const target = waOrder || p.order || p.data?.order || p.data || p.result?.order || p.result || p.payload?.order || p.payload || p;
 
   // 1. Extract Order ID (handling "order_id", "order_reference", etc.)
   let orderId = '';
@@ -245,7 +275,10 @@ export function extractOrderFromPayload(rawPayload: any): {
   // 2. Extract Customer Phone
   let customerPhone = '';
   let sourceFieldPhone = '';
-  if (target.customer?.phone) {
+  if (waSender?.phone || waSender?.wa_id) {
+    customerPhone = String(waSender.phone || waSender.wa_id).trim();
+    sourceFieldPhone = 'whatsapp.sender';
+  } else if (target.customer?.phone) {
     customerPhone = String(target.customer.phone).trim();
     sourceFieldPhone = 'customer.phone';
   } else if (target.phone) {
@@ -274,10 +307,10 @@ export function extractOrderFromPayload(rawPayload: any): {
   });
 
   // 3. Customer Name
-  const customerName = target.customer?.name || target.name || target.customer_name || 'WhatsApp Customer';
-  if (target.customer?.name || target.name) {
+  const customerName = waSender?.profile?.name || target.customer?.name || target.name || target.customer_name || 'WhatsApp Customer';
+  if (waSender?.profile?.name || target.customer?.name || target.name) {
     fieldMappings.push({
-      sourceField: target.customer?.name ? 'customer.name' : 'name',
+      sourceField: waSender?.profile?.name ? 'whatsapp.profile.name' : target.customer?.name ? 'customer.name' : 'name',
       sourceValue: customerName,
       targetDbField: 'InventoryLog.note (Customer Name)',
       description: 'Customer contact name',
@@ -292,24 +325,30 @@ export function extractOrderFromPayload(rawPayload: any): {
   let rawList: any[] | null = null;
   let listSourcePath = '';
 
-  if (Array.isArray(target.items)) {
-    rawList = target.items;
-    listSourcePath = 'items';
-  } else if (Array.isArray(target.product_items)) {
+  if (Array.isArray(target.product_items)) {
     rawList = target.product_items;
     listSourcePath = 'product_items';
+  } else if (Array.isArray(target.items)) {
+    rawList = target.items;
+    listSourcePath = 'items';
   } else if (Array.isArray(target.products)) {
     rawList = target.products;
     listSourcePath = 'products';
   } else if (Array.isArray(target.line_items)) {
     rawList = target.line_items;
     listSourcePath = 'line_items';
-  } else if (Array.isArray(p.items)) {
-    rawList = p.items;
-    listSourcePath = 'items';
   } else if (Array.isArray(p.product_items)) {
     rawList = p.product_items;
     listSourcePath = 'product_items';
+  } else if (Array.isArray(p.items)) {
+    rawList = p.items;
+    listSourcePath = 'items';
+  } else if (Array.isArray(p.data?.items)) {
+    rawList = p.data.items;
+    listSourcePath = 'data.items';
+  } else if (Array.isArray(p.data?.product_items)) {
+    rawList = p.data.product_items;
+    listSourcePath = 'data.product_items';
   }
 
   if (rawList && rawList.length > 0) {
@@ -609,39 +648,45 @@ export async function processPickyAssistOrder(
       const cleanCodeLower = cleanCode.toLowerCase();
 
       // 1. Check for matching variant barcode / stockCode in sizeInventory (OPTIMIZED: Push to PostgreSQL)
-      // Uses jsonb_each to search inside sizeInventory JSONB without loading all products into memory
-      const variantMatch = await prisma.$queryRaw<{
-        id: string;
-        stockCode: string;
-        code1: string | null;
-        productName: string;
-        quantity: number;
-        sizeInventory: any;
-      }[]>`
-        SELECT id, "stockCode", "code1", "productName", quantity, "sizeInventory"
-        FROM "Product"
-        WHERE "sizeInventory" IS NOT NULL
-          AND EXISTS (
-            SELECT 1
-            FROM jsonb_each("sizeInventory") AS kv(key, val)
-            WHERE (val->>'stockCode') ILIKE ${cleanCode}
-          )
-        LIMIT 1
-      `;
+      // Guarded with jsonb_typeof and try/catch to ensure non-object JSON values never crash the resolver
+      try {
+        const variantMatch = await prisma.$queryRaw<{
+          id: string;
+          stockCode: string;
+          code1: string | null;
+          productName: string;
+          quantity: number;
+          sizeInventory: any;
+        }[]>`
+          SELECT id, "stockCode", "code1", "productName", quantity, "sizeInventory"
+          FROM "Product"
+          WHERE "sizeInventory" IS NOT NULL
+            AND jsonb_typeof("sizeInventory") = 'object'
+            AND EXISTS (
+              SELECT 1
+              FROM jsonb_each("sizeInventory") AS kv(key, val)
+              WHERE (val->>'stockCode') ILIKE ${cleanCode}
+            )
+          LIMIT 1
+        `;
 
-      if (variantMatch.length > 0) {
-        const matched = variantMatch[0];
-        product = matched;
-        matchMethod = 'variant_barcode_match';
-        // Extract the matched size key from sizeInventory
-        const sizeInv = matched.sizeInventory as Record<string, any>;
-        for (const [sizeKey, sizeVal] of Object.entries(sizeInv)) {
-          if (sizeVal?.stockCode && String(sizeVal.stockCode).toLowerCase() === cleanCodeLower) {
-            detectedSize = sizeKey.toUpperCase();
-            variantStockCode = sizeVal.stockCode;
-            break;
+        if (variantMatch.length > 0) {
+          const matched = variantMatch[0];
+          product = matched;
+          matchMethod = 'variant_barcode_match';
+          // Extract the matched size key from sizeInventory
+          const sizeInv = matched.sizeInventory as Record<string, any>;
+          for (const [sizeKey, sizeVal] of Object.entries(sizeInv)) {
+            if (sizeVal?.stockCode && String(sizeVal.stockCode).toLowerCase() === cleanCodeLower) {
+              detectedSize = sizeKey.toUpperCase();
+              variantStockCode = sizeVal.stockCode;
+              break;
+            }
           }
         }
+      } catch (rawErr) {
+        // Graceful fallback to standard lookup if raw query fails
+        console.warn(`[Picky Assist Orders] variant barcode raw query skipped for ${cleanCode}`);
       }
 
       // 2. If not found by variant barcode, check if code contains a size suffix:
