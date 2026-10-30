@@ -2,6 +2,44 @@ import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 
+function mergeAndDeduplicateImages(
+  existingImages: Record<string, any> = {},
+  newImages: Record<string, any> = {}
+): Record<string, any> {
+  const merged: Record<string, any> = {};
+  const seenUrls = new Set<string>();
+
+  // Process newImages first so newest additions/updates take priority
+  for (const [key, val] of Object.entries(newImages)) {
+    const url = typeof val === 'string' ? val : (val as any)?.imageUrl;
+    if (url) {
+      const cleanUrl = url.trim().replace(/[\\'";,\s]+$/, '');
+      if (!seenUrls.has(cleanUrl)) {
+        seenUrls.add(cleanUrl);
+        merged[key] = val;
+      }
+    } else {
+      merged[key] = val;
+    }
+  }
+
+  // Then add existingImages only if their imageUrl is NOT already present
+  for (const [key, val] of Object.entries(existingImages)) {
+    const url = typeof val === 'string' ? val : (val as any)?.imageUrl;
+    if (url) {
+      const cleanUrl = url.trim().replace(/[\\'";,\s]+$/, '');
+      if (!seenUrls.has(cleanUrl)) {
+        seenUrls.add(cleanUrl);
+        merged[key] = val;
+      }
+    } else if (!merged[key]) {
+      merged[key] = val;
+    }
+  }
+
+  return merged;
+}
+
 // GET /api/customer/orders — List orders for current user
 export async function GET(req: NextRequest) {
   try {
@@ -67,6 +105,10 @@ export async function POST(req: NextRequest) {
 
     // Upsert: update if id provided, create otherwise
     if (id) {
+      const deduplicatedOrderImages = generatedImages
+        ? mergeAndDeduplicateImages({}, generatedImages as Record<string, any>)
+        : undefined;
+
       const order = await prisma.customerOrder.update({
         where: { id },
         data: {
@@ -77,7 +119,7 @@ export async function POST(req: NextRequest) {
           selectedModelId: selectedModelId ?? undefined,
           selectedOptions: selectedOptions ?? undefined,
           aspectRatio: aspectRatio ?? undefined,
-          generatedImages: generatedImages ?? undefined,
+          generatedImages: deduplicatedOrderImages ?? undefined,
           captions: captions ?? undefined,
           status: status ?? undefined,
         },
@@ -89,10 +131,10 @@ export async function POST(req: NextRequest) {
           ? await prisma.product.findUnique({ where: { id: productId } })
           : (stockCode ? await prisma.product.findFirst({ where: { OR: [{ stockCode }, { code1: stockCode }] } }) : null);
         if (product) {
-          const firstImage = Object.values(generatedImages as Record<string, {imageUrl: string}>)[0];
           const existingImages = (product.generatedImages as Record<string, any>) || {};
           const newImages = (generatedImages as Record<string, any>) || {};
-          const mergedImages = { ...existingImages, ...newImages };
+          const mergedImages = mergeAndDeduplicateImages(existingImages, newImages);
+          const firstImage = Object.values(mergedImages as Record<string, {imageUrl: string}>)[0];
 
           await prisma.product.update({
             where: { id: product.id },
@@ -110,6 +152,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ order });
     }
 
+    const deduplicatedNewOrderImages = generatedImages
+      ? mergeAndDeduplicateImages({}, generatedImages as Record<string, any>)
+      : null;
+
     const order = await prisma.customerOrder.create({
       data: {
         userId,
@@ -121,7 +167,7 @@ export async function POST(req: NextRequest) {
         selectedModelId: selectedModelId || null,
         selectedOptions: selectedOptions || null,
         aspectRatio: aspectRatio || '3:4',
-        generatedImages: generatedImages || null,
+        generatedImages: deduplicatedNewOrderImages as any,
         captions: captions || null,
         status: status || 'draft',
       },
@@ -133,10 +179,10 @@ export async function POST(req: NextRequest) {
         ? await prisma.product.findUnique({ where: { id: productId } })
         : (stockCode ? await prisma.product.findFirst({ where: { OR: [{ stockCode }, { code1: stockCode }] } }) : null);
       if (product) {
-        const firstImage = Object.values(generatedImages as Record<string, {imageUrl: string}>)[0];
         const existingImages = (product.generatedImages as Record<string, any>) || {};
         const newImages = (generatedImages as Record<string, any>) || {};
-        const mergedImages = { ...existingImages, ...newImages };
+        const mergedImages = mergeAndDeduplicateImages(existingImages, newImages);
+        const firstImage = Object.values(mergedImages as Record<string, {imageUrl: string}>)[0];
 
         await prisma.product.update({
           where: { id: product.id },

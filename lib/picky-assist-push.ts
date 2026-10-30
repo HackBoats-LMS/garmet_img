@@ -84,8 +84,20 @@ export function formatProductPayload(product: any, variantSize?: string): Record
   const price = product.retailPrice ?? product.unitPrice ?? product.price ?? 0;
   const mrp = product.retailPrice ?? product.mrp ?? price;
   const baseQuantity = typeof product.quantity === 'number' ? product.quantity : parseInt(product.quantity, 10) || 0;
-  const category = product.category?.name || (typeof product.category === 'string' ? product.category : '');
+  let category = product.category?.name || (typeof product.category === 'string' ? product.category : '');
   const subCategory = product.subCategory?.name || (typeof product.subCategory === 'string' ? product.subCategory : '');
+
+  // Intelligent fallback detection if category is unlinked in DB
+  if (!category) {
+    const textToCheck = `${product.productName || ''} ${product.code1 || ''} ${product.stockCode || ''} ${product.title || ''}`.toUpperCase();
+    if (textToCheck.match(/KURT|KPD|KP-|KURTA/)) {
+      category = 'kurthi';
+    } else if (textToCheck.match(/SAREE|SARI|BANDANI|PANCHAVATI|DILRUBA/)) {
+      category = 'Saree';
+    } else {
+      category = 'Saree';
+    }
+  }
 
   // Extract up to 5 images for Picky Assist
   const imageList = extractProductImages(product);
@@ -95,19 +107,25 @@ export function formatProductPayload(product: any, variantSize?: string): Record
   const image4 = imageList[3] || '';
   const image5 = imageList[4] || '';
 
-  // Parse size inventory
+  // Parse size inventory with multi-stock code support
   const rawSizeInv = product.sizeInventory || product.size_inventory;
-  let normalizedSizes: Record<string, { quantity: number; stockCode: string | null }> = {};
+  let normalizedSizes: Record<string, { quantity: number; stockCode: string | null; stockCodes?: string[] }> = {};
   if (rawSizeInv && typeof rawSizeInv === 'object') {
     for (const [sKey, sVal] of Object.entries(rawSizeInv)) {
       const trimmedSize = String(sKey).trim().toUpperCase();
       if (!trimmedSize) continue;
       if (typeof sVal === 'number') {
-        normalizedSizes[trimmedSize] = { quantity: Math.max(0, sVal), stockCode: null };
+        normalizedSizes[trimmedSize] = { quantity: Math.max(0, sVal), stockCode: null, stockCodes: [] };
       } else if (typeof sVal === 'object' && sVal !== null) {
+        const rawCodes = Array.isArray((sVal as any).stockCodes) ? (sVal as any).stockCodes.map(String).map((s: string) => s.trim()).filter(Boolean) : [];
+        const rawCodeStr = (sVal as any).stockCode ? String((sVal as any).stockCode).trim() : null;
+        const derivedCodes = rawCodes.length > 0
+          ? rawCodes
+          : (rawCodeStr ? rawCodeStr.split(/[,;|\s]+/).map((s: string) => s.trim()).filter(Boolean) : []);
         normalizedSizes[trimmedSize] = {
           quantity: Math.max(0, parseInt(String((sVal as any).quantity ?? 0), 10) || 0),
-          stockCode: (sVal as any).stockCode ? String((sVal as any).stockCode).trim() : null,
+          stockCode: rawCodeStr || (derivedCodes[0] ?? null),
+          stockCodes: derivedCodes,
         };
       }
     }
@@ -115,6 +133,16 @@ export function formatProductPayload(product: any, variantSize?: string): Record
 
   const sizeList = Object.keys(normalizedSizes);
   const availableSizes = sizeList.filter(s => (normalizedSizes[s]?.quantity ?? 0) > 0);
+
+  // All distinct barcodes across all variants
+  const allBarcodes: string[] = [];
+  for (const item of Object.values(normalizedSizes)) {
+    if (item.stockCodes && item.stockCodes.length > 0) {
+      item.stockCodes.forEach(c => { if (!allBarcodes.includes(c)) allBarcodes.push(c); });
+    } else if (item.stockCode && !allBarcodes.includes(item.stockCode)) {
+      allBarcodes.push(item.stockCode);
+    }
+  }
 
   // If this payload is formatted specifically for a single size variant:
   let effectiveStockCode = masterStockCode;
@@ -127,6 +155,8 @@ export function formatProductPayload(product: any, variantSize?: string): Record
 
   // variant_code must be strictly created from code1 and the size: e.g. k-1-orchid-xl
   let variantCode = itemGroupId;
+  let variantSpecificBarcode = '';
+  let variantStockCodes: string[] = [];
 
   if (variantSize) {
     const sizeData = normalizedSizes[variantSize];
@@ -134,14 +164,22 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     variantCode = `${itemGroupId}-${cleanSize}`;
     effectiveQuantity = sizeData ? sizeData.quantity : baseQuantity;
     effectiveSize = variantSize;
+    variantStockCodes = sizeData?.stockCodes || (sizeData?.stockCode ? [sizeData.stockCode] : []);
+    variantSpecificBarcode = variantStockCodes[0] || sizeData?.stockCode || variantCode;
   } else if (availableSizes.length === 1 && availableSizes[0].toUpperCase() !== 'FREE') {
     const cleanSize = availableSizes[0].trim().toLowerCase();
     variantCode = `${itemGroupId}-${cleanSize}`;
+    const singleData = normalizedSizes[availableSizes[0]];
+    variantStockCodes = singleData?.stockCodes || (singleData?.stockCode ? [singleData.stockCode] : []);
+    variantSpecificBarcode = variantStockCodes[0] || singleData?.stockCode || variantCode;
   }
 
   // Build nested variants array for Picky Assist catalog / CRM connectors that support batch variant objects
   const variantsList = Object.entries(normalizedSizes).map(([sz, sData]) => {
     const vCode = `${itemGroupId}-${sz.toLowerCase()}`;
+    const vCodes = sData.stockCodes && sData.stockCodes.length > 0 ? sData.stockCodes : (sData.stockCode ? [sData.stockCode] : []);
+    const vBarcode = vCodes[0] || sData.stockCode || vCode;
+
     return {
       id: vCode,
       product_id: vCode,
@@ -153,12 +191,20 @@ export function formatProductPayload(product: any, variantSize?: string): Record
       variant_code: vCode,
       variantCode: vCode,
       retailer_id: vCode,
+      barcode: vBarcode,
+      barcodes: vCodes.join(', '),
+      stock_code: sData.stockCode || vBarcode || masterStockCode,
+      stock_codes: vCodes,
       title: `${effectiveProductName} - ${sz}`,
       name: `${effectiveProductName} - ${sz}`,
       size: sz,
       variant: sz,
       variant_name: sz,
       color: String(product.color || '').trim(),
+      category: category,
+      product_type: category.toLowerCase(),
+      garment_type: category.toLowerCase(),
+      type: category.toLowerCase(),
       material: String(product.clothType || product.cloth_type || 'Silk').trim(),
       cloth_type: String(product.clothType || product.cloth_type || 'Silk').trim(),
       option_name: 'Size',
@@ -204,6 +250,9 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     item_group_id: itemGroupId,
     itemGroupId: itemGroupId,
     code1: code1 || masterStockCode,
+    barcode: variantSpecificBarcode || (allBarcodes[0] ?? variantCode),
+    barcodes: allBarcodes.join(', '),
+    stock_codes: variantStockCodes.length > 0 ? variantStockCodes : allBarcodes,
 
     // 2. Core Details & Variant Name
     title: effectiveProductName,
@@ -217,11 +266,31 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     fabric: String(product.clothType || product.cloth_type || 'Silk').trim(),
     tags: Array.isArray(product.tags) ? product.tags.join(', ') : String(product.tags || ''),
     category: category,
+    product_type: category.toLowerCase(),
+    productType: category.toLowerCase(),
+    garment_type: category.toLowerCase(),
+    garmentType: category.toLowerCase(),
+    type: category.toLowerCase(),
     sub_category: subCategory,
     status: product.status || (effectiveQuantity > 0 ? 'ACTIVE' : 'OUT_OF_STOCK'),
     availability: effectiveQuantity > 0 ? 'in stock' : 'out of stock',
 
-    // 3. Pricing & Currency (Mapped per variant for Meta Catalog & WhatsApp Commerce)
+    // 3. Garment Specifications (Picky Assist custom catalog & CRM fields)
+    embroidery_type: product.embroideryType || '',
+    embroideryType: product.embroideryType || '',
+    cut_style: product.cutStyle || '',
+    cutStyle: product.cutStyle || '',
+    border: product.border || '',
+    kurta_length: product.kurtaLength || '',
+    kurtaLength: product.kurtaLength || '',
+    pant_style: product.pantStyle || '',
+    pantStyle: product.pantStyle || '',
+    location: product.location || '',
+    design_number: product.productCode || product.designNumber || '',
+    product_code: product.productCode || product.designNumber || '',
+    design_no: product.productCode || product.designNumber || '',
+
+    // 4. Pricing & Currency (Mapped per variant for Meta Catalog & WhatsApp Commerce)
     price: price,
     unit_price: price,
     unitPrice: price,
@@ -234,12 +303,14 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     mrp: mrp,
     retail_price: mrp,
     retailPrice: mrp,
+    wholesale_price: product.dealerPrice ?? product.wholesalePrice ?? null,
+    dealer_price: product.dealerPrice ?? product.wholesalePrice ?? null,
     currency: 'INR',
     currency_code: 'INR',
     formatted_price: `${price} INR`,
     price_formatted: `${price} INR`,
 
-    // 4. Variant Attributes & Options (Pure strings only — never pass raw array here)
+    // 5. Variant Attributes & Options (Pure strings only — never pass raw array here)
     quantity: effectiveQuantity,
     qty: effectiveQuantity,
     stock: effectiveQuantity,
@@ -251,11 +322,12 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     option_value: String(effectiveSize).trim(),
     option1_name: 'Size',
     option1_value: String(effectiveSize).trim(),
+    size_inventory: normalizedSizes,
 
-    // 5. Nested Variants List (For connectors supporting structured variant arrays)
+    // 6. Nested Variants List (For connectors supporting structured variant arrays)
     variants: variantsList.length > 0 ? variantsList : undefined,
 
-    // 6. Product Images (Direct public JPEG URLs < 5MB)
+    // 7. Product Images (Direct public JPEG URLs < 5MB)
     image_link: image1,
     imageLink: image1,
     image_url: image1,
@@ -269,9 +341,13 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     image_4: image4,
     image_5: image5,
 
-    // 7. WhatsApp Catalog Helpers
+    // 8. WhatsApp Catalog & Broadcast Helpers
     whatsapp_catalogue_title: product.whatsappCatalogueTitle || effectiveProductName,
     whatsapp_retail: product.whatsappRetail || description,
+    whatsapp_wholesale: product.whatsappWholesale || '',
+    instagram_caption: product.instagramCaption || '',
+    facebook_caption: product.facebookCaption || '',
+    shopify_title: product.shopifyTitle || '',
   };
 }
 
@@ -474,7 +550,14 @@ export async function updatePickyProduct(
   product: any,
   changedFields?: Record<string, any>,
   options?: { pushVariants?: boolean }
-): Promise<{ success: boolean; status?: number; data?: any; error?: string; variantsUpdated?: number }> {
+): Promise<{
+  success: boolean;
+  status?: number;
+  data?: any;
+  error?: string;
+  variantsUpdated?: number;
+  results?: Array<{ size: string; variantCode: string; success: boolean; status: number; data?: any; error?: string }>;
+}> {
   const webhookUrl = process.env.PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL;
   if (!webhookUrl) {
     return { success: false, error: 'PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL is not configured' };
@@ -489,16 +572,40 @@ export async function updatePickyProduct(
   }
 
   try {
-    // If multiple size variants exist, update each variant directly
-    if (sizeEntries.length > 1) {
+    // If the product has size variants, update each size variant directly as its own product
+    // using variant_code as product_id and code1 as item_group_id
+    if (sizeEntries.length > 0) {
       let variantsCount = 0;
       let firstStatus = 200;
       let firstData: any = null;
+      const results: Array<{ size: string; variantCode: string; success: boolean; status: number; data?: any; error?: string }> = [];
 
       for (const sz of sizeEntries) {
         try {
+          // 1. Format payload specifically for this variant (e.g. S, M, L)
+          // product_id = variant_code (e.g. k-1-orchid-s), item_group_id = code1 (k-1-orchid), quantity = size S qty
           const formatted = formatProductPayload(product, sz);
-          const payload = { ...formatted, ...(changedFields || {}) };
+
+          // 2. Apply changedFields, but strictly protect variant-specific fields from being overwritten
+          const payload = { ...formatted };
+          if (changedFields && typeof changedFields === 'object') {
+            for (const [k, v] of Object.entries(changedFields)) {
+              // Never overwrite variant identification, size, or variant-specific quantities
+              const protectedKeys = [
+                'product_id', 'productId', 'id', 'retailer_id', 'sku', 'SKU',
+                'variant_sku', 'variant_id', 'variant_code', 'variantCode',
+                'item_group_id', 'itemGroupId', 'code1',
+                'quantity', 'qty', 'stock',
+                'size', 'variant', 'variant_name', 'variantName',
+                'option_value', 'option1_value',
+                'barcode', 'barcodes', 'stock_codes'
+              ];
+              if (!protectedKeys.includes(k)) {
+                payload[k] = v;
+              }
+            }
+          }
+
           const response = await fetch(webhookUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -509,25 +616,52 @@ export async function updatePickyProduct(
           let data: any = text;
           try { data = JSON.parse(text); } catch { }
 
+          results.push({
+            size: sz,
+            variantCode: formatted.product_id,
+            success: response.ok,
+            status: response.status,
+            data,
+            error: !response.ok ? `HTTP ${response.status}` : undefined,
+          });
+
           if (variantsCount === 0) {
             firstStatus = response.status;
             firstData = data;
           }
           if (response.ok) {
             variantsCount++;
+          } else {
+            console.warn(`[Picky Assist] Variant ${sz} (${formatted.product_id}) update status ${response.status}:`, data);
           }
-        } catch (vErr) {
+        } catch (vErr: any) {
           console.warn(`[Picky Assist] Error updating variant ${sz} for ${product.stockCode}:`, vErr);
+          results.push({
+            size: sz,
+            variantCode: `${product.code1 || product.stockCode}-${sz.toLowerCase()}`,
+            success: false,
+            status: 500,
+            error: vErr.message,
+          });
         }
       }
 
-      console.log(`[Picky Assist] ✅ Updated ${variantsCount} size variants for ${product.stockCode}`);
-      return { success: variantsCount > 0, status: firstStatus, data: firstData, variantsUpdated: variantsCount };
+      console.log(`[Picky Assist] ✅ Updated ${variantsCount}/${sizeEntries.length} size variants for ${product.stockCode}`);
+      return {
+        success: variantsCount > 0,
+        status: firstStatus,
+        data: firstData,
+        variantsUpdated: variantsCount,
+        results,
+      };
     }
 
     // Single size or no size variants -> update single product payload
-    const formatted = formatProductPayload(product, sizeEntries[0]);
-    const payload = { ...formatted, ...(changedFields || {}) };
+    const formatted = formatProductPayload(product);
+    const payload = { ...formatted };
+    if (changedFields && typeof changedFields === 'object') {
+      Object.assign(payload, changedFields);
+    }
 
     const response = await fetch(webhookUrl, {
       method: 'POST',
@@ -628,6 +762,12 @@ export async function syncPickyProductWithDiff(localProduct: any): Promise<{
     { key: 'description', localVal: localFormatted.description, remoteVal: remote.description ?? remote.productDescription },
     { key: 'size', localVal: localFormatted.size, remoteVal: remote.size ?? remote.length_Size },
     { key: 'size_inventory', localVal: JSON.stringify(localFormatted.size_inventory), remoteVal: remote.size_inventory ? JSON.stringify(remote.size_inventory) : undefined },
+    { key: 'kurta_length', localVal: localFormatted.kurta_length, remoteVal: remote.kurta_length ?? remote.kurtaLength },
+    { key: 'pant_style', localVal: localFormatted.pant_style, remoteVal: remote.pant_style ?? remote.pantStyle },
+    { key: 'embroidery_type', localVal: localFormatted.embroidery_type, remoteVal: remote.embroidery_type ?? remote.embroideryType },
+    { key: 'cut_style', localVal: localFormatted.cut_style, remoteVal: remote.cut_style ?? remote.cutStyle },
+    { key: 'border', localVal: localFormatted.border, remoteVal: remote.border },
+    { key: 'dealer_price', localVal: localFormatted.dealer_price, remoteVal: remote.dealer_price ?? remote.wholesale_price },
   ];
 
   for (const f of fieldsToCompare) {

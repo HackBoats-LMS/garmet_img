@@ -184,7 +184,11 @@ export async function POST(req: NextRequest) {
           for (const [sKey, sVal] of Object.entries(itemSizeInventory)) {
             const incomingQty = typeof sVal === 'number' ? sVal : (sVal as any)?.quantity || 0;
             const incomingStockCode = typeof sVal === 'object' ? (sVal as any)?.stockCode : null;
-            const currentItem = merged[sKey] || { quantity: 0, stockCode: null };
+            const incomingStockCodes: string[] = typeof sVal === 'object' && Array.isArray((sVal as any)?.stockCodes)
+              ? (sVal as any).stockCodes
+              : (incomingStockCode ? String(incomingStockCode).split(/[,;|\s]+/).map((s: string) => s.trim()).filter(Boolean) : (item.stockCode ? [item.stockCode] : []));
+
+            const currentItem = merged[sKey] || { quantity: 0, stockCode: null, stockCodes: [] };
 
             // If it's a new batch with new stock code, ADD incoming quantity to current quantity
             // Otherwise, set to incoming sheet quantity (or keep current if incoming is 0)
@@ -192,9 +196,22 @@ export async function POST(req: NextRequest) {
               ? (currentItem.quantity || 0) + incomingQty
               : (incomingQty > 0 ? incomingQty : (currentItem.quantity || 0));
 
+            // Retain all existing stock codes and append newly imported ones
+            const currentCodes: string[] = Array.isArray(currentItem.stockCodes) && currentItem.stockCodes.length > 0
+              ? currentItem.stockCodes
+              : (currentItem.stockCode ? String(currentItem.stockCode).split(/[,;|\s]+/).map((s: string) => s.trim()).filter(Boolean) : []);
+
+            const allCodesSet = new Set<string>();
+            for (const c of [...currentCodes, ...incomingStockCodes]) {
+              const clean = String(c || '').trim();
+              if (clean) allCodesSet.add(clean);
+            }
+            const allCodes = Array.from(allCodesSet);
+
             merged[sKey] = {
               quantity: targetQty,
-              stockCode: incomingStockCode || item.stockCode || currentItem.stockCode || null,
+              stockCode: allCodes.length > 0 ? allCodes.join(', ') : null,
+              stockCodes: allCodes,
             };
           }
           finalSizeInventory = merged;
@@ -214,10 +231,12 @@ export async function POST(req: NextRequest) {
       } else {
         if (!finalSizeInventory && itemSize && itemSize !== '-') {
           const normSize = itemSize.toUpperCase();
+          const initialCode = item.stockCode || generateVariantStockCode(item.code1 || stockCode, normSize);
           finalSizeInventory = {
             [normSize]: {
               quantity: item.quantity,
-              stockCode: item.stockCode || generateVariantStockCode(item.code1 || stockCode, normSize),
+              stockCode: initialCode,
+              stockCodes: initialCode ? [initialCode] : [],
             }
           };
         }

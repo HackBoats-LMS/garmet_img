@@ -99,7 +99,7 @@ export function useGooglePhotosPicker({
         const res = await fetch('/api/google/photos/session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: accessToken }),
+          body: JSON.stringify({ token: accessToken, maxItems }),
         });
 
         const data = await res.json();
@@ -137,62 +137,80 @@ export function useGooglePhotosPicker({
 
         setPickingStatus('Select photos in Google Photos & click Done');
 
-        // 3. Poll for session completion every 4 seconds
+        // 3. Poll for session completion every 2 seconds
         let pollAttempts = 0;
-        const maxPollAttempts = 150; // ~10 minutes max
+        let closedWindowTicks = 0;
+        let isRequestInFlight = false;
+        let isFinished = false;
+        const maxPollAttempts = 180; // ~6 minutes max
+        const maxClosedWindowTicks = 15; // Keep polling for up to 30 seconds after window closes
 
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
 
         pollIntervalRef.current = setInterval(async () => {
+          if (isRequestInFlight || isFinished) return;
+
           pollAttempts++;
           if (pollAttempts > maxPollAttempts) {
+            console.warn('[Google Photos Hook] Max polling attempts reached.');
             cleanup();
             return;
           }
 
+          const currentPopup = popupRef.current;
+          const isWindowClosed = Boolean(currentPopup && currentPopup.closed);
+
+          if (isWindowClosed) {
+            closedWindowTicks++;
+            setPickingStatus('Google Photos closed. Finalizing your selection...');
+            if (closedWindowTicks > maxClosedWindowTicks) {
+              console.log('[Google Photos Hook] Window closed with no items selected after 30s. Cleaning up.');
+              cleanup();
+              return;
+            }
+          }
+
+          isRequestInFlight = true;
           try {
+            console.log(`[Google Photos Hook] Poll #${pollAttempts} (closedTicks: ${closedWindowTicks})...`);
             const pollRes = await fetch(
               `/api/google/photos/session?sessionId=${sessionId}&token=${accessToken}`
             );
 
             if (pollRes.ok) {
               const pollData = await pollRes.json();
+              console.log('[Google Photos Hook] Poll result:', pollData);
+
+              if (pollData.completed || pollData.status === 'EXPIRED_OR_COMPLETED') {
+                isFinished = true;
+                cleanup();
+                return;
+              }
+
               if (pollData.mediaItemsSet) {
+                isFinished = true;
                 if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
                 setPickingStatus('Importing chosen photos...');
 
                 if (Array.isArray(pollData.items) && pollData.items.length > 0) {
+                  console.log(`[Google Photos Hook] SUCCESS: Passing ${pollData.items.length} items to onPhotosSelected`);
                   await onPhotosSelected(pollData.items);
+                } else {
+                  console.warn('[Google Photos Hook] mediaItemsSet is true but pollData.items is empty:', pollData);
                 }
 
                 cleanup();
                 return;
               }
+            } else {
+              console.warn('[Google Photos Hook] Poll request status:', pollRes.status);
             }
           } catch (pollErr) {
             console.warn('[Google Photos Poll Error]:', pollErr);
+          } finally {
+            isRequestInFlight = false;
           }
-
-          // If user manually closed the popup
-          const currentPopup = popupRef.current;
-          if (currentPopup && currentPopup.closed) {
-            if (pollAttempts > 2) {
-              setTimeout(async () => {
-                try {
-                  const finalCheck = await fetch(
-                    `/api/google/photos/session?sessionId=${sessionId}&token=${accessToken}`
-                  );
-                  const finalData = await finalCheck.json();
-                  if (finalData.mediaItemsSet && Array.isArray(finalData.items)) {
-                    await onPhotosSelected(finalData.items);
-                  }
-                } finally {
-                  cleanup();
-                }
-              }, 1200);
-            }
-          }
-        }, 4000);
+        }, 2000);
       } catch (err: any) {
         if (targetPopup && !targetPopup.closed) targetPopup.close();
         cleanup();

@@ -42,3 +42,7 @@ next-env.d.ts
 files
 # Picky Assist Local Test Data
 app/api/admin/picky-test/*.json
+
+# Local optimization notes (not for git)
+DB_OPTIMIZATION_NOTES.md
+DATABASE_OPTIMIZATION_PLAN.md

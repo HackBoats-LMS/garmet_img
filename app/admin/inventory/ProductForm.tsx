@@ -141,6 +141,35 @@ export function ProductForm({ productId }: Props) {
   const isEdit = !!productId;
 
   const [categories, setCategories] = useState<Category[]>([]);
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [creatingCategory, setCreatingCategory] = useState(false);
+
+  const handleCreateCategory = async () => {
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) return;
+    setCreatingCategory(true);
+    try {
+      const res = await fetch('/api/admin/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create category');
+
+      const newCat = data.category;
+      setCategories(prev => [...prev, newCat]);
+      setForm(prev => ({ ...prev, categoryId: newCat.id, subCategoryId: '' }));
+      setNewCategoryName('');
+      setShowAddCategory(false);
+    } catch (err: any) {
+      alert(err.message || 'Error adding category');
+    } finally {
+      setCreatingCategory(false);
+    }
+  };
+
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(isEdit);
   const [error, setError] = useState<string | null>(null);
@@ -261,14 +290,25 @@ export function ProductForm({ productId }: Props) {
 
   const cataloguePhotosList = useMemo(() => {
     if (!generatedImages) return [];
-    return Object.entries(generatedImages)
-      .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
-      .map(([poseId, img], idx) => ({
-        poseId,
-        imageUrl: img.imageUrl,
-        order: idx,
-        isCover: form.coverImageUrl === img.imageUrl,
-      }));
+    const seenUrls = new Set<string>();
+    const deduplicatedEntries: [string, any][] = [];
+
+    const sorted = Object.entries(generatedImages).sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0));
+    for (const [poseId, img] of sorted) {
+      if (!img?.imageUrl) continue;
+      const u = img.imageUrl.trim();
+      if (!seenUrls.has(u)) {
+        seenUrls.add(u);
+        deduplicatedEntries.push([poseId, img]);
+      }
+    }
+
+    return deduplicatedEntries.map(([poseId, img], idx) => ({
+      poseId,
+      imageUrl: img.imageUrl,
+      order: idx,
+      isCover: form.coverImageUrl === img.imageUrl,
+    }));
   }, [generatedImages, form.coverImageUrl]);
 
   const collageImagesList: CollageInputImage[] = useMemo(() => {
@@ -381,7 +421,21 @@ export function ProductForm({ productId }: Props) {
             shopifyTitle: p.shopifyTitle || '',
             whatsappCatalogueTitle: p.whatsappCatalogueTitle || '',
           });
-          setGeneratedImages(genImgs);
+          let dedupedGenImgs: Record<string, any> | null = null;
+          if (genImgs && typeof genImgs === 'object') {
+            const seen = new Set<string>();
+            dedupedGenImgs = {};
+            for (const [k, v] of Object.entries(genImgs)) {
+              const u = v?.imageUrl ? String(v.imageUrl).trim() : null;
+              if (u && !seen.has(u)) {
+                seen.add(u);
+                dedupedGenImgs[k] = v;
+              } else if (!u && !dedupedGenImgs[k]) {
+                dedupedGenImgs[k] = v;
+              }
+            }
+          }
+          setGeneratedImages(dedupedGenImgs);
           setLinkedOrderId(p.linkedOrderId || null);
           if (p.sizeInventory) {
             setSizeInventory(normalizeSizeInventory(p.sizeInventory));
@@ -559,6 +613,24 @@ export function ProductForm({ productId }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patchData),
       }).catch(err => console.warn('Auto-save delete failed:', err));
+    }
+
+    // Delete image from Cloudflare R2
+    if (deletedUrl && (deletedUrl.startsWith('http://') || deletedUrl.startsWith('https://') || deletedUrl.startsWith('/api/images/'))) {
+      fetch('/api/upload', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: deletedUrl }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            console.warn('[R2 Delete Warning]:', errData?.error || res.statusText);
+          } else {
+            console.log('[R2 Delete Success] Image permanently deleted from Cloudflare R2');
+          }
+        })
+        .catch(err => console.warn('[R2 Delete Network Error]:', err));
     }
   };
 
@@ -795,44 +867,83 @@ export function ProductForm({ productId }: Props) {
   };
 
   const [uploadingCover, setUploadingCover] = useState(false);
+
+  const compressImageFile = (file: File, maxDim = 2560, quality = 0.95): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = (err) => reject(err);
+      reader.onload = (e) => {
+        const dataUrl = e.target?.result as string;
+        if (!dataUrl) return reject(new Error('Failed to read file'));
+        // If file is SVG or already under 3.5MB, DO NOT re-compress on canvas!
+        // Preserves 100% original raw quality and avoids double-compression.
+        if (file.type === 'image/svg+xml' || file.size < 3.5 * 1024 * 1024) {
+          return resolve(dataUrl);
+        }
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return resolve(dataUrl);
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = () => resolve(dataUrl);
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleUploadCoverImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setUploadingCover(true);
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const base64 = event.target?.result as string;
-      try {
-        const res = await fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ file: base64, type: 'default' }),
-        });
-        const data = await res.json();
-        if (data.url) {
-          set('coverImageUrl', data.url);
-        }
-      } catch (err) {
-        console.error('Failed to upload cover image', err);
-      } finally {
-        setUploadingCover(false);
+    try {
+      const base64 = await compressImageFile(file);
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: base64, type: 'default' }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `Upload failed with status ${res.status}`);
       }
-    };
-    reader.readAsDataURL(file);
+      if (data.url) {
+        set('coverImageUrl', data.url);
+        if (productId) {
+          fetch(`/api/admin/products/${productId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ coverImageUrl: data.url }),
+          }).catch(err => console.warn('Auto-save cover image failed:', err));
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to upload cover image:', err);
+      alert(`Cover image upload failed: ${err.message || 'Unknown error'}`);
+    } finally {
+      setUploadingCover(false);
+      if (e.target) e.target.value = '';
+    }
   };
 
   const [uploadingCatalogue, setUploadingCatalogue] = useState(false);
   const [catalogueUploadStatus, setCatalogueUploadStatus] = useState<string | null>(null);
-
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (event) => resolve(event.target?.result as string);
-      reader.onerror = (err) => reject(err);
-      reader.readAsDataURL(file);
-    });
-  };
 
   const uploadCatalogueFiles = async (files: File[]) => {
     if (!files || files.length === 0) return;
@@ -847,7 +958,7 @@ export function ProductForm({ productId }: Props) {
         const file = files[i];
         setCatalogueUploadStatus(`${i + 1}/${total}`);
         try {
-          const base64 = await fileToBase64(file);
+          const base64 = await compressImageFile(file);
           const res = await fetch('/api/upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -859,6 +970,9 @@ export function ProductForm({ productId }: Props) {
             }),
           });
           const data = await res.json();
+          if (!res.ok || data.error) {
+            throw new Error(data.error || `Upload status ${res.status}`);
+          }
           if (data.url) {
             const newPoseId = `uploaded_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
             const currentTotal = (generatedImages ? Object.keys(generatedImages).length : 0) + Object.keys(newEntries).length;
@@ -868,8 +982,9 @@ export function ProductForm({ productId }: Props) {
               order: currentTotal,
             };
           }
-        } catch (fileErr) {
+        } catch (fileErr: any) {
           console.error(`Failed to upload ${file.name}:`, fileErr);
+          alert(`Failed to upload photo "${file.name}": ${fileErr?.message || 'Server error'}`);
         }
       }
 
@@ -974,12 +1089,45 @@ export function ProductForm({ productId }: Props) {
     cancelPicking: cancelPhotosPicking,
   } = useGooglePhotosPicker({
     onPhotosSelected: async (photos) => {
+      console.log('[ProductForm] onPhotosSelected called with photos count:', photos?.length);
       if (!photos || photos.length === 0) return;
       const files: File[] = [];
       for (let i = 0; i < photos.length; i++) {
-        const p = photos[i];
+        const p = photos[i] as any;
         try {
-          const arr = p.base64.split(',');
+          let b64 = p?.base64;
+          // Fallback download if base64 is missing but baseUrl is present
+          if (!b64 && p?.baseUrl) {
+            console.log(`[ProductForm] Photo ${i + 1} has no base64, fetching via fallback...`);
+            try {
+              const cachedToken = typeof window !== 'undefined' ? sessionStorage.getItem('gphotos_token') : null;
+              const token = (session?.user as any)?.accessToken || cachedToken;
+              const dlRes = await fetch('/api/google/photos/download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  baseUrl: p.baseUrl,
+                  token,
+                  filename: p.filename,
+                  mimeType: p.mimeType,
+                  maxDimension: 2048,
+                }),
+              });
+              if (dlRes.ok) {
+                const dlData = await dlRes.json();
+                b64 = dlData?.base64;
+              }
+            } catch (dlErr) {
+              console.warn(`[Photos Picker] Fallback download failed for photo ${i + 1}:`, dlErr);
+            }
+          }
+
+          if (!b64 || typeof b64 !== 'string') {
+            console.warn(`[Photos Picker] Skipping photo ${i + 1}: No valid base64 or baseUrl available`);
+            continue;
+          }
+
+          const arr = b64.split(',');
           const mime = p.mimeType || arr[0]?.match(/:(.*?);/)?.[1] || 'image/jpeg';
           const bstr = atob(arr[1] || arr[0]);
           let n = bstr.length;
@@ -992,6 +1140,7 @@ export function ProductForm({ productId }: Props) {
           console.warn('Failed to convert photo base64 to file', convErr);
         }
       }
+      console.log(`[ProductForm] Ready to upload ${files.length} catalogue files to Cloudflare R2`);
       if (files.length > 0) {
         await uploadCatalogueFiles(files);
       }
@@ -1011,8 +1160,15 @@ export function ProductForm({ productId }: Props) {
     }
 
     const albumTitle = form.friendlyCode || form.stockCode || form.title || 'Product';
+    const seenExportUrls = new Set<string>();
     const imagesToExport = Object.entries(generatedImages)
-      .filter(([, v]) => Boolean(v?.imageUrl))
+      .filter(([, v]) => {
+        if (!v?.imageUrl) return false;
+        const u = v.imageUrl.trim();
+        if (seenExportUrls.has(u)) return false;
+        seenExportUrls.add(u);
+        return true;
+      })
       .map(([poseId, v], idx) => ({
         imageUrl: v.imageUrl,
         filename: `${(form.friendlyCode || form.stockCode || 'photo').toLowerCase().replace(/[^a-z0-9_-]+/g, '_')}_${idx + 1}.jpg`,
@@ -1251,6 +1407,112 @@ export function ProductForm({ productId }: Props) {
             <SectionHeader id="core" title="Stock Codes & Identity" icon={Tag} />
             {openSections.core && (
               <div className="space-y-4 pt-1">
+                {/* ── GARMENT / PRODUCT TYPE SELECTOR (TOP OF FORM) ── */}
+                <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200/90 shadow-2xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-amber-950 uppercase tracking-wider">
+                        Garment Type *
+                      </span>
+                      <span className="text-[10px] text-amber-800 font-semibold px-2.5 py-0.5 rounded-full bg-amber-200/70 border border-amber-300">
+                        {form.categoryId ? (categories.find(c => c.id === form.categoryId)?.name || 'Selected') : 'Please select'}
+                      </span>
+                    </div>
+                    {!showAddCategory && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAddCategory(true)}
+                        className="text-[11px] font-bold text-accent hover:text-accent-hover flex items-center gap-1 cursor-pointer transition-colors bg-white px-2.5 py-1 rounded-lg border border-amber-200 shadow-2xs"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add New Type
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Selectable Type Pills */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {categories.map((cat) => {
+                      const isSelected = form.categoryId === cat.id;
+                      return (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => {
+                            set('categoryId', cat.id);
+                            set('subCategoryId', '');
+                          }}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer border ${
+                            isSelected
+                              ? 'bg-amber-600 text-white border-amber-600 shadow-sm scale-[1.02]'
+                              : 'bg-white text-charcoal border-amber-200/80 hover:border-amber-400 hover:bg-amber-50/50'
+                          }`}
+                        >
+                          <span>{cat.name}</span>
+                          {isSelected && <Check className="w-3.5 h-3.5 stroke-[2.5]" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Inline Add New Category Input */}
+                  {showAddCategory && (
+                    <div className="flex items-center gap-2 pt-2 border-t border-amber-200/70 animate-fade-in">
+                      <input
+                        type="text"
+                        placeholder="e.g. Lehenga, Lungi, Dupatta"
+                        value={newCategoryName}
+                        onChange={(e) => setNewCategoryName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleCreateCategory();
+                          }
+                        }}
+                        className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-accent bg-white text-charcoal focus:outline-none"
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCreateCategory}
+                        disabled={creatingCategory || !newCategoryName.trim()}
+                        className="px-3.5 py-1.5 bg-accent text-white rounded-lg text-xs font-bold hover:bg-accent/90 disabled:opacity-50 cursor-pointer shadow-2xs"
+                      >
+                        {creatingCategory ? 'Adding...' : 'Save Type'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAddCategory(false);
+                          setNewCategoryName('');
+                        }}
+                        className="px-2.5 py-1.5 border border-cream-border bg-white text-charcoal-muted hover:text-charcoal rounded-lg text-xs font-medium cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Sub-Category selector if category has subCategories */}
+                  {subCategories.length > 0 && (
+                    <div className="pt-2 border-t border-amber-200/70 flex items-center gap-2">
+                      <label className="text-[11px] font-semibold text-charcoal-muted">Sub-type:</label>
+                      <select
+                        value={form.subCategoryId}
+                        onChange={(e) => set('subCategoryId', e.target.value)}
+                        className="px-2.5 py-1 text-xs rounded-lg border border-cream-border bg-white text-charcoal focus:outline-none focus:border-accent"
+                      >
+                        <option value="">All / None</option>
+                        {subCategories.map((sub) => (
+                          <option key={sub.id} value={sub.id}>
+                            {sub.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <Input label="stockCode (Default / Master)" value={form.stockCode}
@@ -1346,6 +1608,9 @@ export function ProductForm({ productId }: Props) {
                       {Object.entries(sizeInventory).map(([sKey, sItem]) => {
                         const qty = typeof sItem === 'number' ? sItem : sItem?.quantity || 0;
                         const stockCode = typeof sItem === 'object' ? sItem?.stockCode : null;
+                        const stockCodesList: string[] = typeof sItem === 'object' && Array.isArray((sItem as any)?.stockCodes) && (sItem as any).stockCodes.length > 0
+                          ? (sItem as any).stockCodes
+                          : (stockCode ? String(stockCode).split(/[,;]+/).map((s: string) => s.trim()).filter(Boolean) : []);
 
                         return (
                           <div
@@ -1354,30 +1619,48 @@ export function ProductForm({ productId }: Props) {
                           >
                             <div className="flex items-start justify-between gap-1 mb-2">
                               <div className="flex-1 pr-1">
-                                <span className="text-sm font-black text-charcoal px-2.5 py-1 rounded-lg bg-amber-100/80 border border-amber-200/80 inline-block">
-                                  {sKey}
-                                </span>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-sm font-black text-charcoal px-2.5 py-1 rounded-lg bg-amber-100/80 border border-amber-200/80 inline-block">
+                                    {sKey}
+                                  </span>
+                                  {stockCodesList.length > 1 && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200">
+                                      {stockCodesList.length} codes
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="mt-1.5">
                                   <label className="text-[10px] font-bold text-amber-900/80 uppercase tracking-wider block mb-0.5">
-                                    StockCode:
+                                    Stock Code(s):
                                   </label>
+                                  {stockCodesList.length > 1 && (
+                                    <div className="flex flex-wrap gap-1 mb-1.5">
+                                      {stockCodesList.map((code, cIdx) => (
+                                        <span key={cIdx} className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300">
+                                          {code}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
                                   <input
                                     type="text"
                                     value={stockCode || ''}
-                                    placeholder="e.g. 5150000065"
+                                    placeholder="e.g. 5150000065, 5150000088"
                                     onChange={e => {
-                                      const nextVal = e.target.value.trim();
+                                      const nextVal = e.target.value;
+                                      const parsedCodes = nextVal.split(/[,;]+/).map(s => s.trim()).filter(Boolean);
                                       const next = {
                                         ...sizeInventory,
                                         [sKey]: {
                                           quantity: qty,
                                           stockCode: nextVal || null,
+                                          stockCodes: parsedCodes,
                                         }
                                       };
                                       setSizeInventory(next);
                                       // If top-level stockCode is empty, auto-populate with first size's stockCode
-                                      if (!form.stockCode && nextVal) {
-                                        set('stockCode', nextVal);
+                                      if (!form.stockCode && parsedCodes[0]) {
+                                        set('stockCode', parsedCodes[0]);
                                       }
                                     }}
                                     className="w-full px-2 py-1 text-xs font-mono font-bold text-charcoal bg-amber-50/70 border border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:bg-white transition-all placeholder:font-sans placeholder:font-normal placeholder:text-charcoal-muted/60"
@@ -2732,9 +3015,13 @@ export function ProductForm({ productId }: Props) {
                                 {sKey}
                               </span>
                               {stockCode && (
-                                <span className="text-[9px] font-mono text-charcoal-muted mt-0.5">
-                                  {stockCode}
-                                </span>
+                                <div className="flex flex-wrap gap-1 mt-1 max-w-[260px]">
+                                  {stockCode.split(/[,;]+/).map((c: string, idx: number) => (
+                                    <span key={idx} className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/90 border border-cream-border text-charcoal font-semibold">
+                                      {c.trim()}
+                                    </span>
+                                  ))}
+                                </div>
                               )}
                             </div>
                             <div className="flex items-center gap-1.5">
@@ -2924,6 +3211,34 @@ export function ProductForm({ productId }: Props) {
                 <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-amber-400 text-amber-950 text-[10px] font-bold shadow-sm flex items-center gap-1">
                   <Star className="w-3 h-3 fill-current" /> Cover Image
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm('Remove cover image?')) {
+                      const oldCover = form.coverImageUrl;
+                      set('coverImageUrl', '');
+                      if (productId) {
+                        fetch(`/api/admin/products/${productId}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ coverImageUrl: '' }),
+                        }).catch(err => console.warn('Clear cover failed:', err));
+                      }
+                      const isUsedInCatalogue = generatedImages && Object.values(generatedImages).some(g => g.imageUrl === oldCover);
+                      if (!isUsedInCatalogue && oldCover && (oldCover.startsWith('http') || oldCover.startsWith('/api/images/'))) {
+                        fetch('/api/upload', {
+                          method: 'DELETE',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ url: oldCover }),
+                        }).catch(console.warn);
+                      }
+                    }
+                  }}
+                  title="Remove cover photo"
+                  className="absolute top-2 right-2 w-7 h-7 rounded-lg bg-black/65 hover:bg-red-600 text-white backdrop-blur-md flex items-center justify-center transition-colors shadow-xs cursor-pointer opacity-0 group-hover:opacity-100"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
           </Card>

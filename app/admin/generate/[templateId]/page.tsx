@@ -78,7 +78,19 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           setOrderId(d.product.linkedOrderId);
         }
         if (d.product.generatedImages && typeof d.product.generatedImages === 'object') {
-          setGeneratedImages(d.product.generatedImages);
+          const rawGen = d.product.generatedImages as Record<string, any>;
+          const seen = new Set<string>();
+          const dedupedGen: Record<string, { imageUrl: string; prompt: string }> = {};
+          for (const [k, v] of Object.entries(rawGen)) {
+            const u = v?.imageUrl ? String(v.imageUrl).trim() : null;
+            if (u && !seen.has(u)) {
+              seen.add(u);
+              dedupedGen[k] = v;
+            } else if (!u && !dedupedGen[k]) {
+              dedupedGen[k] = v;
+            }
+          }
+          setGeneratedImages(dedupedGen);
         }
         if (d.product.referenceImages && Array.isArray(d.product.referenceImages)) {
           const restoredUploads: Record<string, string> = {};
@@ -91,6 +103,12 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           if (Object.keys(restoredUploads).length > 0) {
             setUploadedImages(restoredUploads);
           }
+        }
+        if (d.product.customFields && typeof d.product.customFields === 'object' && d.product.customFields.promptSuggestions) {
+          setPromptSuggestions(d.product.customFields.promptSuggestions);
+        } else if (typeof window !== 'undefined' && productId) {
+          const cached = localStorage.getItem(`couture_suggestions_${productId}`);
+          if (cached) setPromptSuggestions(cached);
         }
       }).catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -163,7 +181,29 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const [icp, setIcp] = useState<string>('home_ceo');
   const [occasion, setOccasion] = useState<string>('');
   const [fabricType, setFabricType] = useState<string>('');
+  const [sareeDesignType, setSareeDesignType] = useState<string>('');
   const [selectedModelId, setSelectedModelId] = useState<string>('');
+
+  // Nano-Banana V2 Clean Pipeline (Defaults to OFF for A/B testing)
+  const [nanoBananaV2, setNanoBananaV2] = useState<boolean>(false);
+  const [sareeFabricType, setSareeFabricType] = useState<string>('');
+  const [bodyDescription, setBodyDescription] = useState<string>('');
+  const [borderDescription, setBorderDescription] = useState<string>('');
+  const [palluDescription, setPalluDescription] = useState<string>('');
+  const [palluSize, setPalluSize] = useState<'small' | 'medium' | 'large'>('medium');
+  const [borderWidth, setBorderWidth] = useState<'thin' | 'medium' | 'wide'>('medium');
+  const [borderEdges, setBorderEdges] = useState<string>('');
+  const [tassels, setTassels] = useState<'none' | 'pallu_end' | 'hem' | 'both'>('none');
+  const [tasselColor, setTasselColor] = useState<string>('');
+  const [tasselLocation, setTasselLocation] = useState<string>('pallu end');
+  const [blouseRule, setBlouseRule] = useState<'match_swatch' | 'plain_contrast' | 'same_as_body'>('match_swatch');
+  const [sendPosePreview, setSendPosePreview] = useState<boolean>(false);
+  const [includeOriginalSwatches, setIncludeOriginalSwatches] = useState<boolean>(true);
+  const [approvedGarmentRefUrl, setApprovedGarmentRefUrl] = useState<string | null>(null);
+  const [approvedRearGarmentRefUrl, setApprovedRearGarmentRefUrl] = useState<string | null>(null);
+  const [garmentRefPresentationStyle, setGarmentRefPresentationStyle] = useState<'laid_flat' | 'dress_form'>('laid_flat');
+  const [generatingGarmentRef, setGeneratingGarmentRef] = useState<boolean>(false);
+  const [generatingRearGarmentRef, setGeneratingRearGarmentRef] = useState<boolean>(false);
 
   // Step: Background Selection
   const [selectedBackground, setSelectedBackground] = useState<string>('');
@@ -211,6 +251,29 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const [exportingGooglePhotos, setExportingGooglePhotos] = useState(false);
   const [googlePhotosSuccess, setGooglePhotosSuccess] = useState<{ albumTitle: string; albumUrl?: string; photosUploaded: number } | null>(null);
   const [googlePhotosError, setGooglePhotosError] = useState<string | null>(null);
+
+  // Cross-Pose Guidance & Swatch Corrections Suggestions Box
+  const [promptSuggestions, setPromptSuggestions] = useState<string>('');
+
+  const handlePromptSuggestionsChange = (val: string) => {
+    setPromptSuggestions(val);
+    if (typeof window !== 'undefined') {
+      const storageKey = `couture_suggestions_${productId || template?.id || 'default'}`;
+      localStorage.setItem(storageKey, val);
+    }
+    if (productId) {
+      fetch('/api/admin/products/' + productId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customFields: {
+            ...(product?.customFields || {}),
+            promptSuggestions: val,
+          },
+        }),
+      }).catch(err => console.warn('Failed to sync prompt suggestions:', err));
+    }
+  };
 
   // Collage Creator Modal State
   const [showCollageModal, setShowCollageModal] = useState(false);
@@ -382,6 +445,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     onPhotosSelected: async (photos) => {
       if (!photos || photos.length === 0 || !activePhotosSlotId) return;
       const p = photos[0];
+      if (!p?.base64 || typeof p.base64 !== 'string') return;
       try {
         const arr = p.base64.split(',');
         const mime = p.mimeType || arr[0]?.match(/:(.*?);/)?.[1] || 'image/jpeg';
@@ -726,9 +790,17 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
     const backgroundSetting = selectedBackground ? `Background Setting: ${selectedBackground}.` : 'Background Setting: high-end luxury fashion studio.';
 
-    const garmentDrapeDetails = isSaree 
-      ? 'CRITICAL INSTRUCTION: You MUST strictly replicate the EXACT geometric patterns, motif scale, shapes, and border placements shown in the provided reference fabric images. Do NOT invent generic patterns. Do NOT mix or blend the patterns from the different uploaded images; keep the pallu (shoulder drape) design strictly separate from the main body design. The final garment must perfectly match the visual texture and layout of the uploaded fabric swatches. The fabric must be fully opaque and flawlessly continuous—absolutely NO skin showing through the fabric, no sheer patches, no rips, and no distorted blending artifacts. Natural fabric texture, authentic crisp pleated folds, and graceful shoulder pallu drape.' 
-      : 'CRITICAL INSTRUCTION: You MUST strictly replicate the EXACT patterns, motif scale, shapes, and border placements shown in the provided reference fabric images. Do NOT invent generic patterns. Do NOT mix or blend the patterns from the different uploaded images. The fabric must be fully opaque and flawlessly continuous—absolutely NO skin showing through the fabric, no sheer patches, and no blending artifacts. Natural fabric texture, authentic crisp folds, and graceful drape.';
+    const originalGarmentDrapeDetails = 'CRITICAL INSTRUCTION: You MUST strictly replicate the EXACT patterns, motif scale, shapes, and border placements shown in the provided reference fabric images. Do NOT invent generic patterns. Do NOT mix or blend the patterns from the different uploaded images. The fabric must be fully opaque and flawlessly continuous—absolutely NO skin showing through the fabric, no sheer patches, and no blending artifacts. CRITICAL ALL-OVER MOTIF CONTINUITY (NO BLANK OR SOLID SECTIONS): When the fabric has an all-over print, geometric pattern, or motifs, the pattern MUST cover the entire garment body continuously across the chest, waist, pleats, thighs, and lap. In seated poses, the motifs MUST remain fully visible across the entire lap, thighs, and fanned pleats—never leave the lap or pleats as plain, solid, unprinted blank fabric. Natural fabric texture, authentic crisp folds, and graceful drape. CRITICAL HEM & PALLU FINISH RULE: DO NOT add beads, hanging pearl drops, tassels, pom-poms, latkans, or thread fringes to the bottom hem of the saree or the end of the pallu UNLESS they are clearly and explicitly present in the uploaded reference fabric images. Keep all fabric hems and pallu ends cleanly stitched, flat, and straight without any invented hanging beads, ornaments, or tassels.';
+
+    // Only apply custom draping instructions when an option is explicitly selected; otherwise keep 100% original prompt
+    let garmentDrapeDetails = originalGarmentDrapeDetails;
+    if (isSaree && sareeDesignType) {
+      if (sareeDesignType === 'contrast_pallu') {
+        garmentDrapeDetails = `${originalGarmentDrapeDetails} SAREE DRAPE LAYOUT (CONTRAST PALLU — STRICT PLACEMENT): The saree body and pallu have COMPLETELY DIFFERENT designs/patterns. CRITICAL RULES: (1) BODY & DIAGONAL CHEST PLACEMENT: The main Body fabric (the body swatch pattern/dots) must cover the lower skirt, front waist pleats, and wrap diagonally ACROSS THE FRONT CHEST/TORSO to the left shoulder. (2) SINGLE-EDGE CHEST BORDER: The decorative border runs along ONE EDGE ONLY of the diagonal chest wrap (the outer diagonal edge across the bust). The neckline/collarbone stays clean body fabric with no border. The bottom skirt hem at the feet has the horizontal border. The right hip stays clean body fabric with no extra patches. (3) PALLU PLACEMENT & WAIST TRANSITION: From left shoulder to waist level, the hanging drape is body fabric. From waist level down to the floor, it transitions into the contrasting Pallu artwork. (4) NO INVENTED BEADS OR TASSELS: Keep the bottom hem of the saree and the end of the pallu clean, flat, and straight. DO NOT add hanging beads, tassels, pearls, or latkans unless explicitly visible in the uploaded fabric photos. (5) BLOUSE PLACEMENT: The blouse swatch must be used solely for the fitted stitched blouse top. Maintain crisp, clean separation without blending.`;
+      } else if (sareeDesignType === 'half_half') {
+        garmentDrapeDetails = `${originalGarmentDrapeDetails} SAREE DRAPE LAYOUT (HALF-AND-HALF): This saree has two distinctly different halves. The LOWER half (from waist down to feet, including pleats) uses one design/color, and the UPPER half (chest drape and pallu from shoulder) uses a different design/color. The transition between the two halves should be a clean horizontal boundary approximately at the hip/waist level. Both halves must retain their individual patterns without blending.`;
+      }
+    }
 
     const isMirrorPose = pose.name.toLowerCase().includes('mirror') || (pose.promptSnippet && pose.promptSnippet.toLowerCase().includes('mirror'));
 
@@ -740,8 +812,12 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       ? ', broken mirror physics, distorted reflection, impossible reflection angle, reflection looking at camera while body faces away, double faces, duplicate limbs, floating hands, misaligned reflections, uncanny valley reflection, two different people in mirror, warped glass'
       : '';
 
+    const userSuggestionsText = promptSuggestions && promptSuggestions.trim()
+      ? ` USER CORRECTIONS & SWATCH DIRECTION (APPLIES TO ALL POSES): ${promptSuggestions.trim()}.`
+      : '';
+
     // Construct full photorealistic photoshoot prompt: Subject -> Wearing Garment -> Pose -> Styling -> Lighting & Camera
-    const prompt = `Authentic raw commercial catalogue fashion photography of ${modelSubject} elegantly dressed in an authentic luxury ${productName || template.name}. ${backgroundSetting} Pose & Angle: ${pose.name} — ${pose.promptSnippet}.${mirrorPhysicsGuidance} Garment & Draping: ${garmentDrapeDetails} ${textileDetails ? `${textileDetails}. ` : ''}${dynamicStyling} Photography & Aesthetics: Shot on Hasselblad H6D-100c with HC 100mm f/2.2 lens, softbox key lighting, soft natural ambient shadows, photorealistic skin with natural pores and subtle skin texture, realistic hands and fingers, 8k UHD editorial Vogue India fashion catalogue, zero CGI, zero plastic skin, authentic human realism.`;
+    const prompt = `Authentic raw commercial catalogue fashion photography of ${modelSubject} elegantly dressed in an authentic luxury ${productName || template.name}. ${backgroundSetting} Pose & Angle: ${pose.name} — ${pose.promptSnippet}.${mirrorPhysicsGuidance} Garment & Draping: ${garmentDrapeDetails}${userSuggestionsText} ${textileDetails ? `${textileDetails}. ` : ''}${dynamicStyling} Photography & Aesthetics: Shot on Hasselblad H6D-100c with HC 100mm f/2.2 lens, softbox key lighting, soft natural ambient shadows, photorealistic skin with natural pores and subtle skin texture, realistic hands and fingers, 8k UHD editorial Vogue India fashion catalogue, zero CGI, zero plastic skin, authentic human realism.`;
 
     // Compress model face if it's a data URL
     let compressedModelFace = model?.imageUrl || null;
@@ -767,7 +843,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          negativePrompt: `doll, plastic skin, barbie doll, mannequin, porcelain face, 3d render, CGI, digital illustration, cartoon, anime, airbrushed, wax figure, fake eyes, artificial skin, smooth skin filter, oversaturated, blurry, flat fabric swatch, cloth only, fabric texture without person, textile pattern sample, no human, no person, bad anatomy, deformed limbs, deformed fingers, extra limbs, mutated hands, asymmetric eyes, distorted fabric patterns, watermark, signature, blurry text, cropped head, unnatural poses${mirrorNegative}`,
+          negativePrompt: `doll, plastic skin, barbie doll, mannequin, porcelain face, 3d render, CGI, digital illustration, cartoon, anime, airbrushed, wax figure, fake eyes, artificial skin, smooth skin filter, oversaturated, blurry, flat fabric swatch, cloth only, fabric texture without person, textile pattern sample, no human, no person, bad anatomy, deformed limbs, deformed fingers, extra limbs, mutated hands, asymmetric eyes, distorted fabric patterns, watermark, signature, blurry text, cropped head, unnatural poses, hanging beads, beads at hem, dangling beads, unwanted tassels, fringe, latkans, pom-poms at hem, dangling tassels at saree border, plain unprinted lap, solid unprinted pleats, blank fabric patches on lap, unprinted thighs, missing body motifs on skirt, blank fabric on lap${mirrorNegative}`,
           referenceImageUrl: rawGarmentRef,
           modelFaceUrl: compressedModelFace,
           posePreviewUrl: pose.previewImage || null,
@@ -788,12 +864,15 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           icp,
           occasion,
           fabricType,
+          sareeDesignType,
+          promptSuggestions: promptSuggestions && promptSuggestions.trim() ? promptSuggestions.trim() : undefined,
           selectedModelId,
           selectedOptions,
           aspectRatio: selectedAspectRatio,
           referenceImages: [
             ...(validImages.length > 0 ? validImages : []),
             ...(compressedModelFace ? [compressedModelFace] : []),
+            ...(Object.values(generatedImages).map(g => g.imageUrl).filter(Boolean).slice(-2)),
           ],
         }),
       });
@@ -826,14 +905,19 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       if (finalUrl) {
         finalUrl = finalUrl.trim().replace(/[\\'";,\s]+$/, '').replace(/%5C$/i, '');
         
-        // Create the updated images object with a unique timestamp key to allow multiple generations of the same pose
-        const uniqueKey = `${poseId}_${Date.now()}`;
-        const updatedImages = { ...generatedImages, [uniqueKey]: { imageUrl: finalUrl, prompt } };
-        setGeneratedImages(updatedImages);
+        // Save under the canonical poseId and clean up any stale/duplicate keys for this pose or imageUrl
+        const cleanedImages: Record<string, { imageUrl: string; prompt: string }> = {};
+        for (const [k, v] of Object.entries(generatedImages)) {
+          if (k !== poseId && !k.startsWith(`${poseId}_`) && v?.imageUrl !== finalUrl) {
+            cleanedImages[k] = v;
+          }
+        }
+        cleanedImages[poseId] = { imageUrl: finalUrl, prompt };
+        setGeneratedImages(cleanedImages);
         
         // Auto-save immediately so the image shows up in the gallery
         // even if the user navigates away before clicking "Save & Download"
-        await handleSaveOrder(updatedImages);
+        await handleSaveOrder(cleanedImages);
         
         setGenStatus(`${pose.name} generated!`);
         setTimeout(() => setGenStatus(null), 3000);
@@ -887,6 +971,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         icp,
         occasion,
         fabricType,
+        sareeDesignType,
         selectedModelId,
         selectedBackground,
         selectedOptions,
@@ -898,6 +983,19 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
     const data = await res.json();
     if (data.order?.id) setOrderId(data.order.id);
+
+    if (productId && promptSuggestions) {
+      fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customFields: {
+            ...(product?.customFields || {}),
+            promptSuggestions,
+          },
+        }),
+      }).catch(err => console.warn('Sync customFields failed:', err));
+    }
   };
 
   // Download image
@@ -917,8 +1015,15 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
   // Export all generated images to both Cloudflare R2 and Google Photos in an album titled as Code1
   const handleExportToGooglePhotos = async () => {
+    const seenUrls = new Set<string>();
     const validImages = Object.entries(generatedImages)
-      .filter(([, data]) => Boolean(data?.imageUrl))
+      .filter(([, data]) => {
+        if (!data?.imageUrl) return false;
+        const u = data.imageUrl.trim();
+        if (seenUrls.has(u)) return false;
+        seenUrls.add(u);
+        return true;
+      })
       .map(([poseId, data], idx) => {
         const pose = template?.poses.find(p => p.id === poseId || poseId.startsWith(`${p.id}_`));
         return {
@@ -1063,6 +1168,24 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                   <option value="Kurti set (any)">Kurti set (any)</option>
                 </select>
               </div>
+              {/* Saree Design Type — shown only for saree templates */}
+              {template.slug?.toLowerCase().includes('saree') && (
+                <div>
+                  <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase mb-1.5">Saree Design Type (Optional)</label>
+                  <select value={sareeDesignType} onChange={e => setSareeDesignType(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent">
+                    <option value="">Default (Original prompt — all-over / uniform sarees)</option>
+                    <option value="contrast_pallu">🎨 Contrast Pallu (Body on chest & pleats, Pallu from waist down)</option>
+                    <option value="half_half">⬛⬜ Half & Half (Two distinct halves)</option>
+                  </select>
+                  <p className="text-[10px] text-charcoal-muted mt-1">
+                    {sareeDesignType === 'contrast_pallu' 
+                      ? '✨ Body pattern on chest & pleats. Single-edge diagonal chest border (clean neckline). Pallu starts at waist level to floor. Clean hem with zero beads/tassels.'
+                      : sareeDesignType === 'half_half'
+                      ? '✨ Lower half uses one design, upper half uses a different design with clean transition at waist.'
+                      : 'Leave as Default to use the exact original prompt (best for all-over prints like Digital Linen or floral sarees). Select an option only for contrast sarees.'}
+                  </p>
+                </div>
+              )}
             </div>
             <Textarea label="Garment Description & Fabric Details" value={description} onChange={e => setDescription(e.target.value)} placeholder="Describe the weave, borders, zari work, and drape..." rows={3} />
           </Card>
@@ -1764,6 +1887,163 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               {genError}
             </div>
           )}
+
+          {/* ─── AI SWATCH CORRECTIONS & CROSS-POSE GUIDANCE ─── */}
+          <Card className="p-6 bg-gradient-to-br from-white via-cream-light/30 to-amber-50/20 border-2 border-cream-border/90 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center text-accent">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <h3 className="font-display text-base font-bold text-charcoal">
+                    Cross-Pose Guidance & Swatch Corrections
+                  </h3>
+                  {promptSuggestions.trim() ? (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-accent text-white shadow-xs">
+                      ✨ Active on All Poses
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-cream-dark text-charcoal-muted">
+                      Optional
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-charcoal-muted mt-1">
+                  Reference specific uploaded swatch images (<span className="font-semibold text-charcoal">Image 1, Image 2, Image 3...</span>) to steer AI garment draping, body alignment, and border consistency across all poses.
+                </p>
+              </div>
+              {promptSuggestions.trim() && (
+                <button
+                  type="button"
+                  onClick={() => handlePromptSuggestionsChange('')}
+                  className="text-xs text-charcoal-muted hover:text-red-600 flex items-center gap-1 self-start sm:self-center transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Clear
+                </button>
+              )}
+            </div>
+
+            {/* Swatch Quick-Reference Chips with Thumbnails */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-charcoal-muted flex items-center gap-1">
+                  <Layers className="w-3.5 h-3.5 text-accent" /> Click to Insert Swatch Reference:
+                </span>
+                <span className="text-[10px] text-charcoal-muted italic">
+                  Clicking inserts tag into suggestion box
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2 items-center">
+                {template.imageSlots.map((slot, idx) => {
+                  const slotImg = uploadedImages[slot.id];
+                  const imageTag = `Image ${idx + 1}`;
+                  const slotTitle = `${imageTag} (${slot.name})`;
+
+                  return (
+                    <button
+                      key={slot.id}
+                      type="button"
+                      onClick={() => {
+                        const addition = promptSuggestions.trim() ? ` ${slotTitle}` : slotTitle;
+                        handlePromptSuggestionsChange(promptSuggestions + addition);
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-cream-border bg-white hover:border-accent hover:bg-accent-bg/40 text-xs font-semibold text-charcoal shadow-2xs transition-all cursor-pointer group"
+                      title={`Insert ${slotTitle} into prompt`}
+                    >
+                      {slotImg ? (
+                        <img src={slotImg} alt={slot.name} className="w-5 h-5 rounded-md object-cover border border-cream-border" />
+                      ) : (
+                        <span className="w-5 h-5 rounded-md bg-cream-dark text-[10px] flex items-center justify-center font-bold text-charcoal-muted">
+                          #{idx + 1}
+                        </span>
+                      )}
+                      <span className="group-hover:text-accent transition-colors">
+                        <strong className="text-accent">{imageTag}</strong>: {slot.name}
+                      </span>
+                    </button>
+                  );
+                })}
+
+                {/* If any poses have already been generated, also show them as reference pills */}
+                {Object.entries(generatedImages).filter(([, v]) => Boolean(v?.imageUrl)).map(([poseKey, v], pIdx) => {
+                  const matchedPose = template.poses.find(p => p.id === poseKey || poseKey.startsWith(`${p.id}_`));
+                  const poseLabel = matchedPose ? matchedPose.name : `Pose ${pIdx + 1}`;
+                  const poseTag = `the border & drape from ${poseLabel}`;
+
+                  return (
+                    <button
+                      key={poseKey}
+                      type="button"
+                      onClick={() => {
+                        const addition = promptSuggestions.trim() ? ` ${poseTag}` : poseTag;
+                        handlePromptSuggestionsChange(promptSuggestions + addition);
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50/80 hover:bg-amber-100/80 text-xs font-semibold text-amber-950 shadow-2xs transition-all cursor-pointer"
+                      title={`Insert reference to ${poseLabel}`}
+                    >
+                      <img src={v.imageUrl} alt={poseLabel} className="w-5 h-5 rounded-md object-cover border border-amber-300" />
+                      <span>
+                        <strong className="text-amber-700">Pose Output</strong>: {poseLabel}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Quick Suggestion Pills */}
+            <div className="space-y-1.5 pt-1 border-t border-cream-border/60">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">
+                💡 Quick Suggestion Templates:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  'Check the body part from Image 1 and correct Image 3',
+                  'The border of Image 2 has come correctly, so put the same border onto all other poses',
+                  'Strictly refer to the blouse piece image (Image 1) correctly without blending',
+                  'Keep the pallu artwork from Image 2 consistent and sharp across all angles',
+                  'Keep the saree hem cleanly stitched and flat with zero beads or hanging tassels',
+                  'Maintain uniform motif scale and border width from Image 3 across all poses',
+                ].map((preset, pIdx) => (
+                  <button
+                    key={pIdx}
+                    type="button"
+                    onClick={() => {
+                      const separator = promptSuggestions.trim() ? '. ' : '';
+                      handlePromptSuggestionsChange(promptSuggestions.trim() + separator + preset);
+                    }}
+                    className="text-[11px] px-2.5 py-1 rounded-lg bg-cream-light/80 hover:bg-accent-bg hover:text-accent text-charcoal-light border border-cream-border/80 font-medium transition-colors cursor-pointer text-left"
+                  >
+                    + {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* The Textarea */}
+            <div className="space-y-1.5">
+              <Textarea
+                value={promptSuggestions}
+                onChange={e => handlePromptSuggestionsChange(e.target.value)}
+                placeholder="e.g. Check the body part from Image 1 and correct Image 3. The border of Image 2 has come correctly, so put the same border onto all other images. Refer to the blouse piece image correctly..."
+                rows={3}
+                className="text-sm border-cream-border focus:border-accent bg-white shadow-2xs"
+              />
+              <div className="flex items-center justify-between text-[11px] text-charcoal-muted px-1">
+                <span>
+                  {promptSuggestions.trim() ? (
+                    <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" /> Automatically applied to every pose generated (Single, Selected, and All Poses)
+                    </span>
+                  ) : (
+                    'Tip: Leave empty for standard prompt generation, or type specific corrections above.'
+                  )}
+                </span>
+                <span>{promptSuggestions.length} characters</span>
+              </div>
+            </div>
+          </Card>
 
           {/* Action Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-cream-border shadow-xs">

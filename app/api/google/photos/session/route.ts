@@ -6,13 +6,9 @@ const PICKER_API_BASE = 'https://photospicker.googleapis.com/v1';
 // POST /api/google/photos/session — creates a new PickingSession
 export async function POST(req: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const session = await auth().catch(() => null);
     const body = await req.json();
-    const token = body.token || (session.user as any)?.accessToken;
+    const token = body.token || (session?.user as any)?.accessToken;
 
     if (!token) {
       return NextResponse.json({ error: 'Google OAuth access token is required' }, { status: 400 });
@@ -31,6 +27,7 @@ export async function POST(req: NextRequest) {
 
     if (!res.ok) {
       const errorMsg = data?.error?.message || res.statusText;
+      console.error('[Google Photos Session Create Error]:', data);
       return NextResponse.json(
         {
           error: `Google Photos Picker API error: ${errorMsg}`,
@@ -40,6 +37,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    console.log('[Google Photos Session] Created session:', data.id);
     return NextResponse.json({
       success: true,
       sessionId: data.id,
@@ -47,7 +45,7 @@ export async function POST(req: NextRequest) {
       pollingConfig: data.pollingConfig,
     });
   } catch (error: any) {
-    console.error('[Google Photos Session Create Error]:', error);
+    console.error('[Google Photos Session Create Exception]:', error);
     return NextResponse.json({ error: error.message || 'Internal error' }, { status: 500 });
   }
 }
@@ -55,14 +53,10 @@ export async function POST(req: NextRequest) {
 // GET /api/google/photos/session?sessionId=...&token=... — polls session and fetches items when done
 export async function GET(req: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const session = await auth().catch(() => null);
     const { searchParams } = req.nextUrl;
     const sessionId = searchParams.get('sessionId');
-    const token = searchParams.get('token') || (session.user as any)?.accessToken;
+    const token = searchParams.get('token') || (session?.user as any)?.accessToken;
 
     if (!sessionId || !token) {
       return NextResponse.json({ error: 'sessionId and token are required' }, { status: 400 });
@@ -76,7 +70,16 @@ export async function GET(req: NextRequest) {
     });
 
     if (!sessionRes.ok) {
+      if (sessionRes.status === 404) {
+        // Session was already consumed and cleaned up, or expired
+        return NextResponse.json({
+          mediaItemsSet: false,
+          status: 'EXPIRED_OR_COMPLETED',
+          completed: true,
+        });
+      }
       const errData = await sessionRes.json().catch(() => ({}));
+      console.warn('[Google Photos Poll] Session status check failed:', sessionRes.status, errData);
       return NextResponse.json(
         { error: errData?.error?.message || 'Failed to check session' },
         { status: sessionRes.status }
@@ -84,6 +87,7 @@ export async function GET(req: NextRequest) {
     }
 
     const sessionData = await sessionRes.json();
+    console.log('[Google Photos Poll] Session:', sessionId, 'mediaItemsSet:', sessionData.mediaItemsSet);
 
     // If user has not finished selecting yet
     if (!sessionData.mediaItemsSet) {
@@ -102,6 +106,7 @@ export async function GET(req: NextRequest) {
 
     if (!itemsRes.ok) {
       const errData = await itemsRes.json().catch(() => ({}));
+      console.error('[Google Photos Poll] mediaItems fetch failed:', itemsRes.status, errData);
       return NextResponse.json(
         { error: errData?.error?.message || 'Failed to fetch picked media items' },
         { status: itemsRes.status }
@@ -109,40 +114,77 @@ export async function GET(req: NextRequest) {
     }
 
     const itemsData = await itemsRes.json();
-    const rawItems = itemsData.mediaItems || [];
+    const rawItems: any[] = itemsData.mediaItems || [];
+    console.log('[Google Photos Poll] User clicked Done! Picked rawItems count:', rawItems.length);
 
-    // 3. Download image data as base64 for direct client usage
-    const processedItems: { filename: string; mimeType: string; base64: string }[] = [];
-
-    for (const item of rawItems) {
-      if (item.mediaFile?.baseUrl) {
-        try {
-          // Append '=d' to request original download quality
-          const downloadUrl = `${item.mediaFile.baseUrl}=d`;
-          const imgFetch = await fetch(downloadUrl, {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-            },
-          });
-
-          if (imgFetch.ok) {
-            const arrayBuffer = await imgFetch.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            const mime = item.mediaFile.mimeType || imgFetch.headers.get('content-type') || 'image/jpeg';
-            const base64 = `data:${mime};base64,${buffer.toString('base64')}`;
-            processedItems.push({
-              filename: item.mediaFile.filename || `google_photo_${Date.now()}.jpg`,
-              mimeType: mime,
-              base64,
-            });
-          }
-        } catch (downloadErr) {
-          console.warn('[Google Photos] Failed to download item:', downloadErr);
-        }
-      }
+    if (rawItems.length > 0) {
+      console.log('[Google Photos Poll] Item structure keys:', Object.keys(rawItems[0]));
     }
 
-    // 4. Clean up session
+    // 3. Download images in parallel with optimized size (=w1600) to keep total payload safely below 4MB
+    const downloadPromises = rawItems.map(async (item: any, idx: number) => {
+      // Support baseUrl either directly on item or nested under mediaFile
+      const baseUrl = item.baseUrl || item.mediaFile?.baseUrl;
+      const mime = item.mimeType || item.mediaFile?.mimeType || 'image/jpeg';
+      const filename = item.filename || item.mediaFile?.filename || `google_photo_${Date.now()}_${idx + 1}.jpg`;
+
+      if (!baseUrl) {
+        console.warn(`[Google Photos] Item ${idx + 1} has no baseUrl. Item keys:`, Object.keys(item));
+        return null;
+      }
+
+      // Helper to fetch with Bearer token, falling back to direct fetch if rejected
+      const fetchBuffer = async (url: string) => {
+        try {
+          let res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+          if (res.ok) return res;
+          // Fallback: try without Authorization header (for pre-signed URLs)
+          res = await fetch(url);
+          if (res.ok) return res;
+        } catch (e) {
+          console.warn(`[Google Photos] Fetch exception for item ${idx + 1}:`, e);
+        }
+        return null;
+      };
+
+      try {
+        // Request 2K Studio Master dimensions (=w2048-h2048) directly from Google Photos CDN
+        let imgRes = await fetchBuffer(`${baseUrl}=w2048-h2048`);
+
+        // Fallback to original =d
+        if (!imgRes) {
+          imgRes = await fetchBuffer(`${baseUrl}=d`);
+        }
+
+        // Fallback to raw baseUrl
+        if (!imgRes) {
+          imgRes = await fetchBuffer(baseUrl);
+        }
+
+        if (imgRes && imgRes.ok) {
+          const arrayBuffer = await imgRes.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          const finalMime = imgRes.headers.get('content-type') || mime;
+          const base64 = `data:${finalMime};base64,${buffer.toString('base64')}`;
+          return {
+            filename,
+            mimeType: finalMime,
+            base64,
+          };
+        } else {
+          console.error(`[Google Photos] Failed to download item ${idx + 1} (${filename})`);
+        }
+      } catch (err) {
+        console.error(`[Google Photos] Exception downloading item ${idx + 1}:`, err);
+      }
+      return null;
+    });
+
+    const results = await Promise.all(downloadPromises);
+    const processedItems = results.filter(Boolean);
+    console.log('[Google Photos Poll] Successfully processed items:', processedItems.length, 'of', rawItems.length);
+
+    // 4. Clean up session on Google backend
     try {
       await fetch(`${PICKER_API_BASE}/sessions/${sessionId}`, {
         method: 'DELETE',
@@ -159,7 +201,7 @@ export async function GET(req: NextRequest) {
       items: processedItems,
     });
   } catch (error: any) {
-    console.error('[Google Photos Session Poll Error]:', error);
+    console.error('[Google Photos Session Poll Exception]:', error);
     return NextResponse.json({ error: error.message || 'Internal error' }, { status: 500 });
   }
 }

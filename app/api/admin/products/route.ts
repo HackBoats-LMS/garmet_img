@@ -25,6 +25,7 @@ export async function GET(req: NextRequest) {
     const status = searchParams.get('status') || '';
     const page = parseInt(searchParams.get('page') || '1');
     const limit = parseInt(searchParams.get('limit') || '30');
+    const cursorId = searchParams.get('cursor'); // CUID cursor (time-ordered)
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -39,26 +40,57 @@ export async function GET(req: NextRequest) {
         { tags: { has: search } },
       ];
     }
-    if (categoryId) where.categoryId = categoryId;
+    if (categoryId === 'uncategorized' || categoryId === 'null') {
+      where.categoryId = null;
+    } else if (categoryId) {
+      where.categoryId = categoryId;
+    }
     if (subCategoryId) where.subCategoryId = subCategoryId;
     if (status) where.status = status;
 
-    const [products, total] = await Promise.all([
-      prisma.product.findMany({
+    // Use cursor pagination if cursor provided, otherwise fall back to offset
+    const useCursor = !!cursorId;
+    const take = limit + 1;
+
+    let products;
+    if (useCursor) {
+      products = await prisma.product.findMany({
         where,
         include: {
           category: { select: { id: true, name: true, slug: true } },
           subCategory: { select: { id: true, name: true, slug: true } },
           _count: { select: { inventoryLogs: true } },
         },
-        orderBy: { updatedAt: 'desc' },
+        orderBy: { id: 'desc' },
+        cursor: { id: cursorId },
+        take,
+      });
+    } else {
+      products = await prisma.product.findMany({
+        where,
+        include: {
+          category: { select: { id: true, name: true, slug: true } },
+          subCategory: { select: { id: true, name: true, slug: true } },
+          _count: { select: { inventoryLogs: true } },
+        },
+        orderBy: { id: 'desc' },
         skip,
         take: limit,
-      }),
-      prisma.product.count({ where }),
-    ]);
+      });
+    }
+    const total = await prisma.product.count({ where });
 
-    const formattedProducts = products.map((p) => {
+    // Determine if there's a next page
+    const hasNextPage = products.length > limit;
+    const items = hasNextPage ? products.slice(0, limit) : products;
+
+    // Generate next cursor from last item
+    let nextCursor: string | null = null;
+    if (hasNextPage && items.length > 0) {
+      nextCursor = items[items.length - 1].id;
+    }
+
+    const formattedProducts = items.map((p) => {
       const genObj = (p.generatedImages as Record<string, any>) || {};
       const sortedGenList = Object.entries(genObj)
         .sort(([, a]: any, [, b]: any) => (a.order ?? 0) - (b.order ?? 0))
@@ -81,7 +113,17 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return NextResponse.json({ products: formattedProducts, total, page, limit });
+    const uncategorizedCount = await prisma.product.count({ where: { categoryId: null } });
+
+    return NextResponse.json({ 
+      products: formattedProducts, 
+      total, 
+      uncategorizedCount,
+      nextCursor,
+      hasNextPage,
+      limit,
+      ...(!useCursor && { page }),
+    });
   } catch (error: any) {
     console.error('[Admin Products GET]', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

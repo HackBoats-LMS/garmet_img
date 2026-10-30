@@ -32,7 +32,7 @@ interface Product {
   mrp?: number | null;
   quantity: number;
   length_Size?: string | null;
-  sizeInventory?: Record<string, number> | null;
+  sizeInventory?: Record<string, any> | null;
   reservedQty: number;
   soldQty: number;
   status: 'ACTIVE' | 'OUT_OF_STOCK' | 'ARCHIVED' | 'DRAFT';
@@ -61,6 +61,7 @@ export default function AdminInventoryPage() {
   const [search, setSearch] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [uncategorizedCount, setUncategorizedCount] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   const limit = 20;
 
@@ -222,6 +223,9 @@ export default function AdminInventoryPage() {
       setFetchError(null);
       setProducts(data.products || []);
       setTotal(data.total || 0);
+      if (typeof data.uncategorizedCount === 'number') {
+        setUncategorizedCount(data.uncategorizedCount);
+      }
     } catch (err: any) {
       console.error('Fetch products error:', err);
       setFetchError(err.message || 'Failed to load products');
@@ -262,6 +266,60 @@ export default function AdminInventoryPage() {
       body: JSON.stringify({ quantityAdjustment: delta, adjustmentNote: delta > 0 ? 'Quick +1' : 'Quick -1' }),
     });
     fetchProducts();
+  };
+
+  // Quick category update for each product row
+  const [updatingCatId, setUpdatingCatId] = useState<string | null>(null);
+
+  const handleQuickCategoryUpdate = async (productId: string, newCategoryId: string) => {
+    setUpdatingCatId(productId);
+    try {
+      const res = await fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoryId: newCategoryId }),
+      });
+      if (res.ok) {
+        const updatedCat = categories.find((c) => c.id === newCategoryId) || null;
+        setProducts((prev) =>
+          prev.map((p) => {
+            if (p.id === productId) {
+              const wasUncat = !p.category;
+              if (wasUncat && updatedCat) {
+                setUncategorizedCount((prevCount) => (prevCount !== null && prevCount > 0 ? prevCount - 1 : 0));
+              } else if (!wasUncat && !updatedCat) {
+                setUncategorizedCount((prevCount) => (prevCount !== null ? prevCount + 1 : 1));
+              }
+              return { ...p, category: updatedCat, subCategory: null };
+            }
+            return p;
+          })
+        );
+      }
+    } catch (err) {
+      console.error('Quick category update failed:', err);
+    } finally {
+      setUpdatingCatId(null);
+    }
+  };
+
+  const handleInlineAddCategory = async (productId: string) => {
+    const newName = prompt('Enter new Garment Type / Category name (e.g. Lehenga, Dupatta, Lungi):');
+    if (!newName || !newName.trim()) return;
+    try {
+      const res = await fetch('/api/admin/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok && data.category) {
+        setCategories((prev) => [...prev, data.category]);
+        await handleQuickCategoryUpdate(productId, data.category.id);
+      }
+    } catch (err) {
+      console.error('Failed to create category:', err);
+    }
   };
 
   // Picky Assist Sync state
@@ -641,16 +699,45 @@ export default function AdminInventoryPage() {
           />
         </div>
 
-        <select
-          value={categoryId}
-          onChange={e => { setCategoryId(e.target.value); setPage(1); }}
-          className="px-3 py-2.5 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent cursor-pointer"
-        >
-          <option value="">All Categories</option>
-          {categories.map(c => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={categoryId}
+            onChange={e => { setCategoryId(e.target.value); setPage(1); }}
+            className={`px-3 py-2.5 rounded-xl border text-sm cursor-pointer transition-colors ${
+              categoryId === 'uncategorized'
+                ? 'border-amber-400 bg-amber-50 text-amber-900 font-semibold ring-2 ring-amber-300/40'
+                : 'border-cream-border bg-white text-charcoal'
+            } focus:outline-none focus:border-accent`}
+          >
+            <option value="">All Garment Types</option>
+            <option value="uncategorized" className="font-bold text-amber-700 bg-amber-50">
+              ⚠️ Uncategorized {uncategorizedCount !== null ? `(${uncategorizedCount})` : ''}
+            </option>
+            {categories.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+
+          {uncategorizedCount !== null && uncategorizedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setCategoryId(categoryId === 'uncategorized' ? '' : 'uncategorized');
+                setPage(1);
+              }}
+              title={categoryId === 'uncategorized' ? 'Clear uncategorized filter' : 'Show only uncategorized products'}
+              className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                categoryId === 'uncategorized'
+                  ? 'bg-amber-600 text-white border-amber-700 shadow-sm'
+                  : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100 hover:border-amber-300'
+              }`}
+            >
+              <span>⚠️</span>
+              <span>{uncategorizedCount} Uncategorized</span>
+              {categoryId === 'uncategorized' && <span className="text-[10px] bg-black/20 px-1 rounded font-normal">Active ✕</span>}
+            </button>
+          )}
+        </div>
 
         <select
           value={statusFilter}
@@ -706,7 +793,7 @@ export default function AdminInventoryPage() {
                 <tr className="border-b border-cream-border bg-cream-light">
                   <th className="text-left px-4 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted whitespace-nowrap">Product</th>
                   <th className="text-left px-3 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted whitespace-nowrap">Stock Code</th>
-                  <th className="text-left px-3 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Category</th>
+                  <th className="text-left px-3 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Garment Type</th>
                   <th className="text-left px-3 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Price</th>
                   <th className="text-center px-2 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Qty</th>
                   <th className="text-center px-2 py-3.5 text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">Status</th>
@@ -765,18 +852,44 @@ export default function AdminInventoryPage() {
                         )}
                       </td>
 
-                      {/* Category */}
-                      <td className="px-4 py-4">
-                        {product.category ? (
-                          <div>
-                            <p className="text-xs font-semibold text-charcoal">{product.category.name}</p>
-                            {product.subCategory && (
-                              <p className="text-[10px] text-charcoal-muted mt-0.5">{product.subCategory.name}</p>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-charcoal-light italic">—</span>
-                        )}
+                      {/* Category / Garment Type Quick Selector */}
+                      <td className="px-3 py-4">
+                        <div className="relative inline-flex items-center">
+                          <select
+                            value={product.category?.id || ''}
+                            disabled={updatingCatId === product.id}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === '__new__') {
+                                handleInlineAddCategory(product.id);
+                              } else {
+                                handleQuickCategoryUpdate(product.id, val);
+                              }
+                            }}
+                            className={`text-xs font-semibold rounded-lg px-2.5 py-1.5 border transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-accent/20 ${
+                              updatingCatId === product.id
+                                ? 'opacity-50 pointer-events-none'
+                                : product.category
+                                ? 'bg-amber-50/80 border-amber-300 text-amber-950 hover:bg-amber-100 font-bold'
+                                : 'bg-white border-dashed border-amber-400 text-amber-800 hover:border-amber-600 hover:bg-amber-50/50'
+                            }`}
+                          >
+                            <option value="" disabled className="text-gray-400">
+                              ⚠️ Select Type...
+                            </option>
+                            {categories.map((c) => (
+                              <option key={c.id} value={c.id} className="text-charcoal font-semibold">
+                                {c.name}
+                              </option>
+                            ))}
+                            <option value="__new__" className="text-accent font-bold">
+                              + Add New Type...
+                            </option>
+                          </select>
+                          {updatingCatId === product.id && (
+                            <RefreshCw className="w-3 h-3 animate-spin text-accent ml-1.5 shrink-0" />
+                          )}
+                        </div>
                       </td>
 
                       {/* Price */}
