@@ -40,7 +40,11 @@ export async function GET(req: NextRequest) {
         { tags: { has: search } },
       ];
     }
-    if (categoryId) where.categoryId = categoryId;
+    if (categoryId === 'uncategorized' || categoryId === 'null') {
+      where.categoryId = null;
+    } else if (categoryId) {
+      where.categoryId = categoryId;
+    }
     if (subCategoryId) where.subCategoryId = subCategoryId;
     if (status) where.status = status;
 
@@ -109,9 +113,12 @@ export async function GET(req: NextRequest) {
       };
     });
 
+    const uncategorizedCount = await prisma.product.count({ where: { categoryId: null } });
+
     return NextResponse.json({ 
       products: formattedProducts, 
       total, 
+      uncategorizedCount,
       nextCursor,
       hasNextPage,
       limit,

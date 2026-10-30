@@ -84,8 +84,20 @@ export function formatProductPayload(product: any, variantSize?: string): Record
   const price = product.retailPrice ?? product.unitPrice ?? product.price ?? 0;
   const mrp = product.retailPrice ?? product.mrp ?? price;
   const baseQuantity = typeof product.quantity === 'number' ? product.quantity : parseInt(product.quantity, 10) || 0;
-  const category = product.category?.name || (typeof product.category === 'string' ? product.category : '');
+  let category = product.category?.name || (typeof product.category === 'string' ? product.category : '');
   const subCategory = product.subCategory?.name || (typeof product.subCategory === 'string' ? product.subCategory : '');
+
+  // Intelligent fallback detection if category is unlinked in DB
+  if (!category) {
+    const textToCheck = `${product.productName || ''} ${product.code1 || ''} ${product.stockCode || ''} ${product.title || ''}`.toUpperCase();
+    if (textToCheck.match(/KURT|KPD|KP-|KURTA/)) {
+      category = 'kurthi';
+    } else if (textToCheck.match(/SAREE|SARI|BANDANI|PANCHAVATI|DILRUBA/)) {
+      category = 'Saree';
+    } else {
+      category = 'Saree';
+    }
+  }
 
   // Extract up to 5 images for Picky Assist
   const imageList = extractProductImages(product);
@@ -189,6 +201,10 @@ export function formatProductPayload(product: any, variantSize?: string): Record
       variant: sz,
       variant_name: sz,
       color: String(product.color || '').trim(),
+      category: category,
+      product_type: category.toLowerCase(),
+      garment_type: category.toLowerCase(),
+      type: category.toLowerCase(),
       material: String(product.clothType || product.cloth_type || 'Silk').trim(),
       cloth_type: String(product.clothType || product.cloth_type || 'Silk').trim(),
       option_name: 'Size',
@@ -250,6 +266,11 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     fabric: String(product.clothType || product.cloth_type || 'Silk').trim(),
     tags: Array.isArray(product.tags) ? product.tags.join(', ') : String(product.tags || ''),
     category: category,
+    product_type: category.toLowerCase(),
+    productType: category.toLowerCase(),
+    garment_type: category.toLowerCase(),
+    garmentType: category.toLowerCase(),
+    type: category.toLowerCase(),
     sub_category: subCategory,
     status: product.status || (effectiveQuantity > 0 ? 'ACTIVE' : 'OUT_OF_STOCK'),
     availability: effectiveQuantity > 0 ? 'in stock' : 'out of stock',

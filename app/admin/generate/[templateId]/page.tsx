@@ -184,6 +184,27 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const [sareeDesignType, setSareeDesignType] = useState<string>('');
   const [selectedModelId, setSelectedModelId] = useState<string>('');
 
+  // Nano-Banana V2 Clean Pipeline (Defaults to OFF for A/B testing)
+  const [nanoBananaV2, setNanoBananaV2] = useState<boolean>(false);
+  const [sareeFabricType, setSareeFabricType] = useState<string>('');
+  const [bodyDescription, setBodyDescription] = useState<string>('');
+  const [borderDescription, setBorderDescription] = useState<string>('');
+  const [palluDescription, setPalluDescription] = useState<string>('');
+  const [palluSize, setPalluSize] = useState<'small' | 'medium' | 'large'>('medium');
+  const [borderWidth, setBorderWidth] = useState<'thin' | 'medium' | 'wide'>('medium');
+  const [borderEdges, setBorderEdges] = useState<string>('');
+  const [tassels, setTassels] = useState<'none' | 'pallu_end' | 'hem' | 'both'>('none');
+  const [tasselColor, setTasselColor] = useState<string>('');
+  const [tasselLocation, setTasselLocation] = useState<string>('pallu end');
+  const [blouseRule, setBlouseRule] = useState<'match_swatch' | 'plain_contrast' | 'same_as_body'>('match_swatch');
+  const [sendPosePreview, setSendPosePreview] = useState<boolean>(false);
+  const [includeOriginalSwatches, setIncludeOriginalSwatches] = useState<boolean>(true);
+  const [approvedGarmentRefUrl, setApprovedGarmentRefUrl] = useState<string | null>(null);
+  const [approvedRearGarmentRefUrl, setApprovedRearGarmentRefUrl] = useState<string | null>(null);
+  const [garmentRefPresentationStyle, setGarmentRefPresentationStyle] = useState<'laid_flat' | 'dress_form'>('laid_flat');
+  const [generatingGarmentRef, setGeneratingGarmentRef] = useState<boolean>(false);
+  const [generatingRearGarmentRef, setGeneratingRearGarmentRef] = useState<boolean>(false);
+
   // Step: Background Selection
   const [selectedBackground, setSelectedBackground] = useState<string>('');
 
