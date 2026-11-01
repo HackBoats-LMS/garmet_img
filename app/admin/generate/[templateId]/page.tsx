@@ -6,7 +6,7 @@ import { useRouter, useSearchParams, useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
   ArrowLeft, ArrowRight, Upload, X, Sparkles, Download, Check, Camera, Layers,
-  Image as ImageIcon, RotateCw, RotateCcw, Maximize2, Eye, Info, ArrowLeftRight, ZoomIn, ZoomOut, CheckCircle2, AlertCircle, ArrowDown, Loader2
+  Image as ImageIcon, RotateCw, RotateCcw, Maximize2, Eye, Info, ArrowLeftRight, ZoomIn, ZoomOut, CheckCircle2, AlertCircle, ArrowDown, Loader2, Crop, RefreshCw
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Input, Textarea } from '@/app/components/ui/Input';
@@ -16,6 +16,7 @@ import { StepIndicator } from '@/app/components/ui/StepIndicator';
 import useDrivePicker from 'react-google-drive-picker';
 import { useGooglePhotosPicker } from '@/app/hooks/useGooglePhotosPicker';
 import { CollageCreator, CollageInputImage } from '@/app/components/CollageCreator';
+import { PointCropperModal } from '@/app/components/PointCropperModal';
 
 interface TemplateData {
   id: string;
@@ -50,6 +51,261 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const searchParams = useSearchParams();
   const productId = searchParams.get('productId');
   const [product, setProduct] = useState<any>(null);
+
+
+  const [template, setTemplate] = useState<TemplateData | null>(null);
+  const [models, setModels] = useState<AIModelData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [orderId, setOrderId] = useState<string | null>(null);
+
+  // Step 1: Details & Images
+  const [productName, setProductName] = useState('');
+  const [stockCode, setStockCode] = useState('');
+  const [description, setDescription] = useState('');
+  const [uploadedImages, setUploadedImages] = useState<Record<string, string>>({});
+  const [zoomModal, setZoomModal] = useState<{ slotId: string; title: string; url: string; zoom: number } | null>(null);
+  const [regenerateModal, setRegenerateModal] = useState<{ poseId: string; poseName: string; currentImageUrl?: string } | null>(null);
+  const [regenerateSuggestion, setRegenerateSuggestion] = useState<string>('');
+  const [pointCropperModal, setPointCropperModal] = useState<{ slotId: string; title: string; url: string } | null>(null);
+  const [poseModal, setPoseModal] = useState<{ name: string; url: string; description: string; purpose?: string; fabricFocus?: string; promptSnippet?: string } | null>(null);
+  const [swapDropdownSlot, setSwapDropdownSlot] = useState<string | null>(null);
+  const [rotationToast, setRotationToast] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  
+
+  // Rotate an uploaded image 90 degrees clockwise (+90) or counter-clockwise (-90) using HTML5 Canvas
+  const rotateImageSlot = (slotId: string, angle = 90) => {
+    const currentDataUrl = uploadedImages[slotId];
+    if (!currentDataUrl) return;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const rad = (angle * Math.PI) / 180;
+      if (Math.abs(angle) === 90 || Math.abs(angle) === 270) {
+        canvas.width = img.height;
+        canvas.height = img.width;
+      } else {
+        canvas.width = img.width;
+        canvas.height = img.height;
+      }
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate(rad);
+        ctx.drawImage(img, -img.width / 2, -img.height / 2);
+        const rotatedDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+        setUploadedImages(prev => ({ ...prev, [slotId]: rotatedDataUrl }));
+        // Update lightbox if currently open
+        setZoomModal(prev => prev && prev.slotId === slotId ? { ...prev, url: rotatedDataUrl } : prev);
+        // Show confirmation toast
+        setRotationToast(`Orientation rotated ${angle > 0 ? '90° clockwise ↷' : '90° counter-clockwise ↶'}. Rotated photo will be sent directly to AI.`);
+        setTimeout(() => setRotationToast(null), 4000);
+      }
+    };
+    img.src = currentDataUrl;
+  };
+
+  // Crop / trim edges of an uploaded swatch using HTML5 Canvas (removes outer floor, feet, sheets)
+  const cropImageSlot = (slotId: string, trimPercent = 12, aspectRatio?: number) => {
+    const currentDataUrl = uploadedImages[slotId];
+    if (!currentDataUrl) return;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let sx = (img.width * trimPercent) / 100;
+      let sy = (img.height * trimPercent) / 100;
+      let sw = img.width - sx * 2;
+      let sh = img.height - sy * 2;
+
+      if (aspectRatio) {
+        if (sw / sh > aspectRatio) {
+          const newSw = sh * aspectRatio;
+          sx += (sw - newSw) / 2;
+          sw = newSw;
+        } else {
+          const newSh = sw / aspectRatio;
+          sy += (sh - newSh) / 2;
+          sh = newSh;
+        }
+      }
+
+      if (sw <= 50 || sh <= 50) return;
+      canvas.width = sw;
+      canvas.height = sh;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+        const croppedDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+        setUploadedImages(prev => ({ ...prev, [slotId]: croppedDataUrl }));
+        setZoomModal(prev => prev && prev.slotId === slotId ? { ...prev, url: croppedDataUrl } : prev);
+        setRotationToast(`✂️ Cropped borders by ${trimPercent}%. Outer background and floor trimmed cleanly!`);
+        setTimeout(() => setRotationToast(null), 4000);
+      }
+    };
+    img.src = currentDataUrl;
+  };
+
+  // Swap images between two slots
+  const swapSlots = (fromId: string, toId: string) => {
+    setUploadedImages(prev => {
+      const next = { ...prev };
+      const temp = next[fromId];
+      next[fromId] = next[toId];
+      next[toId] = temp;
+      return next;
+    });
+  };
+
+  // Step 2: Persona & Model
+  const [icp, setIcp] = useState<string>('home_ceo');
+  const [occasion, setOccasion] = useState<string>('');
+  const [fabricType, setFabricType] = useState<string>('');
+  const [sareeDesignType, setSareeDesignType] = useState<string>('');
+  const [borderStyle, setBorderStyle] = useState<string>('');
+  const [tasselStyle, setTasselStyle] = useState<string>('');
+  const [blouseStyle, setBlouseStyle] = useState<string>('');
+  const [showGuidelinesModal, setShowGuidelinesModal] = useState<boolean>(false);
+  const [selectedModelId, setSelectedModelId] = useState<string>('');
+
+  const isSaree = !!template?.slug?.toLowerCase().includes('saree');
+
+  // Compute active image slots dynamically based on Saree Design Type
+  const activeImageSlots = React.useMemo(() => {
+    if (!template?.imageSlots) return [];
+    if (!isSaree) return template.imageSlots;
+
+    if (sareeDesignType === 'dual_tier_pleats') {
+      const slots = [];
+      for (const slot of template.imageSlots) {
+        if (slot.id.toLowerCase().includes('body') || slot.id.toLowerCase().includes('garment')) {
+          slots.push({
+            ...slot,
+            name: 'Upper Body Fabric (Chest & Torso)',
+            description: 'Upper base pattern (e.g. polka dots, buttas, or plain chest fabric) for bust and waist drape.',
+          });
+          slots.push({
+            id: 'pleat_art',
+            name: 'Lower Skirt & Pleat Art (Feet to Knees)',
+            description: 'Distinct decorative panel, peacock art, kalamkari, or broad lower pleat band.',
+            isRequired: false,
+          });
+          slots.push({
+            id: 'border_ribbon',
+            name: 'Border Ribbon / Edge (Optional)',
+            description: 'Longitudinal edge ribbon (e.g. woven zari tape or narrow border). Controls chest & hem edge.',
+            isRequired: false,
+          });
+        } else {
+          slots.push(slot);
+        }
+      }
+      return slots;
+    }
+    return template.imageSlots;
+  }, [template?.imageSlots, isSaree, sareeDesignType]);
+
+  // Nano-Banana V2 Clean Pipeline (Defaults to OFF for A/B testing)
+  const [nanoBananaV2, setNanoBananaV2] = useState<boolean>(false);
+  const [sareeFabricType, setSareeFabricType] = useState<string>('');
+  const [bodyDescription, setBodyDescription] = useState<string>('');
+  const [borderDescription, setBorderDescription] = useState<string>('');
+  const [palluDescription, setPalluDescription] = useState<string>('');
+  const [palluSize, setPalluSize] = useState<'small' | 'medium' | 'large'>('medium');
+  const [borderWidth, setBorderWidth] = useState<'thin' | 'medium' | 'wide'>('medium');
+  const [borderEdges, setBorderEdges] = useState<string>('');
+  const [tassels, setTassels] = useState<'none' | 'pallu_end' | 'hem' | 'both'>('none');
+  const [tasselColor, setTasselColor] = useState<string>('');
+  const [tasselLocation, setTasselLocation] = useState<string>('pallu end');
+  const [blouseRule, setBlouseRule] = useState<'match_swatch' | 'plain_contrast' | 'same_as_body'>('match_swatch');
+  const [sendPosePreview, setSendPosePreview] = useState<boolean>(false);
+  const [includeOriginalSwatches, setIncludeOriginalSwatches] = useState<boolean>(true);
+  const [approvedGarmentRefUrl, setApprovedGarmentRefUrl] = useState<string | null>(null);
+  const [approvedRearGarmentRefUrl, setApprovedRearGarmentRefUrl] = useState<string | null>(null);
+  const [garmentRefPresentationStyle, setGarmentRefPresentationStyle] = useState<'laid_flat' | 'dress_form'>('laid_flat');
+  const [generatingGarmentRef, setGeneratingGarmentRef] = useState<boolean>(false);
+  const [generatingRearGarmentRef, setGeneratingRearGarmentRef] = useState<boolean>(false);
+
+  // Step: Background Selection
+  const [selectedBackground, setSelectedBackground] = useState<string>('');
+
+  const getSuggestedBackgrounds = (occ: string, fab: string): string[] => {
+    if (occ) {
+      switch (occ) {
+        case 'Onam / festival': return ['Mirror or courtyard, warm light', 'Home doorway / living room'];
+        case 'Kitty party': return ["Café / friend's living room", 'Living room / dining'];
+        case 'Parent-teacher meet': return ['Home entrance w/ bag or car-side', 'Office / car-side / home entrance'];
+        case 'Small get-together': return ['Living room / dining', 'Balcony / terrace (open shade)'];
+        case 'Workday': return ['Office / car-side / home entrance', 'Home entrance w/ bag or car-side'];
+      }
+    }
+    if (fab) {
+      switch (fab) {
+        case 'Linen / light cotton': return ['Balcony / terrace (open shade)', "Café / friend's living room"];
+        case 'Everyday cotton / ajrakh / print': return ['Home doorway / living room', 'Living room / dining'];
+        case 'Tussar / silk / premium': return ['Mirror / dressing corner (warm light)', 'Mirror or courtyard, warm light'];
+        case 'Kurti set (any)': return ['Office / car-side / home entrance', 'Home entrance w/ bag or car-side'];
+      }
+    }
+    // Fallback if neither is selected yet
+    return ['Living room / dining', 'Home doorway / living room'];
+  };
+
+  useEffect(() => {
+    const suggested = getSuggestedBackgrounds(occasion, fabricType);
+    if (suggested.length > 0 && !suggested.includes(selectedBackground)) {
+      setSelectedBackground(suggested[0]);
+    }
+  }, [occasion, fabricType]);
+
+  // Step 3: Options
+  const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({});
+
+  // Step 4: Generate
+  const [generatedImages, setGeneratedImages] = useState<Record<string, { imageUrl: string; prompt: string }>>({});
+  const [generatingPose, setGeneratingPose] = useState<string | null>(null);
+  const [generatingPoseIds, setGeneratingPoseIds] = useState<Set<string>>(new Set());
+  const generatedImagesRef = useRef(generatedImages);
+  useEffect(() => {
+    generatedImagesRef.current = generatedImages;
+  }, [generatedImages]);
+  const [isGeneratingAll, setIsGeneratingAll] = useState(false);
+  const [isGeneratingSelected, setIsGeneratingSelected] = useState(false);
+  const [selectedPoses, setSelectedPoses] = useState<Set<string>>(new Set());
+  const [genStatus, setGenStatus] = useState<string | null>(null);
+  const [genError, setGenError] = useState<string | null>(null);
+  const [exportingGooglePhotos, setExportingGooglePhotos] = useState(false);
+  const [googlePhotosSuccess, setGooglePhotosSuccess] = useState<{ albumTitle: string; albumUrl?: string; photosUploaded: number } | null>(null);
+  const [googlePhotosError, setGooglePhotosError] = useState<string | null>(null);
+
+  // Cross-Pose Guidance & Swatch Corrections Suggestions Box
+  const [promptSuggestions, setPromptSuggestions] = useState<string>('');
+
+  const handlePromptSuggestionsChange = (val: string) => {
+    setPromptSuggestions(val);
+    if (typeof window !== 'undefined') {
+      const storageKey = `couture_suggestions_${productId || template?.id || 'default'}`;
+      localStorage.setItem(storageKey, val);
+    }
+    if (productId) {
+      fetch('/api/admin/products/' + productId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customFields: {
+            ...(product?.customFields || {}),
+            promptSuggestions: val,
+          },
+        }),
+      }).catch(err => console.warn('Failed to sync prompt suggestions:', err));
+    }
+  };
+
   useEffect(() => {
     // Reset photoshoot session order and state when productId changes
     setOrderId(null);
@@ -113,167 +369,6 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       }).catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId]);
-
-  const [template, setTemplate] = useState<TemplateData | null>(null);
-  const [models, setModels] = useState<AIModelData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [orderId, setOrderId] = useState<string | null>(null);
-
-  // Step 1: Details & Images
-  const [productName, setProductName] = useState('');
-  const [stockCode, setStockCode] = useState('');
-  const [description, setDescription] = useState('');
-  const [uploadedImages, setUploadedImages] = useState<Record<string, string>>({});
-  const [zoomModal, setZoomModal] = useState<{ slotId: string; title: string; url: string; zoom: number } | null>(null);
-  const [poseModal, setPoseModal] = useState<{ name: string; url: string; description: string; purpose?: string; fabricFocus?: string; promptSnippet?: string } | null>(null);
-  const [swapDropdownSlot, setSwapDropdownSlot] = useState<string | null>(null);
-  const [rotationToast, setRotationToast] = useState<string | null>(null);
-  const [validationError, setValidationError] = useState<string | null>(null);
-  const [mounted, setMounted] = useState(false);
-  const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
-
-  // Rotate an uploaded image 90 degrees clockwise (+90) or counter-clockwise (-90) using HTML5 Canvas
-  const rotateImageSlot = (slotId: string, angle = 90) => {
-    const currentDataUrl = uploadedImages[slotId];
-    if (!currentDataUrl) return;
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      const rad = (angle * Math.PI) / 180;
-      if (Math.abs(angle) === 90 || Math.abs(angle) === 270) {
-        canvas.width = img.height;
-        canvas.height = img.width;
-      } else {
-        canvas.width = img.width;
-        canvas.height = img.height;
-      }
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.translate(canvas.width / 2, canvas.height / 2);
-        ctx.rotate(rad);
-        ctx.drawImage(img, -img.width / 2, -img.height / 2);
-        const rotatedDataUrl = canvas.toDataURL('image/jpeg', 0.95);
-        setUploadedImages(prev => ({ ...prev, [slotId]: rotatedDataUrl }));
-        // Update lightbox if currently open
-        setZoomModal(prev => prev && prev.slotId === slotId ? { ...prev, url: rotatedDataUrl } : prev);
-        // Show confirmation toast
-        setRotationToast(`Orientation rotated ${angle > 0 ? '90° clockwise ↷' : '90° counter-clockwise ↶'}. Rotated photo will be sent directly to AI.`);
-        setTimeout(() => setRotationToast(null), 4000);
-      }
-    };
-    img.src = currentDataUrl;
-  };
-
-  // Swap images between two slots
-  const swapSlots = (fromId: string, toId: string) => {
-    setUploadedImages(prev => {
-      const next = { ...prev };
-      const temp = next[fromId];
-      next[fromId] = next[toId];
-      next[toId] = temp;
-      return next;
-    });
-  };
-
-  // Step 2: Persona & Model
-  const [icp, setIcp] = useState<string>('home_ceo');
-  const [occasion, setOccasion] = useState<string>('');
-  const [fabricType, setFabricType] = useState<string>('');
-  const [sareeDesignType, setSareeDesignType] = useState<string>('');
-  const [selectedModelId, setSelectedModelId] = useState<string>('');
-
-  // Nano-Banana V2 Clean Pipeline (Defaults to OFF for A/B testing)
-  const [nanoBananaV2, setNanoBananaV2] = useState<boolean>(false);
-  const [sareeFabricType, setSareeFabricType] = useState<string>('');
-  const [bodyDescription, setBodyDescription] = useState<string>('');
-  const [borderDescription, setBorderDescription] = useState<string>('');
-  const [palluDescription, setPalluDescription] = useState<string>('');
-  const [palluSize, setPalluSize] = useState<'small' | 'medium' | 'large'>('medium');
-  const [borderWidth, setBorderWidth] = useState<'thin' | 'medium' | 'wide'>('medium');
-  const [borderEdges, setBorderEdges] = useState<string>('');
-  const [tassels, setTassels] = useState<'none' | 'pallu_end' | 'hem' | 'both'>('none');
-  const [tasselColor, setTasselColor] = useState<string>('');
-  const [tasselLocation, setTasselLocation] = useState<string>('pallu end');
-  const [blouseRule, setBlouseRule] = useState<'match_swatch' | 'plain_contrast' | 'same_as_body'>('match_swatch');
-  const [sendPosePreview, setSendPosePreview] = useState<boolean>(false);
-  const [includeOriginalSwatches, setIncludeOriginalSwatches] = useState<boolean>(true);
-  const [approvedGarmentRefUrl, setApprovedGarmentRefUrl] = useState<string | null>(null);
-  const [approvedRearGarmentRefUrl, setApprovedRearGarmentRefUrl] = useState<string | null>(null);
-  const [garmentRefPresentationStyle, setGarmentRefPresentationStyle] = useState<'laid_flat' | 'dress_form'>('laid_flat');
-  const [generatingGarmentRef, setGeneratingGarmentRef] = useState<boolean>(false);
-  const [generatingRearGarmentRef, setGeneratingRearGarmentRef] = useState<boolean>(false);
-
-  // Step: Background Selection
-  const [selectedBackground, setSelectedBackground] = useState<string>('');
-
-  const getSuggestedBackgrounds = (occ: string, fab: string): string[] => {
-    if (occ) {
-      switch (occ) {
-        case 'Onam / festival': return ['Mirror or courtyard, warm light', 'Home doorway / living room'];
-        case 'Kitty party': return ["Café / friend's living room", 'Living room / dining'];
-        case 'Parent-teacher meet': return ['Home entrance w/ bag or car-side', 'Office / car-side / home entrance'];
-        case 'Small get-together': return ['Living room / dining', 'Balcony / terrace (open shade)'];
-        case 'Workday': return ['Office / car-side / home entrance', 'Home entrance w/ bag or car-side'];
-      }
-    }
-    if (fab) {
-      switch (fab) {
-        case 'Linen / light cotton': return ['Balcony / terrace (open shade)', "Café / friend's living room"];
-        case 'Everyday cotton / ajrakh / print': return ['Home doorway / living room', 'Living room / dining'];
-        case 'Tussar / silk / premium': return ['Mirror / dressing corner (warm light)', 'Mirror or courtyard, warm light'];
-        case 'Kurti set (any)': return ['Office / car-side / home entrance', 'Home entrance w/ bag or car-side'];
-      }
-    }
-    // Fallback if neither is selected yet
-    return ['Living room / dining', 'Home doorway / living room'];
-  };
-
-  useEffect(() => {
-    const suggested = getSuggestedBackgrounds(occasion, fabricType);
-    if (suggested.length > 0 && !suggested.includes(selectedBackground)) {
-      setSelectedBackground(suggested[0]);
-    }
-  }, [occasion, fabricType]);
-
-  // Step 3: Options
-  const [selectedOptions, setSelectedOptions] = useState<Record<string, string>>({});
-
-  // Step 4: Generate
-  const [generatedImages, setGeneratedImages] = useState<Record<string, { imageUrl: string; prompt: string }>>({});
-  const [generatingPose, setGeneratingPose] = useState<string | null>(null);
-  const [isGeneratingAll, setIsGeneratingAll] = useState(false);
-  const [isGeneratingSelected, setIsGeneratingSelected] = useState(false);
-  const [selectedPoses, setSelectedPoses] = useState<Set<string>>(new Set());
-  const [genStatus, setGenStatus] = useState<string | null>(null);
-  const [genError, setGenError] = useState<string | null>(null);
-  const [exportingGooglePhotos, setExportingGooglePhotos] = useState(false);
-  const [googlePhotosSuccess, setGooglePhotosSuccess] = useState<{ albumTitle: string; albumUrl?: string; photosUploaded: number } | null>(null);
-  const [googlePhotosError, setGooglePhotosError] = useState<string | null>(null);
-
-  // Cross-Pose Guidance & Swatch Corrections Suggestions Box
-  const [promptSuggestions, setPromptSuggestions] = useState<string>('');
-
-  const handlePromptSuggestionsChange = (val: string) => {
-    setPromptSuggestions(val);
-    if (typeof window !== 'undefined') {
-      const storageKey = `couture_suggestions_${productId || template?.id || 'default'}`;
-      localStorage.setItem(storageKey, val);
-    }
-    if (productId) {
-      fetch('/api/admin/products/' + productId, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customFields: {
-            ...(product?.customFields || {}),
-            promptSuggestions: val,
-          },
-        }),
-      }).catch(err => console.warn('Failed to sync prompt suggestions:', err));
-    }
-  };
 
   // Collage Creator Modal State
   const [showCollageModal, setShowCollageModal] = useState(false);
@@ -692,12 +787,18 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   };
 
   // Generate single pose
-  const handleGeneratePose = async (poseId: string) => {
+  const handleGeneratePose = async (
+    poseId: string,
+    cachedCompressedUploaded?: Record<string, string>,
+    cachedCompressedFabric?: string[],
+    customPromptOverride?: string
+  ) => {
     const pose = template?.poses.find(p => p.id === poseId);
     const model = models.find(m => m.id === selectedModelId);
     if (!pose || !template) return;
 
     setGeneratingPose(poseId);
+    setGeneratingPoseIds(prev => new Set(prev).add(poseId));
     setGenError(null);
 
     // Build options string
@@ -710,7 +811,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       .join(', ');
 
     // Collect ALL raw uploaded fabric images for Gemini (it can see each one separately)
-    const allFabricImages = (template?.imageSlots || [])
+    const allFabricImages = (activeImageSlots || [])
       .map(slot => uploadedImages[slot.id])
       .filter(Boolean);
     // Fallback if no slots defined
@@ -719,17 +820,21 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       allFabricImages.push(...vals);
     }
 
-    // Compress all images to 512px / 60% JPEG for API (avoids 413 payload-too-large)
-    setGenStatus('Compressing images for AI...');
-    const compressedUploadedImages: Record<string, string> = {};
-    for (const key of Object.keys(uploadedImages)) {
-      if (uploadedImages[key]) {
-        compressedUploadedImages[key] = await compressImageForAPI(uploadedImages[key]);
+    // Use cached compressed images if passed (from parallel batch) or compress now
+    let compressedUploadedImages = cachedCompressedUploaded;
+    let compressedFabricImages = cachedCompressedFabric;
+    if (!compressedUploadedImages || !compressedFabricImages) {
+      setGenStatus('Compressing images for AI...');
+      compressedUploadedImages = {};
+      for (const key of Object.keys(uploadedImages)) {
+        if (uploadedImages[key]) {
+          compressedUploadedImages[key] = await compressImageForAPI(uploadedImages[key]);
+        }
       }
+      compressedFabricImages = await Promise.all(
+        allFabricImages.map(img => compressImageForAPI(img as string))
+      );
     }
-    const compressedFabricImages = await Promise.all(
-      allFabricImages.map(img => compressImageForAPI(img as string))
-    );
     const rawGarmentRef = compressedFabricImages[0] || null;
     const validImages = compressedFabricImages;
 
@@ -760,7 +865,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     let dynamicStyling = '';
     if (isSaree) {
       const hasBlouseImage = Object.keys(uploadedImages).some(slotId => {
-        const slot = template?.imageSlots.find(s => s.id === slotId);
+        const slot = activeImageSlots.find(s => s.id === slotId);
         return slot && slot.name.toLowerCase().includes('blouse');
       });
 
@@ -790,13 +895,13 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
     const backgroundSetting = selectedBackground ? `Background Setting: ${selectedBackground}.` : 'Background Setting: high-end luxury fashion studio.';
 
-    const originalGarmentDrapeDetails = 'CRITICAL INSTRUCTION: You MUST strictly replicate the EXACT patterns, motif scale, shapes, and border placements shown in the provided reference fabric images. Do NOT invent generic patterns. Do NOT mix or blend the patterns from the different uploaded images. The fabric must be fully opaque and flawlessly continuous—absolutely NO skin showing through the fabric, no sheer patches, and no blending artifacts. CRITICAL ALL-OVER MOTIF CONTINUITY (NO BLANK OR SOLID SECTIONS): When the fabric has an all-over print, geometric pattern, or motifs, the pattern MUST cover the entire garment body continuously across the chest, waist, pleats, thighs, and lap. In seated poses, the motifs MUST remain fully visible across the entire lap, thighs, and fanned pleats—never leave the lap or pleats as plain, solid, unprinted blank fabric. Natural fabric texture, authentic crisp folds, and graceful drape. CRITICAL HEM & PALLU FINISH RULE: DO NOT add beads, hanging pearl drops, tassels, pom-poms, latkans, or thread fringes to the bottom hem of the saree or the end of the pallu UNLESS they are clearly and explicitly present in the uploaded reference fabric images. Keep all fabric hems and pallu ends cleanly stitched, flat, and straight without any invented hanging beads, ornaments, or tassels.';
+    const originalGarmentDrapeDetails = 'CRITICAL INSTRUCTION: You MUST strictly replicate the EXACT patterns, motif scale, shapes, and border placements shown in the provided reference fabric images. Do NOT invent generic patterns. Do NOT mix or blend the patterns from the different uploaded images. The fabric must be fully opaque and flawlessly continuous—absolutely NO skin showing through the fabric, no sheer patches, and no blending artifacts. CRITICAL LOWER SKIRT PANEL & PLEAT ART INTEGRITY: If the body fabric swatch features a dual-tier design (an upper base fabric with dots/buttas and a wide contrasting pictorial, peacock, floral, or kalamkari art panel along the lower portion): (1) The wide decorative art panel MUST be rendered across the lower skirt and front pleats (from knee level down to the ankles/feet). (2) The diagonal chest drape across the torso to the left shoulder must strictly use the upper base fabric (the dots/buttas) with a subtle clean border edge—NEVER wrap the wide lower skirt pictorial/peacock art panel across the chest, collarbone, or neckline. (3) Both tiers from the body swatch must be preserved: upper skirt with the base pattern, lower skirt with the wide artistic panel. CRITICAL ALL-OVER MOTIF CONTINUITY (NO BLANK OR SOLID SECTIONS): When the fabric has an all-over print, geometric pattern, or motifs, the pattern MUST cover the entire garment body continuously across the chest, waist, pleats, thighs, and lap. In seated poses, the motifs MUST remain fully visible across the entire lap, thighs, and fanned pleats—never leave the lap or pleats as plain, solid, unprinted blank fabric. Natural fabric texture, authentic crisp folds, and graceful drape. CRITICAL HEM & PALLU FINISH RULE: DO NOT add beads, hanging pearl drops, tassels, pom-poms, latkans, or thread fringes to the bottom hem of the saree or the end of the pallu UNLESS they are clearly and explicitly present in the uploaded reference fabric images. Keep all fabric hems and pallu ends cleanly stitched, flat, and straight without any invented hanging beads, ornaments, or tassels.';
 
     // Only apply custom draping instructions when an option is explicitly selected; otherwise keep 100% original prompt
     let garmentDrapeDetails = originalGarmentDrapeDetails;
     if (isSaree && sareeDesignType) {
       if (sareeDesignType === 'contrast_pallu') {
-        garmentDrapeDetails = `${originalGarmentDrapeDetails} SAREE DRAPE LAYOUT (CONTRAST PALLU — STRICT PLACEMENT): The saree body and pallu have COMPLETELY DIFFERENT designs/patterns. CRITICAL RULES: (1) BODY & DIAGONAL CHEST PLACEMENT: The main Body fabric (the body swatch pattern/dots) must cover the lower skirt, front waist pleats, and wrap diagonally ACROSS THE FRONT CHEST/TORSO to the left shoulder. (2) SINGLE-EDGE CHEST BORDER: The decorative border runs along ONE EDGE ONLY of the diagonal chest wrap (the outer diagonal edge across the bust). The neckline/collarbone stays clean body fabric with no border. The bottom skirt hem at the feet has the horizontal border. The right hip stays clean body fabric with no extra patches. (3) PALLU PLACEMENT & WAIST TRANSITION: From left shoulder to waist level, the hanging drape is body fabric. From waist level down to the floor, it transitions into the contrasting Pallu artwork. (4) NO INVENTED BEADS OR TASSELS: Keep the bottom hem of the saree and the end of the pallu clean, flat, and straight. DO NOT add hanging beads, tassels, pearls, or latkans unless explicitly visible in the uploaded fabric photos. (5) BLOUSE PLACEMENT: The blouse swatch must be used solely for the fitted stitched blouse top. Maintain crisp, clean separation without blending.`;
+        garmentDrapeDetails = `${originalGarmentDrapeDetails} SAREE DRAPE LAYOUT (CONTRAST PALLU — STRICT PLACEMENT): The saree body and pallu have COMPLETELY DIFFERENT designs/patterns. CRITICAL RULES: (1) BODY & PLEAT PLACEMENT: The main Body fabric covers the skirt and front waist pleats. If the body swatch has a wide decorative lower panel or artwork (such as a cyan peacock/floral panel), that artwork MUST stay on the lower pleats and lower skirt from knees to feet. The diagonal wrap ACROSS THE FRONT CHEST/TORSO to the left shoulder must strictly use only the upper base body fabric (the dots/buttas). (2) SINGLE-EDGE CHEST BORDER: The chest wrap has only a subtle, clean single-edge border along the outer diagonal edge (across the bust); NEVER put wide lower-skirt pictorial art or peacock panels across the chest. The neckline/collarbone stays clean. The bottom skirt hem at the feet has the horizontal border. (3) PALLU PLACEMENT & WAIST TRANSITION: The separate Pallu swatch artwork hangs exclusively from the left shoulder down the back to calf/ankle level, never on the front chest. (4) NO INVENTED BEADS OR TASSELS: Keep the bottom hem of the saree and the end of the pallu clean, flat, and straight. DO NOT add hanging beads, tassels, pearls, or latkans unless explicitly visible in the uploaded fabric photos. (5) BLOUSE PLACEMENT: The blouse swatch must be used solely for the fitted stitched blouse top. Maintain crisp, clean separation without blending.`;
       } else if (sareeDesignType === 'half_half') {
         garmentDrapeDetails = `${originalGarmentDrapeDetails} SAREE DRAPE LAYOUT (HALF-AND-HALF): This saree has two distinctly different halves. The LOWER half (from waist down to feet, including pleats) uses one design/color, and the UPPER half (chest drape and pallu from shoulder) uses a different design/color. The transition between the two halves should be a clean horizontal boundary approximately at the hip/waist level. Both halves must retain their individual patterns without blending.`;
       }
@@ -865,7 +970,12 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           occasion,
           fabricType,
           sareeDesignType,
-          promptSuggestions: promptSuggestions && promptSuggestions.trim() ? promptSuggestions.trim() : undefined,
+          borderStyle: borderStyle || undefined,
+          tasselStyle: tasselStyle || undefined,
+          blouseStyle: blouseStyle || undefined,
+          promptSuggestions: (customPromptOverride && customPromptOverride.trim()) 
+            ? (promptSuggestions.trim() ? `${promptSuggestions.trim()}. ${customPromptOverride.trim()}` : customPromptOverride.trim())
+            : (promptSuggestions && promptSuggestions.trim() ? promptSuggestions.trim() : undefined),
           selectedModelId,
           selectedOptions,
           aspectRatio: selectedAspectRatio,
@@ -912,12 +1022,11 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
             cleanedImages[k] = v;
           }
         }
-        cleanedImages[poseId] = { imageUrl: finalUrl, prompt };
-        setGeneratedImages(cleanedImages);
-        
-        // Auto-save immediately so the image shows up in the gallery
-        // even if the user navigates away before clicking "Save & Download"
-        await handleSaveOrder(cleanedImages);
+        setGeneratedImages(prev => {
+          const next = { ...prev, [poseId]: { imageUrl: finalUrl, prompt } };
+          handleSaveOrder(next).catch(console.error);
+          return next;
+        });
         
         setGenStatus(`${pose.name} generated!`);
         setTimeout(() => setGenStatus(null), 3000);
@@ -928,27 +1037,100 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       setGenError(err?.message || 'Network error occurred');
     } finally {
       setGeneratingPose(null);
+      setGeneratingPoseIds(prev => {
+        const n = new Set(prev);
+        n.delete(poseId);
+        return n;
+      });
     }
   };
 
-  // Generate all poses
+  // Generate all poses (parallel batch with pre-compression)
   const handleGenerateAll = async () => {
     if (!template?.poses?.length) return;
     setIsGeneratingAll(true);
-    for (const pose of template.poses) {
-      await handleGeneratePose(pose.id);
+    setGenError(null);
+    try {
+      setGenStatus('Pre-compressing swatches for batch generation...');
+      const allFabricImages = (activeImageSlots || [])
+        .map(slot => uploadedImages[slot.id])
+        .filter(Boolean);
+      if (allFabricImages.length === 0) {
+        allFabricImages.push(...Object.values(uploadedImages).filter(Boolean));
+      }
+      const cachedCompressedUploaded: Record<string, string> = {};
+      for (const key of Object.keys(uploadedImages)) {
+        if (uploadedImages[key]) {
+          cachedCompressedUploaded[key] = await compressImageForAPI(uploadedImages[key]);
+        }
+      }
+      const cachedCompressedFabric = await Promise.all(
+        allFabricImages.map(img => compressImageForAPI(img as string))
+      );
+
+      setGenStatus(`Launching ${template.poses.length} poses concurrently for ultra-fast generation...`);
+      
+      // Mark all poses as generating immediately so UI shows active progress across all cards simultaneously
+      setGeneratingPoseIds(new Set(template.poses.map(p => p.id)));
+
+      // Dispatch parallel batches with slight 250ms staggering to prevent HTTP handshake congestion
+      const promises = template.poses.map((pose, idx) => {
+        return new Promise(resolve => setTimeout(resolve, idx * 250)).then(() =>
+          handleGeneratePose(pose.id, cachedCompressedUploaded, cachedCompressedFabric)
+        );
+      });
+      await Promise.allSettled(promises);
+    } catch (e: any) {
+      setGenError(e.message || 'Generation failed');
+    } finally {
+      setIsGeneratingAll(false);
+      setGeneratingPose(null);
+      setGenStatus(null);
     }
-    setIsGeneratingAll(false);
   };
 
-  // Generate selected poses
+  // Generate selected poses (parallel batch)
   const handleGenerateSelected = async () => {
-    if (selectedPoses.size === 0) return;
+    if (selectedPoses.size === 0 || !template?.poses?.length) return;
     setIsGeneratingSelected(true);
-    for (const poseId of Array.from(selectedPoses)) {
-      await handleGeneratePose(poseId);
+    setGenError(null);
+    try {
+      setGenStatus('Pre-compressing swatches...');
+      const allFabricImages = (activeImageSlots || [])
+        .map(slot => uploadedImages[slot.id])
+        .filter(Boolean);
+      if (allFabricImages.length === 0) {
+        allFabricImages.push(...Object.values(uploadedImages).filter(Boolean));
+      }
+      const cachedCompressedUploaded: Record<string, string> = {};
+      for (const key of Object.keys(uploadedImages)) {
+        if (uploadedImages[key]) {
+          cachedCompressedUploaded[key] = await compressImageForAPI(uploadedImages[key]);
+        }
+      }
+      const cachedCompressedFabric = await Promise.all(
+        allFabricImages.map(img => compressImageForAPI(img as string))
+      );
+
+      const posesToGenerate = Array.from(selectedPoses);
+      setGenStatus(`Launching ${posesToGenerate.length} selected poses concurrently...`);
+      
+      // Mark selected poses as generating immediately
+      setGeneratingPoseIds(new Set(posesToGenerate));
+
+      const promises = posesToGenerate.map((poseId, idx) => {
+        return new Promise(resolve => setTimeout(resolve, idx * 250)).then(() =>
+          handleGeneratePose(poseId, cachedCompressedUploaded, cachedCompressedFabric)
+        );
+      });
+      await Promise.allSettled(promises);
+    } catch (e: any) {
+      setGenError(e.message || 'Generation failed');
+    } finally {
+      setIsGeneratingSelected(false);
+      setGeneratingPose(null);
+      setGenStatus(null);
     }
-    setIsGeneratingSelected(false);
   };
 
   // Save order
@@ -972,6 +1154,9 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         occasion,
         fabricType,
         sareeDesignType,
+        borderStyle: borderStyle || undefined,
+        tasselStyle: tasselStyle || undefined,
+        blouseStyle: blouseStyle || undefined,
         selectedModelId,
         selectedBackground,
         selectedOptions,
@@ -1171,22 +1356,20 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               {/* Saree Design Type — shown only for saree templates */}
               {template.slug?.toLowerCase().includes('saree') && (
                 <div>
-                  <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase mb-1.5">Saree Design Type (Optional)</label>
+                  <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase mb-1.5">Saree Layout Mode</label>
                   <select value={sareeDesignType} onChange={e => setSareeDesignType(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent">
-                    <option value="">Default (Original prompt — all-over / uniform sarees)</option>
-                    <option value="contrast_pallu">🎨 Contrast Pallu (Body on chest & pleats, Pallu from waist down)</option>
-                    <option value="half_half">⬛⬜ Half & Half (Two distinct halves)</option>
+                    <option value="">Default (Standard 3 Swatches — Uniform / All-Over Saree)</option>
+                    <option value="dual_tier_pleats">✨ Complex Saree (Separate Upper Chest + Lower Skirt Art + Border Ribbon)</option>
                   </select>
                   <p className="text-[10px] text-charcoal-muted mt-1">
-                    {sareeDesignType === 'contrast_pallu' 
-                      ? '✨ Body pattern on chest & pleats. Single-edge diagonal chest border (clean neckline). Pallu starts at waist level to floor. Clean hem with zero beads/tassels.'
-                      : sareeDesignType === 'half_half'
-                      ? '✨ Lower half uses one design, upper half uses a different design with clean transition at waist.'
-                      : 'Leave as Default to use the exact original prompt (best for all-over prints like Digital Linen or floral sarees). Select an option only for contrast sarees.'}
+                    {sareeDesignType === 'dual_tier_pleats'
+                      ? '🎯 Complex Mode Active: Unlocks dedicated "Lower Skirt & Pleat Art" and "Border Ribbon" upload slots below for pixel-accurate zone mapping without hallucinations.'
+                      : 'Standard 3-swatch upload for regular sarees (Body, Pallu, Blouse). Select "Complex Saree" if the saree has lower pleat/skirt artwork.'}
                   </p>
                 </div>
               )}
-            </div>
+
+              </div>
             <Textarea label="Garment Description & Fabric Details" value={description} onChange={e => setDescription(e.target.value)} placeholder="Describe the weave, borders, zari work, and drape..." rows={3} />
           </Card>
 
@@ -1203,10 +1386,18 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                     Upload crisp photos for each section. Rotate sideways photos with 🔄 so borders and motifs are upright for the AI photoshoot.
                   </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setShowGuidelinesModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-900 font-bold text-xs transition-colors cursor-pointer self-start sm:self-auto shadow-xs"
+                >
+                  <Info className="w-3.5 h-3.5 text-amber-700" />
+                  <span>📸 Swatch Upload Guidelines (Good vs Bad)</span>
+                </button>
               </div>
 
               {/* Dynamic Visual Example Reference Photos Banner */}
-              {template.imageSlots.some(s => s.sampleImageUrl) && (
+              {activeImageSlots.some(s => s.sampleImageUrl) && (
                 <div className="mt-4 p-4 sm:p-5 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-charcoal space-y-3 shadow-xs">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2 text-xs font-bold text-amber-900 uppercase tracking-wider">
@@ -1223,7 +1414,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                   </p>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-                    {template.imageSlots.filter(s => s.sampleImageUrl).map((slot, idx) => (
+                    {activeImageSlots.filter(s => s.sampleImageUrl).map((slot, idx) => (
                       <div
                         key={slot.id}
                         onClick={() => setZoomModal({ slotId: `sample_${slot.id}`, title: `Example: ${slot.name}`, url: slot.sampleImageUrl!, zoom: 1 })}
@@ -1254,13 +1445,13 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                     <Info className="w-3.5 h-3.5 text-amber-700 shrink-0" />
                     <span>Upload each section below. Keep borders upright or click <strong>Rotate 90° ↷</strong>.</span>
                   </div>
-                  {template.imageSlots.some(s => s.sampleImageUrl) && (
+                  {activeImageSlots.some(s => s.sampleImageUrl) && (
                     <button
                       type="button"
                       onClick={() => {
                         if (template?.imageSlots) {
                           const newUploaded: Record<string, string> = { ...uploadedImages };
-                          template.imageSlots.forEach(s => {
+                          activeImageSlots.forEach(s => {
                             if (s.sampleImageUrl) {
                               newUploaded[s.id] = s.sampleImageUrl;
                             }
@@ -1281,9 +1472,9 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
             {/* Individual Detailed Image Drop Slots */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {template.imageSlots.map(slot => {
+              {activeImageSlots.map(slot => {
                 const isUploaded = !!uploadedImages[slot.id];
-                const otherSlots = template.imageSlots.filter(s => s.id !== slot.id);
+                const otherSlots = activeImageSlots.filter(s => s.id !== slot.id);
 
                 return (
                   <div key={slot.id} className="space-y-2 flex flex-col">
@@ -1378,6 +1569,19 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                                 title="Rotate 90° Counter-Clockwise"
                               >
                                 <RotateCcw className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPointCropperModal({ slotId: slot.id, title: slot.name, url: uploadedImages[slot.id] });
+                                }}
+                                className="flex items-center justify-center gap-1 py-1.5 px-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow-md transition-colors cursor-pointer"
+                                title="Precision 4-Point Crop (SareeDrape Style)"
+                              >
+                                <Crop className="w-3.5 h-3.5" />
+                                <span>Crop</span>
                               </button>
 
                               <button
@@ -1935,7 +2139,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                 </span>
               </div>
               <div className="flex flex-wrap gap-2 items-center">
-                {template.imageSlots.map((slot, idx) => {
+                {activeImageSlots.map((slot, idx) => {
                   const slotImg = uploadedImages[slot.id];
                   const imageTag = `Image ${idx + 1}`;
                   const slotTitle = `${imageTag} (${slot.name})`;
@@ -2048,10 +2252,25 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           {/* Action Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-cream-border shadow-xs">
             <div>
-              <h2 className="font-display text-lg font-bold text-charcoal">
-                Studio Poses ({template.poses.length})
-              </h2>
-              <p className="text-xs text-charcoal-muted mt-1">Generate poses individually, select multiple, or all together</p>
+              <div className="flex items-center gap-3">
+                <h2 className="font-display text-lg font-bold text-charcoal">
+                  Studio Poses ({template.poses.length})
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedPoses.size === template.poses.length) {
+                      setSelectedPoses(new Set());
+                    } else {
+                      setSelectedPoses(new Set(template.poses.map(p => p.id)));
+                    }
+                  }}
+                  className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-cream-light hover:bg-cream border border-cream-border text-charcoal cursor-pointer transition-colors"
+                >
+                  {selectedPoses.size === template.poses.length ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+              <p className="text-xs text-charcoal-muted mt-1">Generate poses in parallel for lightning-fast photoshoot completion</p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
               {collageImagesList.length >= 2 && (
@@ -2073,11 +2292,11 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                 size="lg"
               >
                 <Layers className="w-4 h-4" />
-                Generate Selected ({selectedPoses.size})
+                ⚡ Generate Selected ({selectedPoses.size})
               </Button>
               <Button onClick={handleGenerateAll} loading={isGeneratingAll} disabled={isGeneratingAll || isGeneratingSelected} size="lg">
                 <Sparkles className="w-4 h-4" />
-                Generate All Poses
+                ⚡ Generate All (Fast Multi-Batch)
               </Button>
             </div>
           </div>
@@ -2088,7 +2307,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               const genKeys = Object.keys(generatedImages).filter(k => k === pose.id || k.startsWith(`${pose.id}_`));
               const generated = genKeys.length > 0 ? generatedImages[genKeys[genKeys.length - 1]] : null;
               const cleanImageUrl = generated?.imageUrl ? generated.imageUrl.trim().replace(/[\\'";,\s]+$/, '').replace(/%5C$/i, '') : '';
-              const isGenerating = generatingPose === pose.id;
+              const isGenerating = generatingPose === pose.id || generatingPoseIds.has(pose.id);
 
               // Fallback map if pose.previewImage is not yet set in DB
               const defaultPoseMap: Record<string, string> = {
@@ -2258,13 +2477,38 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                         </Button>
                       )}
                       {cleanImageUrl && (
-                        <button
-                          onClick={() => handleDownload(cleanImageUrl, `${template.name}_${pose.name}.jpg`)}
-                          className="p-2 rounded-xl text-charcoal-muted hover:text-accent hover:bg-accent-bg transition-colors cursor-pointer border border-cream-border shadow-xs"
-                          title="Download image"
-                        >
-                          <Download className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRegenerateSuggestion('');
+                              setRegenerateModal({
+                                poseId: pose.id,
+                                poseName: pose.name,
+                                currentImageUrl: cleanImageUrl,
+                              });
+                            }}
+                            disabled={isGenerating || isGeneratingAll || isGeneratingSelected}
+                            className="bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold gap-1.5"
+                            title="Regenerate this pose with specific custom instructions or corrections"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5 text-amber-700" />
+                            <span>Regenerate</span>
+                          </Button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDownload(cleanImageUrl, `${template.name}_${pose.name}.jpg`);
+                            }}
+                            className="p-2 rounded-xl text-charcoal-muted hover:text-accent hover:bg-accent-bg transition-colors cursor-pointer border border-cream-border shadow-xs"
+                            title="Download image"
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -2413,7 +2657,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
                 return;
               }
-              const missingRequiredSlots = template?.imageSlots.filter(
+              const missingRequiredSlots = activeImageSlots.filter(
                 slot => slot.isRequired && !uploadedImages[slot.id]
               );
               if (missingRequiredSlots && missingRequiredSlots.length > 0) {
@@ -2432,10 +2676,84 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         )}
       </div>
 
+      {/* Guidelines Modal */}
+      {mounted && showGuidelinesModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[160] bg-charcoal/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6 overflow-y-auto animate-fade-in" onClick={() => setShowGuidelinesModal(false)}>
+          <div className="bg-white rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl border border-cream-border animate-scale-up my-auto" onClick={e => e.stopPropagation()}>
+            <div className="p-6 border-b border-cream-border flex items-center justify-between bg-cream-light/60">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-amber-500/20 flex items-center justify-center text-amber-700">
+                  <Info className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-base text-charcoal">Swatch Upload Guidelines</h3>
+                  <p className="text-xs text-charcoal-muted">Ensure accurate saree borders, pallu drape & zero hallucination</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowGuidelinesModal(false)}
+                className="w-8 h-8 rounded-full bg-cream hover:bg-cream-dark flex items-center justify-center text-charcoal transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-5 text-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Good Examples Card */}
+                <div className="p-4 rounded-2xl bg-emerald-50/80 border border-emerald-200 space-y-2.5">
+                  <div className="flex items-center gap-2 text-emerald-800 font-bold text-xs uppercase tracking-wider">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>✅ DO (Best Results)</span>
+                  </div>
+                  <ul className="text-xs text-emerald-950 space-y-2 list-disc list-inside">
+                    <li><strong>Crop tight inside the cloth:</strong> Only saree fabric in frame (zero bedsheets, tiles, or floor).</li>
+                    <li><strong>Upright Borders:</strong> Ensure the border runs along the bottom length or right side. Click <em>Rotate 90° ↷</em> if needed.</li>
+                    <li><strong>Even, Flat Lighting:</strong> Take well-lit photos without deep harsh shadows.</li>
+                    <li><strong>Pure Texture:</strong> Show clear motifs (buttas, zari, prints).</li>
+                  </ul>
+                </div>
+
+                {/* Bad Examples Card */}
+                <div className="p-4 rounded-2xl bg-rose-50/80 border border-rose-200 space-y-2.5">
+                  <div className="flex items-center gap-2 text-rose-800 font-bold text-xs uppercase tracking-wider">
+                    <AlertCircle className="w-4 h-4 text-rose-600" />
+                    <span>❌ DON'T (Causes Hallucinations)</span>
+                  </div>
+                  <ul className="text-xs text-rose-950 space-y-2 list-disc list-inside">
+                    <li><strong>No Feet or Hands:</strong> Feet or carpet in frame cause AI to invent extra box borders.</li>
+                    <li><strong>No Wrinkled Bundles:</strong> Do not upload messy folded piles; spread fabric flat.</li>
+                    <li><strong>No Tilted Angles:</strong> Avoid diagonal 45° photos; shoot flat from directly above.</li>
+                    <li><strong>No Blurry Shots:</strong> Soft focus causes micro-motifs to become plain or distorted.</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 flex items-start gap-3 text-xs text-amber-950">
+                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-amber-900 mb-0.5">Need to remove edges or rotate?</p>
+                  <p>Click on any uploaded swatch to open the Full Screen Inspector. You can use <strong>✂️ Trim 12%</strong> or <strong>Rotate 90° ↷</strong> to clean up your swatches before generating.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 px-6 border-t border-cream-border bg-cream-light/60 flex items-center justify-end">
+              <Button onClick={() => setShowGuidelinesModal(false)} size="sm">
+                <span>Understood, Proceed to Upload</span>
+                <Check className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
       {/* Full-Screen Swatch Lightbox Zoom & Inspection Modal */}
       {mounted && zoomModal && createPortal(
-        <div className="fixed inset-0 z-[150] bg-charcoal/90 backdrop-blur-md flex items-center justify-center p-4 sm:p-8 animate-fade-in">
-          <div className="relative w-full max-w-4xl max-h-[92vh] flex flex-col bg-white rounded-3xl shadow-2xl overflow-hidden border border-cream-border">
+        <div className="fixed inset-0 z-[150] bg-charcoal/90 backdrop-blur-md flex items-center justify-center p-4 sm:p-8 overflow-y-auto animate-fade-in" onClick={() => setZoomModal(null)}>
+          <div className="relative w-full max-w-4xl max-h-[92vh] flex flex-col bg-white rounded-3xl shadow-2xl overflow-hidden border border-cream-border my-auto" onClick={e => e.stopPropagation()}>
             {/* Modal Header */}
             <div className="p-4 px-6 border-b border-cream-border flex items-center justify-between bg-white shrink-0">
               <div className="flex items-center gap-3">
@@ -2461,12 +2779,54 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
                 <button
                   type="button"
+                  onClick={() => {
+                    const cur = zoomModal;
+                    setZoomModal(null);
+                    setPointCropperModal({ slotId: cur.slotId, title: cur.title, url: cur.url });
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow-md transition-colors cursor-pointer"
+                  title="Precision 4-Point Perspective Crop (SareeDrape Style)"
+                >
+                  <Crop className="w-4 h-4" />
+                  <span>🎯 4-Point Crop</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => rotateImageSlot(zoomModal.slotId, 90)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cream hover:bg-cream-dark/80 text-charcoal text-xs font-bold transition-colors cursor-pointer border border-cream-border/60"
                   title="Rotate 90° Clockwise"
                 >
                   <RotateCw className="w-4 h-4 text-accent" />
                   <span>Rotate 90° ↷</span>
+                </button>
+
+                {/* Crop & Trim Edge Tools (Removes floor tiles, feet, sheets) */}
+                <button
+                  type="button"
+                  onClick={() => cropImageSlot(zoomModal.slotId, 12)}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold transition-colors cursor-pointer border border-amber-300"
+                  title="Trim 12% outer border (removes background/floor/feet)"
+                >
+                  <span>✂️ Trim 12%</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => cropImageSlot(zoomModal.slotId, 20)}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-bold transition-colors cursor-pointer border border-amber-300"
+                  title="Trim 20% outer border"
+                >
+                  <span>✂️ Trim 20%</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => cropImageSlot(zoomModal.slotId, 5, 1)}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-cream hover:bg-cream-dark/80 text-charcoal text-xs font-bold transition-colors cursor-pointer border border-cream-border/60"
+                  title="Crop to Square 1:1"
+                >
+                  <span>Crop 1:1</span>
                 </button>
 
                 <button
@@ -2542,8 +2902,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
       {/* Reference Pose Inspector Lightbox Modal */}
       {mounted && poseModal && createPortal(
-        <div className="fixed inset-0 z-[120] bg-charcoal/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl border border-cream-border flex flex-col max-h-[92vh]">
+        <div className="fixed inset-0 z-[120] bg-charcoal/80 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6 overflow-y-auto animate-fade-in" onClick={() => setPoseModal(null)}>
+          <div className="bg-white rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl border border-cream-border flex flex-col max-h-[92vh] my-auto" onClick={e => e.stopPropagation()}>
             {/* Modal Header */}
             <div className="p-4 px-6 border-b border-cream-border flex items-center justify-between bg-cream-light/40 shrink-0">
               <div className="flex items-center gap-2.5">
@@ -2623,6 +2983,155 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{rotationToast}</span>
         </div>
+      )}
+
+      {/* Point-Based Precision Quad Cropper (SareeDrape Style) */}
+      {pointCropperModal && (
+        <PointCropperModal
+          isOpen={!!pointCropperModal}
+          imageUrl={pointCropperModal.url}
+          slotTitle={pointCropperModal.title}
+          onClose={() => setPointCropperModal(null)}
+          onApplyCrop={(croppedDataUrl) => {
+            const sId = pointCropperModal.slotId;
+            setUploadedImages(prev => ({ ...prev, [sId]: croppedDataUrl }));
+            setPointCropperModal(null);
+            setRotationToast('🎯 Precision 4-point crop applied! Perspective straightened and background removed.');
+            setTimeout(() => setRotationToast(null), 4000);
+          }}
+        />
+      )}
+
+      {/* ──── REGENERATE WITH SUGGESTIONS MODAL ──── */}
+      {regenerateModal && typeof document !== 'undefined' && createPortal(
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-charcoal/80 backdrop-blur-sm animate-fade-in"
+          onClick={() => setRegenerateModal(null)}
+        >
+          <div 
+            className="relative w-full max-w-lg bg-white rounded-3xl p-6 sm:p-7 shadow-2xl border border-cream-border flex flex-col gap-5 animate-scale-up"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 border-b border-cream-border/60 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-800 shadow-2xs">
+                  <RefreshCw className="w-5 h-5 animate-spin-slow" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-base text-charcoal flex items-center gap-2">
+                    <span>Regenerate Pose</span>
+                    <Badge variant="accent">AI Studio</Badge>
+                  </h3>
+                  <p className="text-xs text-charcoal-muted font-medium mt-0.5">
+                    Target: <strong className="text-charcoal">{regenerateModal.poseName}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRegenerateModal(null)}
+                className="p-2 rounded-xl text-charcoal-muted hover:text-charcoal hover:bg-cream transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Thumbnail Preview of current output */}
+            {regenerateModal.currentImageUrl && (
+              <div className="flex items-center gap-3 p-3 rounded-2xl bg-cream-light/60 border border-cream-border">
+                <img 
+                  src={regenerateModal.currentImageUrl} 
+                  alt="Current output" 
+                  className="w-14 h-14 rounded-xl object-cover border border-cream-border shadow-2xs shrink-0" 
+                />
+                <div className="text-xs text-charcoal-muted space-y-0.5">
+                  <p className="font-semibold text-charcoal text-[13px]">Current Generated Result</p>
+                  <p className="text-[11px] leading-tight">Add suggestions below to fix draping, borders, lighting, or fabric placement.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Quick Suggestion Chips */}
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold text-charcoal uppercase tracking-wider block">
+                💡 Quick Correction Ideas:
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  'Correct the border width to match reference swatch',
+                  'Place peacock artwork on lower pleats only, keep chest dots clean',
+                  'Adjust pallu fall over shoulder smoothly down the back',
+                  'Ensure exact blouse neckline and sleeve border',
+                  'More natural warm studio lighting on fabric drape',
+                ].map((chip, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      const separator = regenerateSuggestion.trim() ? '. ' : '';
+                      setRegenerateSuggestion(prev => (prev.trim() + separator + chip).trim());
+                    }}
+                    className="text-[11px] px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 font-medium transition-colors cursor-pointer text-left"
+                  >
+                    + {chip}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Suggestion Textarea */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-charcoal flex items-center justify-between">
+                <span>Correction Instructions for this Pose (Optional)</span>
+                <span className="text-[10px] text-charcoal-muted font-normal">Sent directly to AI model</span>
+              </label>
+              <Textarea
+                value={regenerateSuggestion}
+                onChange={e => setRegenerateSuggestion(e.target.value)}
+                placeholder="e.g. Ensure the chest drape stays plain pink polka dots with no cyan artwork, and let the cyan peacock art fall only across the lower skirt pleats..."
+                rows={3}
+                className="text-sm bg-white border-cream-border focus:border-accent"
+                autoFocus
+              />
+              <p className="text-[11px] text-charcoal-muted">
+                Tip: Leave blank to re-roll with current settings, or describe specific adjustments to fix hallucinations.
+              </p>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-cream-border/60">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setRegenerateModal(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={async () => {
+                  const targetPoseId = regenerateModal.poseId;
+                  const suggestionText = regenerateSuggestion.trim();
+                  
+                  // Also append to global suggestions so it persists across other poses
+                  if (suggestionText) {
+                    const addition = promptSuggestions.trim() ? `. ${suggestionText}` : suggestionText;
+                    handlePromptSuggestionsChange(promptSuggestions + addition);
+                  }
+                  
+                  setRegenerateModal(null);
+                  await handleGeneratePose(targetPoseId, undefined, undefined, suggestionText);
+                }}
+                className="bg-accent hover:bg-accent-hover text-white font-bold gap-2"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>Regenerate Now</span>
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
 
       {/* Collage Studio Modal */}
