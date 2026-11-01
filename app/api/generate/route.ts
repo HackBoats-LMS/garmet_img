@@ -49,6 +49,9 @@ export async function POST(req: NextRequest) {
 
     const {
       prompt,
+      borderStyle,
+      tasselStyle,
+      blouseStyle,
       referenceImageUrl,
       referenceImages,
       modelFaceUrl,
@@ -244,14 +247,23 @@ export async function POST(req: NextRequest) {
         `You MUST use the EXACT colors, patterns, motifs, weave texture, and design from these fabric swatches. ` +
         `Instruction: ${garmentMapping}. ` +
         `Do NOT invent new patterns or colors for the provided swatches. The generated garment sections must be a pixel-accurate replication of the provided fabric images.\n` +
-        `CRITICAL ALL-OVER MOTIF CONTINUITY (NO BLANK OR SOLID SECTIONS): When the fabric features an all-over print or repeating motifs (such as geometric block prints, butis, florals, or dots), the motifs MUST cover the entire saree body continuously from waist to feet, across the chest, hips, lap, thighs, and all pleats. In seated poses, the repeating motifs MUST remain clearly visible and continuous across the entire lap and along each fanned pleat—never leave the lap, thighs, or pleat folds as plain, solid, blank, or unprinted dark fabric.\n` +
-        `CRITICAL: DO NOT add beads, hanging pearl drops, tassels, fringes, pom-poms, or latkans to the end of the pallu or the bottom hem of the saree UNLESS they are clearly and explicitly present in the provided reference images. Do NOT invent beads or hanging ornaments; keep hems and pallu ends cleanly stitched and flat.`;
+`CRITICAL SAREE DRAPING ARCHITECTURE & ROLE BOUNDARIES:\n` +
+        `- BODY FABRIC: Forms the skirt, waist pleats, and the diagonal wrap across the chest/bust to the left shoulder.\n` +
+        `- PALLU (ANCHAL): Hangs exclusively from the left shoulder down the back to calf/ankle level. The pallu artwork must face upright/downward in natural gravity, never inverted or wrapped sideways. Under NO circumstances should pallu artwork or contrasting motifs be placed on the front chest or front waist.\n` +
+        `- CHEST WRAP: Must be the MAIN BODY fabric with only ONE decorative border along the outer diagonal edge (across the bust). The inner edge near the neck has NO border.\n` +
+        `- STRICT NO BOX BORDER RULE: Saree borders run strictly along the lengthwise edges (bottom skirt hem and diagonal chest edge). DO NOT frame the pallu or body inside a 4-sided rectangular box border. DO NOT add horizontal borders across the end of the pallu or near the tassels. The pallu end must terminate cleanly into open fabric or fringe/tassels, never boxed with cross borders.\n` +
+        `- CRITICAL ALL-OVER MOTIF CONTINUITY (NO BLANK OR SOLID SECTIONS): When the fabric features repeating motifs, block prints, butis, florals, or dots, preserve their exact relative scale and spacing from the swatch across the entire saree from waist to feet. If the fabric has delicate, small, or spaced embroidered butis/threadwork (such as tiny floral sprigs or miniature motifs on silk/linen), maintain their true delicate size and natural negative spacing—DO NOT blow them up into giant prints or erase them. Motifs must cover the chest, lap, pleats, and thighs continuously without leaving random blank or solid patches.\n` +
+        `- CRITICAL: DO NOT add beads, hanging pearl drops, tassels, fringes, pom-poms, or latkans to the end of the pallu or the bottom hem of the saree UNLESS they are clearly and explicitly present in the provided reference images. Do NOT invent beads or hanging ornaments; keep hems and pallu ends cleanly stitched and flat.`;
 
-      // Add saree design type specific draping instructions
-      if (sareeDesignType === 'contrast_pallu') {
-        imageInstructions += `\nSAREE DRAPE LAYOUT (CONTRAST PALLU — STRICT PLACEMENT): The saree body and pallu have COMPLETELY DIFFERENT designs/patterns. CRITICAL RULES: (1) BODY & DIAGONAL CHEST PLACEMENT: The main Body fabric (the body swatch pattern/dots) must cover the lower skirt, front waist pleats, and wrap diagonally ACROSS THE FRONT CHEST/TORSO to the left shoulder. (2) SINGLE-EDGE CHEST BORDER: The decorative border runs along ONE EDGE ONLY of the diagonal chest wrap (the outer diagonal edge across the bust). The neckline/collarbone stays clean body fabric with no border. The bottom skirt hem at the feet has the horizontal border. The right hip stays clean body fabric with no extra patches. (3) PALLU PLACEMENT & WAIST TRANSITION: From left shoulder to waist level, the hanging drape is body fabric. From waist level down to the floor, it transitions into the contrasting Pallu artwork. (4) NO INVENTED BEADS OR TASSELS: Keep the bottom hem of the saree and the end of the pallu clean, flat, and straight. DO NOT add hanging beads, tassels, pearls, or latkans unless explicitly visible in the uploaded fabric photos. (5) BLOUSE PLACEMENT: The blouse swatch must be used solely for the fitted stitched blouse top. Maintain crisp, clean separation without blending.`;
-      } else if (sareeDesignType === 'half_half') {
-        imageInstructions += `\nSAREE DRAPE LAYOUT (HALF-AND-HALF): This saree has two distinctly different halves. The LOWER half (from waist down to feet, including pleats) uses one design/color, and the UPPER half (chest drape and pallu from shoulder) uses a different design/color. The transition between the two halves should be a clean horizontal boundary approximately at the hip/waist level. Both halves must retain their individual patterns without blending.`;
+      // Saree design mode routing
+      
+      if (sareeDesignType === 'dual_tier_pleats') {
+        imageInstructions += '\nCRITICAL COMPLEX DUAL-TIER SAREE ARCHITECTURE (INDUSTRY PROPORTIONAL SCALE & ZONE MAPPING):\n' +
+          '- UPPER BODY & CHEST WRAP (75%-80% OF GARMENT HEIGHT): The base fabric (Image 1) must cover the diagonal chest wrap, bust drape, waist, hips, and the upper 80% of the skirt and pleats (from waist continuously down past knees to lower shin). Motifs must remain continuous with zero misplaced artwork.\n' +
+          '- LOWER SKIRT & PLEAT ART SCALE (STRICTLY 15%-20% HEIGHT ONLY): The separate decorative pleat art / peacock panel is a LOWER HEM BORDER BAND occupying ONLY the bottom 15% to 20% of the skirt (from floor up to lower shin/ankle, approx 8-10 inches high). DO NOT stretch or enlarge this artwork up to the knees, thighs, or waist. It must sit proportionally as a ground-level border ribbon.\n' +
+          '- PALLU SCALE & SLEEK SHOULDER DRAPE (6-8 INCHES / 18CM WIDTH): The pallu over the left shoulder must be an elegant, neatly pleated and pinned shoulder drape (approx 15-20cm / 6-8 inches wide), hanging straight down behind the left arm to calf/ankle level. DO NOT drape the pallu as a wide, oversized blanket, poncho, or loose shawl covering the model\'s torso or side.\n' +
+          '- BORDER RIBBON ACCURACY: Lengthwise edges along the chest wrap and bottom hem must replicate the exact longitudinal border ribbon swatch (plain woven zari / selvedge ribbon). Absolutely NO contrasting floral, vine, or pictorial ribbons along the neckline or bust.\n' +
+          '- BLOUSE: Tailored fitted blouse precisely matching the blouse swatch. Crisp clean boundaries between all fabric zones.';
       }
     }
 
@@ -290,7 +302,7 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
     // Default template fallbacks (if not configured in DB)
     const fallbackSystemPrompt = 'Commercial fashion photoshoot for luxury Indian garments brand. Masterpiece, ultra-sharp focus, photorealistic 8k resolution, editorial Vogue India and Harpers Bazaar style.';
     const fallbackCamera = 'Shot on Hasselblad H6D-100c medium format camera paired with HC 100mm f/2.2 portrait lens. Superb optical sharpness, razor-sharp focus, crisp details, hyper-realistic depth of field, 8K UHD commercial fashion catalogue photography, true color reproduction, zero digital artifacting. Eye-level (peer POV), face always visible.';
-    const fallbackNegative = 'bad anatomy, deformed fingers, fused fingers, too many fingers, missing fingers, broken wrist, extra limbs, mutated hands, plastic skin, doll-like face, mannequin, oversaturated cartoon, 3d render, CGI, digital drawing, blur, out of focus, soft focus, low resolution, artifacts, poorly drawn face, asymmetric eyes, distorted fabric patterns, floating jewelry, melting jewelry, unnatural fabric tension, watermark, signature, blurry text, cropped head, unnatural poses, bright flash, evening bulb light, garish colors, pattern behind print, hanging beads, beads at hem, dangling beads, unwanted tassels, fringe, latkans, pom-poms at hem, dangling tassels at saree border, plain unprinted lap, solid unprinted pleats, blank fabric patches on lap, unprinted thighs, missing motifs on skirt, blank fabric on lap';
+    const fallbackNegative = 'bad anatomy, deformed fingers, fused fingers, too many fingers, missing fingers, broken wrist, extra limbs, mutated hands, plastic skin, doll-like face, mannequin, oversaturated cartoon, 3d render, CGI, digital drawing, blur, out of focus, soft focus, low resolution, artifacts, poorly drawn face, asymmetric eyes, distorted fabric patterns, floating jewelry, melting jewelry, unnatural fabric tension, watermark, signature, blurry text, cropped head, unnatural poses, bright flash, evening bulb light, garish colors, pattern behind print, hanging beads, beads at hem, dangling beads, unwanted tassels, fringe, latkans, pom-poms at hem, dangling tassels at saree border, plain unprinted lap, solid unprinted pleats, blank fabric patches on lap, unprinted thighs, missing motifs on skirt, blank fabric on lap, box border, rectangular framed border, border enclosing all four sides of pallu, horizontal border across pallu, pallu on chest, inverted pallu, upside down pallu design, fake chest border, invented neck border, misplaced pleat art on chest, distorted butti scale, giant enlarged butis, oversized pallu, wide blanket pallu, loose shawl pallu, oversized peacock border, tall pleat art, pleat art extending to knees, pleat art extending to thighs, giant lower border';
     
     const sysPrompt = template?.systemPrompt || fallbackSystemPrompt;
     const camSettings = template?.cameraSettings || fallbackCamera;
@@ -477,8 +489,17 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
         const palluKey = uploadedKeys.find(k => k !== bodyKey && (k.toLowerCase().includes('pallu') || k.toLowerCase().includes('border'))) || (uploadedKeys.length > 1 ? uploadedKeys[1] : null);
         const blouseKey = uploadedKeys.find(k => k !== bodyKey && k !== palluKey && k.toLowerCase().includes('blouse')) || (uploadedKeys.length > 2 ? uploadedKeys[2] : null);
 
+        const pleatArtKey = uploadedKeys.find(k => k.toLowerCase().includes('pleat'));
+        const ribbonKey = uploadedKeys.find(k => k.toLowerCase().includes('ribbon') || k.toLowerCase().includes('border_ribbon'));
+
         if (bodyKey && uploadedImages[bodyKey]) {
-          v2Items.push({ source: uploadedImages[bodyKey], label: 'saree body fabric.' });
+          v2Items.push({ source: uploadedImages[bodyKey], label: pleatArtKey ? 'upper body and chest fabric (dots / base fabric).' : 'saree body fabric.' });
+        }
+        if (pleatArtKey && uploadedImages[pleatArtKey]) {
+          v2Items.push({ source: uploadedImages[pleatArtKey], label: 'lower skirt and pleat art (peacock / kalamkari lower panel).' });
+        }
+        if (ribbonKey && uploadedImages[ribbonKey]) {
+          v2Items.push({ source: uploadedImages[ribbonKey], label: 'longitudinal edge border ribbon (zari tape/selvedge edge).' });
         }
         if (palluKey && uploadedImages[palluKey]) {
           v2Items.push({ source: uploadedImages[palluKey], label: 'pallu and border.' });
@@ -670,22 +691,46 @@ Photo quality: natural skin texture, realistic hands, sharp visible fabric weave
     console.log(`[Kie.ai] Model: ${finalKieModel} | input_urls: ${inputUrls.length}`);
     console.log(`[Kie.ai] Submitting task to ${endpoint}...`);
 
-    let submitRes = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${kieApiKeyBearer}`,
-      },
-      body: JSON.stringify(kieRequestBody),
-    });
+    let submitRes: Response | null = null;
+    let submitText = '';
+    const maxRetries = 3;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        submitRes = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${kieApiKeyBearer}`,
+          },
+          body: JSON.stringify(kieRequestBody),
+        });
 
-    let submitText = await submitRes.text();
-    console.log(`[Kie.ai] Submit response status: ${submitRes.status} \n[Kie.ai] Full Response:`, submitText);
+        submitText = await submitRes.text();
+        console.log(`[Kie.ai] Submit attempt ${attempt} status: ${submitRes.status}`);
 
-    if (!submitRes.ok) {
+        if (submitRes.ok) break;
+
+        const isBusy = submitRes.status === 429 || submitRes.status === 503 || submitRes.status === 502 || submitText.toLowerCase().includes('busy');
+        if (isBusy && attempt < maxRetries) {
+          console.warn(`[Kie.ai] Server busy on attempt ${attempt}. Retrying in ${attempt * 2000}ms...`);
+          await new Promise(r => setTimeout(r, attempt * 2000));
+          continue;
+        }
+        break;
+      } catch (netErr: any) {
+        console.warn(`[Kie.ai] Network error on attempt ${attempt}:`, netErr?.message);
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, attempt * 2000));
+          continue;
+        }
+        throw netErr;
+      }
+    }
+
+    if (!submitRes || !submitRes.ok) {
       return NextResponse.json(
-        { error: `Kie.ai Submit Error (${submitRes.status}): ${submitText}` },
-        { status: submitRes.status }
+        { error: `Kie.ai Submit Error (${submitRes?.status || 500}): ${submitText}` },
+        { status: submitRes?.status || 500 }
       );
     }
 
