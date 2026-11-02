@@ -62,7 +62,7 @@ export const CATEGORY_POSES_MAP: Record<string, PoseDefinition[]> = {
       category: 'standing',
       name: '2. The Classic Front Stand',
       description: 'Full head-to-toe front standing catalog view — showing full silhouette and pleats fall',
-      promptSnippet: 'Full-length front standing portrait at eye-level, subtle 15-degree body turn towards soft natural light. Left hand resting naturally by her side, right hand gently holding the woven pallu edge at waist height to clearly display the full width of the zari border, crisp vertical waist pleats, and clean floor-length fall of the saree. Poised, dignified expression of a modern Indian woman.',
+      promptSnippet: 'Full-length front standing portrait at eye-level, subtle 15-degree body turn towards soft natural light. Left hand resting naturally by her side, right hand gently holding the woven pallu edge at waist height to clearly display the full width of the authentic saree border, crisp vertical waist pleats, and clean floor-length fall of the saree. Poised, dignified expression of a modern Indian woman.',
       defaultSample: '/poses/saree_pose_front.jpg',
     },
     {
@@ -89,7 +89,7 @@ export const CATEGORY_POSES_MAP: Record<string, PoseDefinition[]> = {
       category: 'detail',
       name: '5. The Glance',
       description: 'Waist-up portrait with soft glance — close-up on neckline and chest motifs',
-      promptSnippet: 'Close-up chest-up portrait, soft gaze looking just past the camera, creating a warm human connection. One hand lightly raised near the collarbone or touching a delicate earring. Intimate focus on the rich saree texture across the chest, the pallu border, and subtle natural skin texture.',
+      promptSnippet: 'Close-up chest-up portrait, soft gaze looking just past the camera, creating a warm human connection. One hand lightly raised near the collarbone or touching a delicate earring. Intimate focus on the authentic saree texture across the chest, the authentic reference border, and subtle natural skin texture.',
       defaultSample: '/poses/saree_pose_4.jpg',
     },
     {
@@ -98,7 +98,7 @@ export const CATEGORY_POSES_MAP: Record<string, PoseDefinition[]> = {
       category: 'detail',
       name: '6. The Pallu Cascade',
       description: 'Three-quarter rear view — showing full pallu back design and blouse back cut',
-      promptSnippet: 'Three-quarter rear portrait view. The model is standing poised, gently turning her head to look back over her left shoulder towards the camera. Prominently showcases the full majestic fall of the heavy zari pallu cascading down her back, along with the fitted blouse back neckline, dori tassels, and neat hair updo adorned with fresh jasmine (gajra).',
+      promptSnippet: 'Three-quarter rear portrait view. The model is standing poised, gently turning her head to look back towards the camera over her shoulder. Prominently showcases the full, elegant fall of the pallu cascading down her back, displaying the complete decorative artwork from the Pallu reference swatch framed by a continuous, unbroken lengthwise border along the outer drape, along with the fitted blouse back neckline, dori tassels, and neat hair updo adorned with fresh jasmine (gajra).',
       defaultSample: '/poses/saree_pose_5.jpg',
     },
   ],

@@ -207,6 +207,64 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       }
       return slots;
     }
+
+    if (sareeDesignType === 'delicate_buttis') {
+      const slots = [];
+      for (const slot of template.imageSlots) {
+        if (slot.id.toLowerCase().includes('body') || slot.id.toLowerCase().includes('garment')) {
+          slots.push({
+            ...slot,
+            name: 'Saree Body (Overall Field)',
+            description: 'Spread of fabric showing overall color and natural spacing between motifs.',
+          });
+          slots.push({
+            id: 'macro_motif',
+            name: '🌸 Micro-Motif / Flower Close-Up (Macro Zoom)',
+            description: 'Tight cropped close-up of 1-3 flowers/buttis. Lets the AI see exact petals, leaves & embroidery stitches.',
+            isRequired: false,
+          });
+        } else {
+          slots.push(slot);
+        }
+      }
+      return slots;
+    }
+
+    if (sareeDesignType === 'dual_contrasting_borders') {
+      const slots = [];
+      for (const slot of template.imageSlots) {
+        if (slot.id.toLowerCase().includes('body') || slot.id.toLowerCase().includes('garment')) {
+          slots.push({
+            ...slot,
+            name: 'Saree Body & Lower Skirt Border (Hemline)',
+            description: 'Body fabric with lower hemline border. Renders across skirt, pleats, and feet.',
+          });
+          slots.push({
+            id: 'upper_border',
+            name: '🎭 Upper Chest Border (Torso Wrap)',
+            description: 'Top edge border swatch. Strictly rendered along the diagonal chest drape across the bust.',
+            isRequired: false,
+          });
+        } else {
+          slots.push(slot);
+        }
+      }
+      return slots;
+    }
+
+    if (sareeDesignType === 'lower_border_only') {
+      return template.imageSlots.map(slot => {
+        if (slot.id.toLowerCase().includes('body') || slot.id.toLowerCase().includes('garment')) {
+          return {
+            ...slot,
+            name: 'Saree Body & Lower Hem Border',
+            description: 'Border is strictly along the lower hem. Chest drape will be rendered with a clean plain edge (zero border).',
+          };
+        }
+        return slot;
+      });
+    }
+
     return template.imageSlots;
   }, [template?.imageSlots, isSaree, sareeDesignType]);
 
@@ -895,13 +953,15 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
     const backgroundSetting = selectedBackground ? `Background Setting: ${selectedBackground}.` : 'Background Setting: high-end luxury fashion studio.';
 
-    const originalGarmentDrapeDetails = 'CRITICAL INSTRUCTION: You MUST strictly replicate the EXACT patterns, motif scale, shapes, and border placements shown in the provided reference fabric images. Do NOT invent generic patterns. Do NOT mix or blend the patterns from the different uploaded images. The fabric must be fully opaque and flawlessly continuous—absolutely NO skin showing through the fabric, no sheer patches, and no blending artifacts. CRITICAL LOWER SKIRT PANEL & PLEAT ART INTEGRITY: If the body fabric swatch features a dual-tier design (an upper base fabric with dots/buttas and a wide contrasting pictorial, peacock, floral, or kalamkari art panel along the lower portion): (1) The wide decorative art panel MUST be rendered across the lower skirt and front pleats (from knee level down to the ankles/feet). (2) The diagonal chest drape across the torso to the left shoulder must strictly use the upper base fabric (the dots/buttas) with a subtle clean border edge—NEVER wrap the wide lower skirt pictorial/peacock art panel across the chest, collarbone, or neckline. (3) Both tiers from the body swatch must be preserved: upper skirt with the base pattern, lower skirt with the wide artistic panel. CRITICAL ALL-OVER MOTIF CONTINUITY (NO BLANK OR SOLID SECTIONS): When the fabric has an all-over print, geometric pattern, or motifs, the pattern MUST cover the entire garment body continuously across the chest, waist, pleats, thighs, and lap. In seated poses, the motifs MUST remain fully visible across the entire lap, thighs, and fanned pleats—never leave the lap or pleats as plain, solid, unprinted blank fabric. Natural fabric texture, authentic crisp folds, and graceful drape. CRITICAL HEM & PALLU FINISH RULE: DO NOT add beads, hanging pearl drops, tassels, pom-poms, latkans, or thread fringes to the bottom hem of the saree or the end of the pallu UNLESS they are clearly and explicitly present in the uploaded reference fabric images. Keep all fabric hems and pallu ends cleanly stitched, flat, and straight without any invented hanging beads, ornaments, or tassels.';
+    const originalGarmentDrapeDetails = 'CRITICAL INSTRUCTION: You MUST strictly replicate the EXACT patterns, motif scale, shapes, and border placements shown in the provided reference fabric images. Do NOT invent generic patterns. Do NOT mix or blend the patterns from the different uploaded images. The fabric must be fully opaque and flawlessly continuous—absolutely NO skin showing through the fabric, no sheer patches, and no blending artifacts. CRITICAL ALL-OVER MOTIF CONTINUITY (NO BLANK OR SOLID SECTIONS): When the fabric has an all-over print, geometric pattern, or motifs, the pattern MUST cover the entire garment body continuously across the chest, waist, pleats, thighs, and lap. In seated poses, the motifs MUST remain fully visible across the entire lap, thighs, and fanned pleats—never leave the lap or pleats as plain, solid, unprinted blank fabric. Natural fabric texture, authentic crisp folds, and graceful drape. CRITICAL HEM & PALLU FINISH RULE: DO NOT add beads, hanging pearl drops, tassels, pom-poms, latkans, or thread fringes to the bottom hem of the saree or the end of the pallu UNLESS they are clearly and explicitly present in the uploaded reference fabric images. Keep all fabric hems and pallu ends cleanly stitched, flat, and straight without any invented hanging beads, ornaments, or tassels.';
 
     // Only apply custom draping instructions when an option is explicitly selected; otherwise keep 100% original prompt
     let garmentDrapeDetails = originalGarmentDrapeDetails;
     if (isSaree && sareeDesignType) {
-      if (sareeDesignType === 'contrast_pallu') {
-        garmentDrapeDetails = `${originalGarmentDrapeDetails} SAREE DRAPE LAYOUT (CONTRAST PALLU — STRICT PLACEMENT): The saree body and pallu have COMPLETELY DIFFERENT designs/patterns. CRITICAL RULES: (1) BODY & PLEAT PLACEMENT: The main Body fabric covers the skirt and front waist pleats. If the body swatch has a wide decorative lower panel or artwork (such as a cyan peacock/floral panel), that artwork MUST stay on the lower pleats and lower skirt from knees to feet. The diagonal wrap ACROSS THE FRONT CHEST/TORSO to the left shoulder must strictly use only the upper base body fabric (the dots/buttas). (2) SINGLE-EDGE CHEST BORDER: The chest wrap has only a subtle, clean single-edge border along the outer diagonal edge (across the bust); NEVER put wide lower-skirt pictorial art or peacock panels across the chest. The neckline/collarbone stays clean. The bottom skirt hem at the feet has the horizontal border. (3) PALLU PLACEMENT & WAIST TRANSITION: The separate Pallu swatch artwork hangs exclusively from the left shoulder down the back to calf/ankle level, never on the front chest. (4) NO INVENTED BEADS OR TASSELS: Keep the bottom hem of the saree and the end of the pallu clean, flat, and straight. DO NOT add hanging beads, tassels, pearls, or latkans unless explicitly visible in the uploaded fabric photos. (5) BLOUSE PLACEMENT: The blouse swatch must be used solely for the fitted stitched blouse top. Maintain crisp, clean separation without blending.`;
+      if (sareeDesignType === 'dual_tier_pleats') {
+        garmentDrapeDetails = `${originalGarmentDrapeDetails} CRITICAL LOWER SKIRT PANEL & PLEAT ART INTEGRITY: The wide decorative art panel MUST be rendered across the lower skirt and front pleats (from knee level down to the ankles/feet). The diagonal chest drape across the torso to the left shoulder must strictly use the upper base fabric (the dots/buttas) with a subtle clean border edge—NEVER wrap the wide lower skirt pictorial art panel across the chest, collarbone, or neckline.`;
+      } else if (sareeDesignType === 'contrast_pallu') {
+        garmentDrapeDetails = `${originalGarmentDrapeDetails} SAREE DRAPE LAYOUT (CONTRAST PALLU — STRICT PLACEMENT): The saree body and pallu have COMPLETELY DIFFERENT designs/patterns. CRITICAL RULES: (1) BODY & PLEAT PLACEMENT: The main Body fabric covers the skirt and front waist pleats. (2) SINGLE-EDGE CHEST BORDER: The chest wrap has only a subtle, clean single-edge border along the outer diagonal edge (across the bust). The bottom skirt hem at the feet has the horizontal border. (3) PALLU PLACEMENT & WAIST TRANSITION: The separate Pallu swatch artwork hangs exclusively from the left shoulder down the back to calf/ankle level, never on the front chest. (4) NO INVENTED BEADS OR TASSELS: Keep the bottom hem of the saree and the end of the pallu clean, flat, and straight. (5) BLOUSE PLACEMENT: The blouse swatch must be used solely for the fitted stitched blouse top. Maintain crisp, clean separation without blending.`;
       } else if (sareeDesignType === 'half_half') {
         garmentDrapeDetails = `${originalGarmentDrapeDetails} SAREE DRAPE LAYOUT (HALF-AND-HALF): This saree has two distinctly different halves. The LOWER half (from waist down to feet, including pleats) uses one design/color, and the UPPER half (chest drape and pallu from shoulder) uses a different design/color. The transition between the two halves should be a clean horizontal boundary approximately at the hip/waist level. Both halves must retain their individual patterns without blending.`;
       }
@@ -948,7 +1008,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          negativePrompt: `doll, plastic skin, barbie doll, mannequin, porcelain face, 3d render, CGI, digital illustration, cartoon, anime, airbrushed, wax figure, fake eyes, artificial skin, smooth skin filter, oversaturated, blurry, flat fabric swatch, cloth only, fabric texture without person, textile pattern sample, no human, no person, bad anatomy, deformed limbs, deformed fingers, extra limbs, mutated hands, asymmetric eyes, distorted fabric patterns, watermark, signature, blurry text, cropped head, unnatural poses, hanging beads, beads at hem, dangling beads, unwanted tassels, fringe, latkans, pom-poms at hem, dangling tassels at saree border, plain unprinted lap, solid unprinted pleats, blank fabric patches on lap, unprinted thighs, missing body motifs on skirt, blank fabric on lap${mirrorNegative}`,
+          negativePrompt: `doll, plastic skin, barbie doll, mannequin, porcelain face, 3d render, CGI, digital illustration, cartoon, anime, airbrushed, wax figure, fake eyes, artificial skin, smooth skin filter, oversaturated, blurry, flat fabric swatch, cloth only, fabric texture without person, textile pattern sample, no human, no person, bad anatomy, deformed limbs, deformed fingers, extra limbs, mutated hands, asymmetric eyes, distorted fabric patterns, watermark, signature, blurry text, cropped head, unnatural poses, hanging beads, beads at hem, dangling beads, unwanted tassels, fringe, latkans, pom-poms at hem, dangling tassels at saree border, plain unprinted lap, solid unprinted pleats, blank fabric patches on lap, unprinted thighs, missing body motifs on skirt, blank fabric on lap, broken border, fragmented border band, interrupted border ribbon, sliced border, disjointed border, blurry border edge, disappearing border, half border, fake chest border, invented neck border, gold foliage on chest, golden leaf spray, chest branch embroidery, mismatched chest border, contrasting bust border, invented gold sleeve cuff, fake gold blouse border${mirrorNegative}`,
           referenceImageUrl: rawGarmentRef,
           modelFaceUrl: compressedModelFace,
           posePreviewUrl: pose.previewImage || null,
@@ -1358,13 +1418,22 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                 <div>
                   <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase mb-1.5">Saree Layout Mode</label>
                   <select value={sareeDesignType} onChange={e => setSareeDesignType(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent">
-                    <option value="">Default (Standard 3 Swatches — Uniform / All-Over Saree)</option>
+                    <option value="">Default (Symmetric — Both Lengthwise Borders are Identical)</option>
+                    <option value="delicate_buttis">🌸 Delicate Buttis & Embroidered Flowers (Unlocks Close-Up Macro Slot)</option>
+                    <option value="lower_border_only">📍 Lower Border Only (Plain Chest Wrap, No Top Border)</option>
+                    <option value="dual_contrasting_borders">🎭 Dual Contrasting Borders (Unlocks Dedicated Upper Border Slot)</option>
                     <option value="dual_tier_pleats">✨ Complex Saree (Separate Upper Chest + Lower Skirt Art + Border Ribbon)</option>
                   </select>
                   <p className="text-[10px] text-charcoal-muted mt-1">
-                    {sareeDesignType === 'dual_tier_pleats'
+                    {sareeDesignType === 'delicate_buttis'
+                      ? '🔍 Macro Detail Mode Active: Unlocks a dedicated "🌸 Micro-Motif / Flower Close-Up" slot below. Upload a tight zoom of 1-3 flowers so the AI renders exact petals and embroidery instead of generic dots.'
+                      : sareeDesignType === 'lower_border_only'
+                      ? '📍 Single Border Mode: Saree has a border only along the bottom hem at the feet. The diagonal chest drape is rendered with a clean plain edge (no fake border).'
+                      : sareeDesignType === 'dual_contrasting_borders'
+                      ? '🎭 Ganga-Jamuna Mode Active: Unlocks a dedicated "Upper Chest Border" slot below so the AI renders different borders for the chest drape and lower hem.'
+                      : sareeDesignType === 'dual_tier_pleats'
                       ? '🎯 Complex Mode Active: Unlocks dedicated "Lower Skirt & Pleat Art" and "Border Ribbon" upload slots below for pixel-accurate zone mapping without hallucinations.'
-                      : 'Standard 3-swatch upload for regular sarees (Body, Pallu, Blouse). Select "Complex Saree" if the saree has lower pleat/skirt artwork.'}
+                      : 'Standard symmetrical saree (Body, Pallu, Blouse). Upper chest border, lower hem, and pallu outer edge will be identical clones of your reference border.'}
                   </p>
                 </div>
               )}

@@ -195,34 +195,40 @@ export async function POST(req: NextRequest) {
       }
     };
 
-    // Add all uploaded fabric images (body, pallu, blouse, etc.)
+    // Deterministic, canonical slot ordering: Body -> Pleats -> Ribbon -> Pallu -> Blouse
+    const canonicalOrder = ['body', 'macro_motif', 'pleat_art', 'border_ribbon', 'border', 'pallu', 'blouse'];
+    const activeSlotsOrdered: { id: string; label: string; dataUrl: string }[] = [];
+
     if (uploadedImages && typeof uploadedImages === 'object') {
-      const slotNames = Object.keys(uploadedImages);
-      for (const slotId of slotNames) {
-        const imgData = uploadedImages[slotId] as string;
-        if (imgData) {
-          addImagePart(imgData, `fabric_${slotId}`);
+      const keys = Object.keys(uploadedImages);
+      // Sort keys based on canonical order
+      const sortedKeys = keys.sort((a, b) => {
+        const getRank = (k: string) => {
+          const lk = k.toLowerCase();
+          if (lk.includes('body') || lk.includes('garment')) return 0;
+          if (lk.includes('macro') || lk.includes('motif')) return 1;
+          if (lk.includes('upper_border') || lk.includes('top_border')) return 2;
+          if (lk.includes('pleat')) return 3;
+          if (lk.includes('ribbon')) return 3;
+          if (lk.includes('border') && !lk.includes('pallu')) return 4;
+          if (lk.includes('pallu')) return 5;
+          if (lk.includes('blouse')) return 6;
+          return 10;
+        };
+        return getRank(a) - getRank(b);
+      });
+
+      for (const slotId of sortedKeys) {
+        const img = uploadedImages[slotId];
+        if (img) {
+          const cleanLabel = slotId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+          activeSlotsOrdered.push({ id: slotId, label: cleanLabel, dataUrl: img });
+          addImagePart(img, `fabric_${slotId}`);
         }
       }
     }
 
-    // Also add from referenceImages array (these may include fabric + model face)
-    if (Array.isArray(referenceImages)) {
-      for (let i = 0; i < referenceImages.length; i++) {
-        const img = referenceImages[i];
-        // Avoid duplicating images already added from uploadedImages
-        if (img && !Object.values(uploadedImages || {}).includes(img)) {
-          addImagePart(img, `reference_${i}`);
-        }
-      }
-    }
-
-    // Add single reference image if no others were found
-    if (geminiImageParts.length === 0 && referenceImageUrl) {
-      addImagePart(referenceImageUrl, 'garment_reference');
-    }
-
-    // Add model face image
+    // Add model face image (strictly after fabric swatches)
     if (modelFaceUrl) {
       addImagePart(modelFaceUrl, 'model_face');
     }
@@ -238,32 +244,60 @@ export async function POST(req: NextRequest) {
     const garmentMapping = template?.garmentType || defaultGarmentType;
 
     // Inject admin-described fabric mapping
-    if (fabricCount > 0) {
-      const labelDescriptions = slotLabels.map((label, i) => {
-        const cleanLabel = label.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        return `Image ${i + 1}: ${cleanLabel}`;
+    if (activeSlotsOrdered.length > 0) {
+      const labelDescriptions = activeSlotsOrdered.map((slot, i) => {
+        return `Image ${i + 1}: ${slot.label}`;
       });
       imageInstructions = `I am providing ${fabricCount} reference fabric swatch image(s) in order:\n${labelDescriptions.join('\n')}\n` +
         `You MUST use the EXACT colors, patterns, motifs, weave texture, and design from these fabric swatches. ` +
         `Instruction: ${garmentMapping}. ` +
         `Do NOT invent new patterns or colors for the provided swatches. The generated garment sections must be a pixel-accurate replication of the provided fabric images.\n` +
+        `CRITICAL VISUAL GROUND TRUTH OVERRIDE: The visual colors, fabric textures, motifs, and borders shown in the uploaded fabric swatches represent the ABSOLUTE and FINAL ground truth. If any product name or text prompt conflicts with the visual colors, weave, or motifs in the reference swatch images, the visual reference swatches STRICTLY take precedence.\n` +
 `CRITICAL SAREE DRAPING ARCHITECTURE & ROLE BOUNDARIES:\n` +
         `- BODY FABRIC: Forms the skirt, waist pleats, and the diagonal wrap across the chest/bust to the left shoulder.\n` +
-        `- PALLU (ANCHAL): Hangs exclusively from the left shoulder down the back to calf/ankle level. The pallu artwork must face upright/downward in natural gravity, never inverted or wrapped sideways. Under NO circumstances should pallu artwork or contrasting motifs be placed on the front chest or front waist.\n` +
-        `- CHEST WRAP: Must be the MAIN BODY fabric with only ONE decorative border along the outer diagonal edge (across the bust). The inner edge near the neck has NO border.\n` +
-        `- STRICT NO BOX BORDER RULE: Saree borders run strictly along the lengthwise edges (bottom skirt hem and diagonal chest edge). DO NOT frame the pallu or body inside a 4-sided rectangular box border. DO NOT add horizontal borders across the end of the pallu or near the tassels. The pallu end must terminate cleanly into open fabric or fringe/tassels, never boxed with cross borders.\n` +
-        `- CRITICAL ALL-OVER MOTIF CONTINUITY (NO BLANK OR SOLID SECTIONS): When the fabric features repeating motifs, block prints, butis, florals, or dots, preserve their exact relative scale and spacing from the swatch across the entire saree from waist to feet. If the fabric has delicate, small, or spaced embroidered butis/threadwork (such as tiny floral sprigs or miniature motifs on silk/linen), maintain their true delicate size and natural negative spacing—DO NOT blow them up into giant prints or erase them. Motifs must cover the chest, lap, pleats, and thighs continuously without leaving random blank or solid patches.\n` +
-        `- CRITICAL: DO NOT add beads, hanging pearl drops, tassels, fringes, pom-poms, or latkans to the end of the pallu or the bottom hem of the saree UNLESS they are clearly and explicitly present in the provided reference images. Do NOT invent beads or hanging ornaments; keep hems and pallu ends cleanly stitched and flat.`;
+        `- PALLU (ANCHAL) STRICT MOTIF ISOLATION & ZERO TEXTURE BLEED: The Pallu swatch features a distinct, dedicated decorative artwork (such as geometric tiles, folk prints, or pictorial panels). CRITICAL: Under NO circumstances should the repeating body print (e.g. vines, butis, florals) be copied, mixed, or bled into the pallu artwork. Even in monochrome sarees sharing similar color palettes, the pallu must preserve its EXACT unique grid, tiles, and motifs from the Pallu Swatch with crisp, razor-sharp fidelity.
+- PALLU GRAVITATIONAL ORIENTATION & PLEAT SCALE (6-8 INCHES / 18CM): The pallu is anchored securely at the LEFT SHOULDER and falls straight downward behind the left arm to calf/ankle level. The decorative cross-border must hang horizontally along the BOTTOM in natural gravity—NEVER rotate the pallu 90° sideways or hang it like an apron across the side. It must be neatly gathered into sleek shoulder pleats (approx 15 to 20 cm wide), keeping the back of the blouse and waist cleanly visible.\n` +
+        `- LENGTHWISE BORDER FIDELITY & UNBROKEN CONTINUITY (ZERO FABRICATION):
+  * The outer border running along the length of the saree, across the chest wrap, and down the cascading pallu must be a solid, continuous, unbroken, razor-sharp ribbon from shoulder to hemline.
+  * Faithfully replicate the exact geometry, motifs, weave structure, and colors directly from the uploaded reference border swatch. Under NO circumstances should borders be simplified, broken, fragmented, or substituted with generic wavy ribbons or invented gold trim.
+  * UNBROKEN CASCADE: The border must never vanish, slice, break into segments, or turn into a thin single line midway down the drape.
+  * MOTIF PURITY: Never bleed or blend the pallu cross-border motifs into the lengthwise saree border.
+  * LOWER SKIRT BORDER FIDELITY: The bottom hem running along the feet of the saree must replicate the EXACT horizontal border pattern and embroidery from the reference fabric. DO NOT replace the lower border with random plain fabric or invent a different motif.
+- PALLU HORIZONTAL & CROSS-BORDERS: If the reference Pallu swatch features horizontal cross-borders, framing bands, or dividing ribbons between the body and the pallu, faithfully replicate them in their natural horizontal orientation across the width of the pallu drape.
+- CRITICAL ALL-OVER MOTIF CONTINUITY (NO BLANK OR SOLID SECTIONS): When the fabric features repeating motifs, block prints, butis, florals, or dots, preserve their exact relative scale and spacing from the swatch across the entire saree from waist to feet. If the fabric has delicate, small, or spaced embroidered butis/threadwork (such as tiny floral sprigs or miniature motifs on silk/linen), maintain their true delicate size and natural negative spacing—DO NOT blow them up into giant prints or erase them. Motifs must cover the chest, lap, pleats, and thighs continuously without leaving random blank or solid patches.
+- CRITICAL: DO NOT add beads, hanging pearl drops, tassels, fringes, pom-poms, or latkans to the end of the pallu or the bottom hem of the saree UNLESS they are clearly and explicitly present in the provided reference images. Do NOT invent beads or hanging ornaments; keep hems and pallu ends cleanly stitched and flat.
+- BLOUSE STYLING (FALLBACK): When no blouse swatch is uploaded, synthesize an elegantly tailored blouse using the saree base body fabric or clean matching solid tone with clean necklines and sleeves. Strictly NO heavy invented gold zari sleeve cuffs or mismatched borders.`;
 
       // Saree design mode routing
       
-      if (sareeDesignType === 'dual_tier_pleats') {
+      if (sareeDesignType === 'delicate_buttis') {
+        imageInstructions += '\nCRITICAL EMBROIDERED BUTTI & MACRO MOTIF FIDELITY:\n' +
+          '- EXACT DUAL-MOTIF REPLICATION: The saree body features delicate, miniature embroidered motifs (both tiny floral buttis and subtle geometric diamond/cross-stitch buttis). Use the provided swatches to replicate their EXACT botanical shape, petals, leaves, and geometric threadwork with high fidelity.\n' +
+          '- TRUE DELICATE SCALE & SPACING: Motifs must remain small, delicate, and evenly spaced with generous negative space (plain base silk/fabric field between buttis) exactly as shown in the overall body swatch. Under NO circumstances should buttis be replaced with generic round circles, dots, or enlarged printed mandalas.\n' +
+          '- STRICT ZERO CHEST EMBROIDERY: The torso wrap, bust, and pleats must ONLY feature the small repeating buttis from the swatch. Absolutely NO golden foliage, branch sprays, leaves, or ornamental chest embroidery.\n' +
+          '- SYMMETRICAL LENGTHWISE BORDER INTEGRITY: The horizontal border along the bottom hemline at the feet, the diagonal chest drape, and the outer pallu edge must replicate the exact reference border from the swatch without substituting gold or alternate patterns.';
+      } else if (sareeDesignType === 'lower_border_only') {
+        imageInstructions += '\nCRITICAL SINGLE-BORDER ARCHITECTURE (LOWER HEMLINE ONLY):\n' +
+          '- CHEST WRAP ZERO-BORDER RULE: The diagonal drape across the chest and bust to the left shoulder is PLAIN body fabric with absolutely NO border band, NO lace, and NO ribbon along the edge. Keep the inner and outer diagonal edges of the chest drape clean and borderless.\n' +
+          '- SKIRT HEMLINE BORDER: The decorative border from the Body swatch is strictly confined to the horizontal lower skirt hemline running along the floor at the feet.';
+      } else if (sareeDesignType === 'dual_contrasting_borders') {
+        imageInstructions += '\nCRITICAL DUAL CONTRASTING BORDERS (GANGA-JAMUNA ARCHITECTURE):\n' +
+          '- UPPER CHEST DRAPE BORDER: The diagonal border running across the bust to the left shoulder must strictly and exclusively replicate the Upper Border swatch (Image 2/Upper Border).\n' +
+          '- LOWER SKIRT HEMLINE BORDER: The horizontal border running along the floor at the feet must strictly replicate the Lower Border / Body swatch.\n' +
+          '- PALLU CASCADE OUTER BORDER: Replicates the Upper Border running down from the shoulder along the outer drape.\n' +
+          '- ZERO CROSS-BLEED: Do NOT mix the upper and lower border designs; maintain their separate distinct colors and patterns across their respective zones.';
+      } else if (sareeDesignType === 'dual_tier_pleats') {
         imageInstructions += '\nCRITICAL COMPLEX DUAL-TIER SAREE ARCHITECTURE (INDUSTRY PROPORTIONAL SCALE & ZONE MAPPING):\n' +
           '- UPPER BODY & CHEST WRAP (75%-80% OF GARMENT HEIGHT): The base fabric (Image 1) must cover the diagonal chest wrap, bust drape, waist, hips, and the upper 80% of the skirt and pleats (from waist continuously down past knees to lower shin). Motifs must remain continuous with zero misplaced artwork.\n' +
           '- LOWER SKIRT & PLEAT ART SCALE (STRICTLY 15%-20% HEIGHT ONLY): The separate decorative pleat art / peacock panel is a LOWER HEM BORDER BAND occupying ONLY the bottom 15% to 20% of the skirt (from floor up to lower shin/ankle, approx 8-10 inches high). DO NOT stretch or enlarge this artwork up to the knees, thighs, or waist. It must sit proportionally as a ground-level border ribbon.\n' +
           '- PALLU SCALE & SLEEK SHOULDER DRAPE (6-8 INCHES / 18CM WIDTH): The pallu over the left shoulder must be an elegant, neatly pleated and pinned shoulder drape (approx 15-20cm / 6-8 inches wide), hanging straight down behind the left arm to calf/ankle level. DO NOT drape the pallu as a wide, oversized blanket, poncho, or loose shawl covering the model\'s torso or side.\n' +
           '- BORDER RIBBON ACCURACY: Lengthwise edges along the chest wrap and bottom hem must replicate the exact longitudinal border ribbon swatch (plain woven zari / selvedge ribbon). Absolutely NO contrasting floral, vine, or pictorial ribbons along the neckline or bust.\n' +
           '- BLOUSE: Tailored fitted blouse precisely matching the blouse swatch. Crisp clean boundaries between all fabric zones.';
+      } else {
+        // Default: Symmetrical Saree Borders
+        imageInstructions += '\nCRITICAL SYMMETRICAL LENGTHWISE BORDERS (DEFAULT ARCHITECTURE):\n' +
+          '- EXACT 1:1 BORDER CLONING: The saree features identical borders on both lengthwise edges. The diagonal chest drape across the bust, the lower skirt hemline at the feet, and the outer vertical edge of the cascading pallu must all be identical 1:1 clones of the reference border from the Body swatch.\n' +
+          '- ZERO ALTERNATE BORDERS: Under NO circumstances should the chest border or pallu border differ in pattern, color, or width from the lower hem border. Absolutely NO invented gold, metallic, or contrasting ribbons.';
       }
     }
 
@@ -302,7 +336,7 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
     // Default template fallbacks (if not configured in DB)
     const fallbackSystemPrompt = 'Commercial fashion photoshoot for luxury Indian garments brand. Masterpiece, ultra-sharp focus, photorealistic 8k resolution, editorial Vogue India and Harpers Bazaar style.';
     const fallbackCamera = 'Shot on Hasselblad H6D-100c medium format camera paired with HC 100mm f/2.2 portrait lens. Superb optical sharpness, razor-sharp focus, crisp details, hyper-realistic depth of field, 8K UHD commercial fashion catalogue photography, true color reproduction, zero digital artifacting. Eye-level (peer POV), face always visible.';
-    const fallbackNegative = 'bad anatomy, deformed fingers, fused fingers, too many fingers, missing fingers, broken wrist, extra limbs, mutated hands, plastic skin, doll-like face, mannequin, oversaturated cartoon, 3d render, CGI, digital drawing, blur, out of focus, soft focus, low resolution, artifacts, poorly drawn face, asymmetric eyes, distorted fabric patterns, floating jewelry, melting jewelry, unnatural fabric tension, watermark, signature, blurry text, cropped head, unnatural poses, bright flash, evening bulb light, garish colors, pattern behind print, hanging beads, beads at hem, dangling beads, unwanted tassels, fringe, latkans, pom-poms at hem, dangling tassels at saree border, plain unprinted lap, solid unprinted pleats, blank fabric patches on lap, unprinted thighs, missing motifs on skirt, blank fabric on lap, box border, rectangular framed border, border enclosing all four sides of pallu, horizontal border across pallu, pallu on chest, inverted pallu, upside down pallu design, fake chest border, invented neck border, misplaced pleat art on chest, distorted butti scale, giant enlarged butis, oversized pallu, wide blanket pallu, loose shawl pallu, oversized peacock border, tall pleat art, pleat art extending to knees, pleat art extending to thighs, giant lower border';
+    const fallbackNegative = 'bad anatomy, deformed fingers, fused fingers, too many fingers, missing fingers, broken wrist, extra limbs, mutated hands, plastic skin, doll-like face, mannequin, oversaturated cartoon, 3d render, CGI, digital drawing, blur, out of focus, soft focus, low resolution, artifacts, poorly drawn face, asymmetric eyes, distorted fabric patterns, floating jewelry, melting jewelry, unnatural fabric tension, watermark, signature, blurry text, cropped head, unnatural poses, bright flash, evening bulb light, garish colors, pattern behind print, hanging beads, beads at hem, dangling beads, unwanted tassels, fringe, latkans, pom-poms at hem, dangling tassels at saree border, plain unprinted lap, solid unprinted pleats, blank fabric patches on lap, unprinted thighs, missing motifs on skirt, blank fabric on lap, broken border, fragmented border band, interrupted border ribbon, sliced border, disjointed border, blurry border edge, disappearing border, half border, fake chest border, invented neck border, gold foliage on chest, golden leaf spray, chest branch embroidery, mismatched chest border, contrasting bust border, invented gold sleeve cuff, fake gold blouse border, pallu on chest, inverted pallu, upside down pallu design, misplaced pleat art on chest, distorted butti scale, giant enlarged butis, oversized pallu, wide blanket pallu, loose shawl pallu, curtain pallu covering entire back, unfolded pallu across back, blanket drape across shoulders, mismatched body print, scrambled floral motifs, invented border pattern, generic wavy border, wrong border motifs, substituted lace, blurred border embroidery, scrambled lattice border, hybrid border blending body and pallu, body print inside pallu, pallu texture bleed, body vines mixed into pallu, sideways rotated pallu, horizontal pallu hung vertically, distorted pallu tiles, oversized peacock border, tall pleat art, pleat art extending to knees, pleat art extending to thighs, giant lower border';
     
     const sysPrompt = template?.systemPrompt || fallbackSystemPrompt;
     const camSettings = template?.cameraSettings || fallbackCamera;
@@ -323,8 +357,11 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
 
     const negPrompt = (template?.negativePrompt || fallbackNegative) + mirrorNeg;
     
-    // The pose snippet from DB
-    const posePrompt = dbPose?.promptSnippet || '';
+    // The pose snippet from DB (sanitized to remove legacy zari words that distort non-zari fabrics)
+    const posePrompt = (dbPose?.promptSnippet || '')
+      .replace(/heavy zari pallu/gi, 'authentic pallu')
+      .replace(/zari border/gi, 'saree border')
+      .replace(/zari motifs/gi, 'saree motifs');
     
     // Combine into final prompt
     const fluxPrompt = `${imageInstructions}\n\nUser Additions: ${cleanPrompt}\nPose Direction: ${posePrompt}\nBackground & Vibe: ${dynamicBackground}\nStyling & Persona Rules: ${dynamicStyling}\n\nCRITICAL REQUIREMENTS:\n- Generate an ultra-photorealistic fashion photograph, NOT an illustration, painting, or 3D render.\n- ${sysPrompt}\n- ${camSettings}${mirrorPhysicsRule}\n- ABSOLUTELY NO TEXT, NO LOGOS, NO WATERMARKS, NO MAGAZINE COVERS. The image must be clean of any typographic elements.\n- Extreme emphasis on ultra-realistic human anatomy, highly detailed natural skin texture with visible pores and micro-details, hyper-realistic eyes, and perfect natural fabric draping — reproduce the exact weave structure, surface texture, and color of the uploaded fabric references. Avoid any plastic, smooth, or CGI look. Keep the texture hyper-sharp, tactile, and highly defined with absolutely zero blur or softness.`;
