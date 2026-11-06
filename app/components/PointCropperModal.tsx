@@ -327,8 +327,17 @@ export function PointCropperModal({
   };
 
   // Preset Configurations
-  const applyPreset = (type: 'fit' | 'square' | 'tight' | 'border' | 'pallu') => {
+  const applyPreset = (type: 'fit' | 'square' | 'tight' | 'border' | 'pallu' | 'macro') => {
     switch (type) {
+      case 'macro':
+        // Tight 1-2 motifs center crop (fills 60-70% of crop area)
+        setPoints([
+          { x: 0.30, y: 0.30 },
+          { x: 0.70, y: 0.30 },
+          { x: 0.70, y: 0.70 },
+          { x: 0.30, y: 0.70 },
+        ]);
+        break;
       case 'fit':
         setPoints([
           { x: 0.03, y: 0.03 },
@@ -665,6 +674,14 @@ export function PointCropperModal({
                 📐 Precision Saree Presets:
               </span>
               <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => applyPreset('macro')}
+                  className="px-2.5 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-900 text-xs font-bold text-left transition-colors cursor-pointer border border-purple-200 flex items-center gap-1.5 shadow-xs"
+                  title="Tight crop around 1-2 motifs for maximum AI fidelity"
+                >
+                  <span>🌸 Tight Butti Zoom (1–2 Motifs)</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => applyPreset('square')}

@@ -149,3 +149,5 @@ export function getPosesForCategory(category: string): PoseDefinition[] {
 export const CORE_4_POSES = CATEGORY_POSES_MAP.saree.slice(0, 4);
 export const CORE_5_POSES = CATEGORY_POSES_MAP.saree.slice(0, 5);
 export const CATALOG_15_POSES = CATEGORY_POSES_MAP.saree;
+
+export const TEMPLATE_DEFAULT_POSES = CATEGORY_POSES_MAP;

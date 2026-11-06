@@ -17,6 +17,7 @@ import useDrivePicker from 'react-google-drive-picker';
 import { useGooglePhotosPicker } from '@/app/hooks/useGooglePhotosPicker';
 import { CollageCreator, CollageInputImage } from '@/app/components/CollageCreator';
 import { PointCropperModal } from '@/app/components/PointCropperModal';
+import { compressImageOnClient } from '@/lib/client-compress';
 
 interface TemplateData {
   id: string;
@@ -158,6 +159,15 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       const temp = next[fromId];
       next[fromId] = next[toId];
       next[toId] = temp;
+
+      // If macro motif slot was swapped, reset analysis so user can re-scan manually
+      if (sareeDesignType === 'delicate_buttis') {
+        const isFromMacro = fromId === 'macro_motif' || fromId === 'motif';
+        const isToMacro = toId === 'macro_motif' || toId === 'motif';
+        if (isFromMacro || isToMacro) {
+          setSwatchAnalysis(null);
+        }
+      }
       return next;
     });
   };
@@ -180,15 +190,63 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     if (!template?.imageSlots) return [];
     if (!isSaree) return template.imageSlots;
 
-    if (sareeDesignType === 'dual_tier_pleats') {
-      const slots = [];
-      for (const slot of template.imageSlots) {
-        if (slot.id.toLowerCase().includes('body') || slot.id.toLowerCase().includes('garment')) {
+    const isDelicate = sareeDesignType === 'delicate_buttis';
+    const isComplex = sareeDesignType === 'dual_tier_pleats' || sareeDesignType.startsWith('complex');
+    const isLowerOnly = borderStyle === 'lower_border_only' || borderStyle === 'lower_border_borderless' || sareeDesignType === 'lower_border_only';
+    const isDualBorders = borderStyle === 'different_borders' || 
+      borderStyle === 'dual_contrasting_borders' || 
+      sareeDesignType === 'dual_contrasting_borders' ||
+      (isComplex && borderStyle !== 'symmetric' && !isLowerOnly);
+
+    const slots = [];
+    for (const slot of template.imageSlots) {
+      if (slot.id.toLowerCase().includes('body') || slot.id.toLowerCase().includes('garment')) {
+        let bodyName = 'Saree Body (Overall Field)';
+        let bodyDesc = 'Spread of fabric showing color, weave texture, and motifs.';
+
+        if (isLowerOnly) {
+          bodyName = 'Saree Body & Lower Hem Border';
+          bodyDesc = borderStyle === 'lower_border_borderless'
+            ? 'Body fabric with lower hemline border. Chest wrap is 100% borderless self-fabric; repeating buttis continue seamlessly right to the folded top edge without blank margins.'
+            : 'Body fabric with lower hemline border. Top edge has a neat finished border ribbon (~0.5–1 cm); repeating buttis continue seamlessly right to the border ribbon without blank margins.';
+        } else if (isDualBorders) {
+          bodyName = 'Saree Body & Lower Skirt Border (Hemline)';
+          bodyDesc = 'Body fabric with lower hemline border. Renders across skirt, pleats, and feet.';
+        }
+
+        if (isComplex) {
+          bodyName = 'Upper Body Fabric (Chest & Torso)';
+          bodyDesc = 'Upper base pattern (e.g. polka dots, buttas, or plain chest fabric) for bust and waist drape.';
+        }
+
+        slots.push({
+          ...slot,
+          name: bodyName,
+          description: bodyDesc,
+        });
+
+        // Add Macro Motif slot if Delicate Buttis mode
+        if (isDelicate) {
           slots.push({
-            ...slot,
-            name: 'Upper Body Fabric (Chest & Torso)',
-            description: 'Upper base pattern (e.g. polka dots, buttas, or plain chest fabric) for bust and waist drape.',
+            id: 'macro_motif',
+            name: '🌸 Micro-Motif / Butti Close-Up (Macro Zoom)',
+            description: 'Tight crop around 1–2 repeating motifs/buttis showing exact petals, embroidery stitches, and colors.',
+            isRequired: false,
           });
+        }
+
+        // Add Upper Border slot if Different Borders (Top & Bottom Different)
+        if (isDualBorders && !isComplex) {
+          slots.push({
+            id: 'upper_border',
+            name: '🎭 Upper Chest Border (Torso Wrap)',
+            description: 'Top edge border swatch. Strictly rendered along the diagonal chest drape across the bust.',
+            isRequired: false,
+          });
+        }
+
+        // Add Pleat Art and Ribbon slots if Complex Saree
+        if (isComplex) {
           slots.push({
             id: 'pleat_art',
             name: 'Lower Skirt & Pleat Art (Feet to Knees)',
@@ -201,72 +259,13 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
             description: 'Longitudinal edge ribbon (e.g. woven zari tape or narrow border). Controls chest & hem edge.',
             isRequired: false,
           });
-        } else {
-          slots.push(slot);
         }
+      } else {
+        slots.push(slot);
       }
-      return slots;
     }
-
-    if (sareeDesignType === 'delicate_buttis') {
-      const slots = [];
-      for (const slot of template.imageSlots) {
-        if (slot.id.toLowerCase().includes('body') || slot.id.toLowerCase().includes('garment')) {
-          slots.push({
-            ...slot,
-            name: 'Saree Body (Overall Field)',
-            description: 'Spread of fabric showing overall color and natural spacing between motifs.',
-          });
-          slots.push({
-            id: 'macro_motif',
-            name: '🌸 Micro-Motif / Flower Close-Up (Macro Zoom)',
-            description: 'Tight cropped close-up of 1-3 flowers/buttis. Lets the AI see exact petals, leaves & embroidery stitches.',
-            isRequired: false,
-          });
-        } else {
-          slots.push(slot);
-        }
-      }
-      return slots;
-    }
-
-    if (sareeDesignType === 'dual_contrasting_borders') {
-      const slots = [];
-      for (const slot of template.imageSlots) {
-        if (slot.id.toLowerCase().includes('body') || slot.id.toLowerCase().includes('garment')) {
-          slots.push({
-            ...slot,
-            name: 'Saree Body & Lower Skirt Border (Hemline)',
-            description: 'Body fabric with lower hemline border. Renders across skirt, pleats, and feet.',
-          });
-          slots.push({
-            id: 'upper_border',
-            name: '🎭 Upper Chest Border (Torso Wrap)',
-            description: 'Top edge border swatch. Strictly rendered along the diagonal chest drape across the bust.',
-            isRequired: false,
-          });
-        } else {
-          slots.push(slot);
-        }
-      }
-      return slots;
-    }
-
-    if (sareeDesignType === 'lower_border_only') {
-      return template.imageSlots.map(slot => {
-        if (slot.id.toLowerCase().includes('body') || slot.id.toLowerCase().includes('garment')) {
-          return {
-            ...slot,
-            name: 'Saree Body & Lower Hem Border',
-            description: 'Border is strictly along the lower hem. Chest drape will be rendered with a clean plain edge (zero border).',
-          };
-        }
-        return slot;
-      });
-    }
-
-    return template.imageSlots;
-  }, [template?.imageSlots, isSaree, sareeDesignType]);
+    return slots;
+  }, [template?.imageSlots, isSaree, sareeDesignType, borderStyle]);
 
   // Nano-Banana V2 Clean Pipeline (Defaults to OFF for A/B testing)
   const [nanoBananaV2, setNanoBananaV2] = useState<boolean>(false);
@@ -624,6 +623,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     openPhotosPicker();
   };
   const [analyzingSwatch, setAnalyzingSwatch] = useState(false);
+  const [visionProgress, setVisionProgress] = useState<string>('');
   const [swatchAnalysis, setSwatchAnalysis] = useState<{
     title?: string;
     craft?: string;
@@ -632,57 +632,89 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     borderDesign?: string;
     palluDesign?: string;
     fabricNotes?: string;
+    vision?: {
+      isMultiMotif: boolean;
+      motifCount: number;
+      layoutGrid: string;
+      distinctMotifs: Array<{
+        name: string;
+        archetype: string;
+        paletteDescription: string;
+        colors: string[];
+        cropBase64?: string;
+      }>;
+      autoCroppedMacroBase64?: string;
+      promptDirective: string;
+      hasGoldOrTan: boolean;
+      modelUsed?: string;
+      [key: string]: any;
+    };
   } | null>(null);
 
   // Unified image processing (canvas compression to 1024px jpeg)
+  // Reusable scanner for Micro-Motif close-up using Gemini Vision
+  const scanMacroMotif = async (imgDataUrl: string) => {
+    if (!imgDataUrl) return;
+    try {
+      setAnalyzingSwatch(true);
+      setVisionProgress('Analyzing motifs with Gemini 3.5 Flash Vision...');
+
+      // 1. High-precision Gemini 3.5 Flash Vision Server Analyzer
+      const anRes = await fetch('/api/analyze-swatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: imgDataUrl }),
+      });
+      if (anRes.ok) {
+        const anData = await anRes.json();
+        if (anData?.analysis?.vision) {
+          setSwatchAnalysis(anData.analysis);
+        }
+      }
+    } catch (err) {
+      console.warn('[Macro Motif Analysis] Error:', err);
+    } finally {
+      setAnalyzingSwatch(false);
+      setVisionProgress('');
+    }
+  };
+
+  const handleRescanMacroMotif = async () => {
+    const targetImg =
+      uploadedImages['macro_motif'] ||
+      uploadedImages['motif'] ||
+      uploadedImages['body'] ||
+      uploadedImages['garment'];
+    if (!targetImg) {
+      setValidationError('Please upload a saree body or Micro-Motif photo first before scanning.');
+      return;
+    }
+    setSwatchAnalysis(null);
+    await scanMacroMotif(targetImg);
+  };
+
   const processImageFile = async (slotId: string, file: File) => {
     if (!file || !file.type.startsWith('image/')) return;
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const img = new Image();
-      img.onload = async () => {
-        const canvas = document.createElement('canvas');
-        const MAX_DIM = 1024;
-        let w = img.width, h = img.height;
-        if (w > MAX_DIM || h > MAX_DIM) {
-          if (w > h) { h = Math.round(h * MAX_DIM / w); w = MAX_DIM; }
-          else { w = Math.round(w * MAX_DIM / h); h = MAX_DIM; }
-        }
-        canvas.width = w; canvas.height = h;
-        canvas.getContext('2d')?.drawImage(img, 0, 0, w, h);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
-        setUploadedImages(prev => ({ ...prev, [slotId]: dataUrl }));
-        setValidationError(null);
-
-        // Trigger AI Swatch Vision Analysis for rich micro-textile details
-        try {
-          setAnalyzingSwatch(true);
-          const anRes = await fetch('/api/analyze-swatch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ imageBase64: dataUrl }),
-          });
-          if (anRes.ok) {
-            const anData = await anRes.json();
-            if (anData?.analysis) {
-              setSwatchAnalysis(anData.analysis);
-              if (!productName && anData.analysis.title) {
-                setProductName(anData.analysis.title);
-              }
-              if (!description && anData.analysis.fabricNotes) {
-                setDescription(anData.analysis.fabricNotes);
-              }
-            }
-          }
-        } catch (err) {
-          console.warn('[Swatch Analysis] Error:', err);
-        } finally {
-          setAnalyzingSwatch(false);
+    try {
+      const { dataUrl } = await compressImageOnClient(file, {
+        maxDimension: 2560,
+        quality: 0.94,
+        maxSizeBytes: 3.8 * 1024 * 1024,
+      });
+      setUploadedImages(prev => ({ ...prev, [slotId]: dataUrl }));
+      setValidationError(null);
+    } catch (err) {
+      console.error('Client compression error, fallback to FileReader:', err);
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const res = ev.target?.result;
+        if (res) {
+          setUploadedImages(prev => ({ ...prev, [slotId]: res as string }));
+          setValidationError(null);
         }
       };
-      img.src = ev.target?.result as string;
-    };
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(file);
+    }
   };
 
   const processImageUrl = async (slotId: string, url: string) => {
@@ -701,32 +733,6 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
       setUploadedImages(prev => ({ ...prev, [slotId]: dataUrl }));
       setValidationError(null);
-
-      // Trigger AI Swatch Vision Analysis for rich micro-textile details
-      try {
-        setAnalyzingSwatch(true);
-        const anRes = await fetch('/api/analyze-swatch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ imageBase64: dataUrl }),
-        });
-        if (anRes.ok) {
-          const anData = await anRes.json();
-          if (anData?.analysis) {
-            setSwatchAnalysis(anData.analysis);
-            if (!productName && anData.analysis.title) {
-              setProductName(anData.analysis.title);
-            }
-            if (!description && anData.analysis.fabricNotes) {
-              setDescription(anData.analysis.fabricNotes);
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('[Swatch Analysis] Error:', err);
-      } finally {
-        setAnalyzingSwatch(false);
-      }
     };
     img.onerror = () => {
       console.error('Failed to load image from URL:', url);
@@ -763,27 +769,54 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     }
   };
 
-  // Compress image for API transmission (1024px max, 85% JPEG quality for better clarity)
+  // Compress image for API transmission (Preserves full 2K/2560px quality, guarantees < 3.8MB, avoids multi-compression)
   const compressImageForAPI = (dataUrl: string): Promise<string> => {
     return new Promise((resolve) => {
+      if (!dataUrl || !dataUrl.startsWith('data:image/')) {
+        return resolve(dataUrl);
+      }
+
+      // Calculate approximate binary size from base64 string length
+      const approxSizeBytes = (dataUrl.length * 3) / 4;
+      const MAX_SIZE_BYTES = 3.8 * 1024 * 1024; // 3.8 MB (< 4MB limit)
+      const MAX_DIM = 2560;
+
       try {
         const img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = () => {
           try {
-            const canvas = document.createElement('canvas');
-            const MAX_DIM = 1024;
             let w = img.width, h = img.height;
+            // If already within 2560px and under 3.8MB, DO NOT re-compress!
+            // Prevents digital degradation and JPEG generation loss.
+            if (approxSizeBytes <= MAX_SIZE_BYTES && w <= MAX_DIM && h <= MAX_DIM) {
+              return resolve(dataUrl);
+            }
+
             if (w > MAX_DIM || h > MAX_DIM) {
               if (w > h) { h = Math.round(h * MAX_DIM / w); w = MAX_DIM; }
               else { w = Math.round(w * MAX_DIM / h); h = MAX_DIM; }
             }
+
+            const canvas = document.createElement('canvas');
             canvas.width = w; canvas.height = h;
-            canvas.getContext('2d')?.drawImage(img, 0, 0, w, h);
-            resolve(canvas.toDataURL('image/jpeg', 0.85));
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = 'high';
+              ctx.drawImage(img, 0, 0, w, h);
+            }
+
+            let q = 0.94;
+            let resultDataUrl = canvas.toDataURL('image/jpeg', q);
+            while ((resultDataUrl.length * 3) / 4 > MAX_SIZE_BYTES && q > 0.70) {
+              q -= 0.08;
+              resultDataUrl = canvas.toDataURL('image/jpeg', q);
+            }
+            resolve(resultDataUrl);
           } catch (e) {
-            console.warn('[Compress] Canvas tainted or error:', e);
-            resolve(dataUrl); // Fallback to raw if compression fails
+            console.warn('[Compress] Canvas error, returning raw:', e);
+            resolve(dataUrl);
           }
         };
         img.onerror = () => resolve(dataUrl);
@@ -903,16 +936,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
     // Build ultra-specific garment textile description
     let textileDetails = '';
-    if (swatchAnalysis) {
-      const parts: string[] = [];
-      if (swatchAnalysis.craft) parts.push(`Craft: Authentic ${swatchAnalysis.craft}`);
-      if (swatchAnalysis.primaryColor) parts.push(`Color Palette: ${swatchAnalysis.primaryColor}`);
-      if (swatchAnalysis.bodyMotifs) parts.push(`Saree Main Body: ${swatchAnalysis.bodyMotifs}`);
-      if (swatchAnalysis.borderDesign) parts.push(`Border Trims: ${swatchAnalysis.borderDesign}`);
-      if (swatchAnalysis.palluDesign) parts.push(`Grand Pallu Styling: ${swatchAnalysis.palluDesign}`);
-      if (swatchAnalysis.fabricNotes) parts.push(`Fabric Weave & Texture: ${swatchAnalysis.fabricNotes}`);
-      textileDetails = parts.join('. ');
-    } else if (description) {
+    if (description) {
       textileDetails = `Garment Fabric & Motifs: ${description}`;
     }
 
@@ -951,7 +975,11 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       dynamicStyling = optStr ? `Styling: ${optStr}.` : '';
     }
 
-    const backgroundSetting = selectedBackground ? `Background Setting: ${selectedBackground}.` : 'Background Setting: high-end luxury fashion studio.';
+    const isMirrorForBg = pose.name.toLowerCase().includes('mirror') || (pose.promptSnippet && pose.promptSnippet.toLowerCase().includes('mirror'));
+    const sanitizedBg = isMirrorForBg
+      ? selectedBackground
+      : (selectedBackground ? selectedBackground.replace(/mirror\s*(or|\/)?/gi, '').trim() : 'high-end luxury fashion studio');
+    const backgroundSetting = sanitizedBg ? `Background Setting: ${sanitizedBg}.` : 'Background Setting: high-end luxury fashion studio.';
 
     const originalGarmentDrapeDetails = 'CRITICAL INSTRUCTION: You MUST strictly replicate the EXACT patterns, motif scale, shapes, and border placements shown in the provided reference fabric images. Do NOT invent generic patterns. Do NOT mix or blend the patterns from the different uploaded images. The fabric must be fully opaque and flawlessly continuous—absolutely NO skin showing through the fabric, no sheer patches, and no blending artifacts. CRITICAL ALL-OVER MOTIF CONTINUITY (NO BLANK OR SOLID SECTIONS): When the fabric has an all-over print, geometric pattern, or motifs, the pattern MUST cover the entire garment body continuously across the chest, waist, pleats, thighs, and lap. In seated poses, the motifs MUST remain fully visible across the entire lap, thighs, and fanned pleats—never leave the lap or pleats as plain, solid, unprinted blank fabric. Natural fabric texture, authentic crisp folds, and graceful drape. CRITICAL HEM & PALLU FINISH RULE: DO NOT add beads, hanging pearl drops, tassels, pom-poms, latkans, or thread fringes to the bottom hem of the saree or the end of the pallu UNLESS they are clearly and explicitly present in the uploaded reference fabric images. Keep all fabric hems and pallu ends cleanly stitched, flat, and straight without any invented hanging beads, ornaments, or tassels.';
 
@@ -1033,12 +1061,14 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           borderStyle: borderStyle || undefined,
           tasselStyle: tasselStyle || undefined,
           blouseStyle: blouseStyle || undefined,
+          swatchAnalysis: (sareeDesignType === 'delicate_buttis' && (swatchAnalysis as any)?.vision) ? (swatchAnalysis as any).vision : undefined,
           promptSuggestions: (customPromptOverride && customPromptOverride.trim()) 
             ? (promptSuggestions.trim() ? `${promptSuggestions.trim()}. ${customPromptOverride.trim()}` : customPromptOverride.trim())
             : (promptSuggestions && promptSuggestions.trim() ? promptSuggestions.trim() : undefined),
           selectedModelId,
           selectedOptions,
           aspectRatio: selectedAspectRatio,
+          resolution: '2K',
           referenceImages: [
             ...(validImages.length > 0 ? validImages : []),
             ...(compressedModelFace ? [compressedModelFace] : []),
@@ -1413,28 +1443,68 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                   <option value="Kurti set (any)">Kurti set (any)</option>
                 </select>
               </div>
-              {/* Saree Design Type — shown only for saree templates */}
+              {/* Saree Layout Mode & Border Selection */}
               {template.slug?.toLowerCase().includes('saree') && (
-                <div>
-                  <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase mb-1.5">Saree Layout Mode</label>
-                  <select value={sareeDesignType} onChange={e => setSareeDesignType(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent">
-                    <option value="">Default (Symmetric — Both Lengthwise Borders are Identical)</option>
-                    <option value="delicate_buttis">🌸 Delicate Buttis & Embroidered Flowers (Unlocks Close-Up Macro Slot)</option>
-                    <option value="lower_border_only">📍 Lower Border Only (Plain Chest Wrap, No Top Border)</option>
-                    <option value="dual_contrasting_borders">🎭 Dual Contrasting Borders (Unlocks Dedicated Upper Border Slot)</option>
-                    <option value="dual_tier_pleats">✨ Complex Saree (Separate Upper Chest + Lower Skirt Art + Border Ribbon)</option>
-                  </select>
-                  <p className="text-[10px] text-charcoal-muted mt-1">
-                    {sareeDesignType === 'delicate_buttis'
-                      ? '🔍 Macro Detail Mode Active: Unlocks a dedicated "🌸 Micro-Motif / Flower Close-Up" slot below. Upload a tight zoom of 1-3 flowers so the AI renders exact petals and embroidery instead of generic dots.'
-                      : sareeDesignType === 'lower_border_only'
-                      ? '📍 Single Border Mode: Saree has a border only along the bottom hem at the feet. The diagonal chest drape is rendered with a clean plain edge (no fake border).'
-                      : sareeDesignType === 'dual_contrasting_borders'
-                      ? '🎭 Ganga-Jamuna Mode Active: Unlocks a dedicated "Upper Chest Border" slot below so the AI renders different borders for the chest drape and lower hem.'
-                      : sareeDesignType === 'dual_tier_pleats'
-                      ? '🎯 Complex Mode Active: Unlocks dedicated "Lower Skirt & Pleat Art" and "Border Ribbon" upload slots below for pixel-accurate zone mapping without hallucinations.'
-                      : 'Standard symmetrical saree (Body, Pallu, Blouse). Upper chest border, lower hem, and pallu outer edge will be identical clones of your reference border.'}
-                  </p>
+                <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-5 p-4 rounded-2xl bg-amber-500/5 border border-amber-500/20">
+                  <div>
+                    <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase mb-1.5 flex items-center gap-1.5">
+                      <span>Saree Layout Mode</span>
+                      <span className="text-[10px] text-accent font-normal">(Body Style)</span>
+                    </label>
+                    <select
+                      value={sareeDesignType}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setSareeDesignType(val);
+                        if (val === 'dual_tier_pleats') {
+                          setBorderStyle('different_borders');
+                        } else if (borderStyle === 'different_borders' && val !== 'dual_tier_pleats') {
+                          setBorderStyle('symmetric');
+                        }
+                        if (val !== 'delicate_buttis') {
+                          setSwatchAnalysis(null);
+                        }
+                      }}
+                      className="w-full px-4 py-3 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent"
+                    >
+                      <option value="">Default (Symmetric)</option>
+                      <option value="delicate_buttis">🌸 Delicate Buttis & Embroidered Flowers</option>
+                      <option value="dual_tier_pleats">🏛️ Complex Saree</option>
+                    </select>
+                    <p className="text-[10px] text-charcoal-muted mt-1">
+                      {sareeDesignType === 'delicate_buttis'
+                        ? '🌸 Delicate Buttis: Unlocks a dedicated "Micro-Motif Close-Up" slot below for exact petals and stitches.'
+                        : sareeDesignType === 'dual_tier_pleats'
+                        ? '🏛️ Complex Saree: Unlocks dedicated "Lower Skirt Art" and "Border Ribbon" slots below (defaults to different borders).' 
+                        : 'Default repeating motifs across the saree body and pleats.'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase mb-1.5 flex items-center gap-1.5">
+                      <span>Border Selection</span>
+                      <span className="text-[10px] text-accent font-normal">(Edge Draping)</span>
+                    </label>
+                    <select
+                      value={borderStyle || (sareeDesignType === 'dual_tier_pleats' ? 'different_borders' : 'symmetric')}
+                      onChange={e => setBorderStyle(e.target.value)}
+                      className="w-full px-4 py-3 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent"
+                    >
+                      <option value="symmetric">📍 Symmetric Borders (Default — Both Borders Identical)</option>
+                      <option value="different_borders">🎭 Different Borders (Top & Bottom Border Different)</option>
+                      <option value="lower_border_only">📍 Lower Border Only (with Top Border Ribbon, Pallu Drape Border Preserved)</option>
+                      <option value="lower_border_borderless">📍 Lower Border Only (Borderless Self-Fabric Edge, Pallu Drape Border Preserved)</option>
+                    </select>
+                    <p className="text-[10px] text-charcoal-muted mt-1">
+                      {(borderStyle === 'different_borders' || (!borderStyle && sareeDesignType === 'dual_tier_pleats'))
+                        ? '🎭 Different Borders: Upper chest border and lower hem have distinct designs (unlocks dedicated border slot).' 
+                        : borderStyle === 'lower_border_borderless'
+                        ? '📍 Lower Border Only: Saree has border along bottom hem & outer pallu drape. Chest wrap is 100% borderless self-fabric, with buttis continuing seamlessly to the folded neckline edge.'
+                        : borderStyle === 'lower_border_only'
+                        ? '📍 Lower Border Only: Saree has border along bottom hem & outer pallu drape. Chest wrap has a neat finished border ribbon (~0.5–1 cm) with buttis continuing seamlessly right to the ribbon without empty space.'
+                        : '📍 Symmetric: Upper chest border and lower hem will be identical clones.'}
+                    </p>
+                  </div>
                 </div>
               )}
 
@@ -1539,6 +1609,61 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               </div>
             </div>
 
+            {/* Manual Gemini Swatch Scan Banner for Delicate Buttis */}
+            {sareeDesignType === 'delicate_buttis' && (
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-50 via-white to-amber-50 border border-amber-300 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-700 font-bold text-base shadow-2xs">
+                    🌸
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-xs font-bold text-amber-950 uppercase tracking-wider">
+                        Delicate Buttis Mode
+                      </h4>
+                      {swatchAnalysis ? (
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex items-center gap-1 ${
+                          swatchAnalysis?.vision?.modelUsed?.includes('Fallback')
+                            ? 'bg-amber-100 text-amber-800 border-amber-300'
+                            : 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        }`}>
+                          <Check className="w-3 h-3 text-emerald-600" />
+                          {swatchAnalysis?.vision?.modelUsed || 'Motifs Analyzed'}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                          Manual Scan Ready
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-amber-800 mt-0.5">
+                      {swatchAnalysis
+                        ? `Analyzed via ${swatchAnalysis.vision?.modelUsed || 'Gemini Vision'}. Motifs, scale (1.2–1.5 cm), and wide negative spacing locked.`
+                        : 'Upload your saree swatch below, then click "Scan Motifs with Gemini" to extract butti anatomy and spacing.'}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={analyzingSwatch || (!uploadedImages['macro_motif'] && !uploadedImages['motif'] && !uploadedImages['body'] && !uploadedImages['garment'])}
+                  onClick={handleRescanMacroMotif}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-white font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50 text-xs ${
+                    swatchAnalysis ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-500 hover:bg-amber-600'
+                  }`}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${analyzingSwatch ? 'animate-spin' : ''}`} />
+                  <span>
+                    {analyzingSwatch
+                      ? 'Scanning with Gemini...'
+                      : swatchAnalysis
+                      ? 'Re-scan Motifs'
+                      : '🔍 Scan Motifs with Gemini'}
+                  </span>
+                </button>
+              </div>
+            )}
+
             {/* Individual Detailed Image Drop Slots */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {activeImageSlots.map(slot => {
@@ -1558,6 +1683,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                     {slot.description && (
                       <p className="text-[11px] text-charcoal-muted leading-tight">{slot.description}</p>
                     )}
+
 
                         <div
                           onClick={(e) => {
@@ -1588,26 +1714,60 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
                           {/* Hover action overlay bar */}
                           <div className="absolute inset-0 bg-charcoal/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-3 pointer-events-none">
-                            {/* Top row: View Full + Remove */}
+                            {/* Top row: View Full + Re-scan + Remove */}
                             <div className="flex items-center justify-between pointer-events-auto">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setZoomModal({ slotId: slot.id, title: slot.name, url: uploadedImages[slot.id], zoom: 1 });
-                                }}
-                                className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/90 text-charcoal text-xs font-bold shadow-md hover:bg-white transition-colors cursor-pointer"
-                                title="View in Full Screen"
-                              >
-                                <Eye className="w-3.5 h-3.5 text-accent" />
-                                <span>Full View</span>
-                              </button>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setZoomModal({ slotId: slot.id, title: slot.name, url: uploadedImages[slot.id], zoom: 1 });
+                                  }}
+                                  className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/90 text-charcoal text-xs font-bold shadow-md hover:bg-white transition-colors cursor-pointer"
+                                  title="View in Full Screen"
+                                >
+                                  <Eye className="w-3.5 h-3.5 text-accent" />
+                                  <span>Full View</span>
+                                </button>
+                                {(slot.id === 'macro_motif' || slot.id === 'motif' || (!uploadedImages['macro_motif'] && (slot.id === 'body' || slot.id === 'garment'))) && sareeDesignType === 'delicate_buttis' && (
+                                  <button
+                                    type="button"
+                                    disabled={analyzingSwatch}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRescanMacroMotif();
+                                    }}
+                                    className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-white text-xs font-bold shadow-md transition-colors cursor-pointer disabled:opacity-50 ${
+                                      swatchAnalysis ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-500 hover:bg-amber-600'
+                                    }`}
+                                    title={swatchAnalysis ? "Re-scan buttis with Gemini" : "Manually scan and analyze buttis with Gemini"}
+                                  >
+                                    <RefreshCw className={`w-3.5 h-3.5 ${analyzingSwatch ? 'animate-spin' : ''}`} />
+                                    <span>
+                                      {analyzingSwatch
+                                        ? 'Scanning...'
+                                        : swatchAnalysis?.vision?.modelUsed?.includes('Fallback')
+                                        ? '⚠️ Fallback'
+                                        : swatchAnalysis
+                                        ? '✓ Analyzed'
+                                        : '🔍 Scan'}
+                                    </span>
+                                  </button>
+                                )}
+                              </div>
 
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setUploadedImages(prev => { const n = { ...prev }; delete n[slot.id]; return n; });
+                                  setUploadedImages(prev => {
+                                  const n = { ...prev };
+                                  delete n[slot.id];
+                                  if (slot.id === 'macro_motif' || slot.id === 'motif') {
+                                    setSwatchAnalysis(null);
+                                  }
+                                  return n;
+                                });
                                 }}
                                 className="w-7 h-7 rounded-xl bg-white/90 text-charcoal hover:bg-error hover:text-white flex items-center justify-center shadow-md transition-colors cursor-pointer"
                                 title="Remove photo"
@@ -1797,7 +1957,46 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                             <RotateCw className="w-3 h-3 text-accent" />
                             <span>Rotate 90°</span>
                           </button>
+
+                          {/* Precision Crop button directly under the photo */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPointCropperModal({ slotId: slot.id, title: slot.name, url: uploadedImages[slot.id] });
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold transition-colors cursor-pointer border border-amber-300 text-xs"
+                            title="Precision 4-Point Crop / Zoom In on Buttis"
+                          >
+                            <Crop className="w-3.5 h-3.5 text-amber-700" />
+                            <span>Crop</span>
+                          </button>
                         </div>
+
+                        {/* Dedicated Manual Scan / Re-scan Button directly beneath the photo */}
+                        {(slot.id === 'macro_motif' || slot.id === 'motif' || (!uploadedImages['macro_motif'] && (slot.id === 'body' || slot.id === 'garment'))) && sareeDesignType === 'delicate_buttis' && (
+                          <button
+                            type="button"
+                            disabled={analyzingSwatch}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRescanMacroMotif();
+                            }}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50 text-xs ${
+                              swatchAnalysis ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-500 hover:bg-amber-600'
+                            }`}
+                            title={swatchAnalysis ? "Re-scan buttis with Gemini" : "Manually scan and analyze buttis with Gemini"}
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${analyzingSwatch ? 'animate-spin' : ''}`} />
+                            <span>
+                              {analyzingSwatch
+                                ? 'Scanning...'
+                                : swatchAnalysis
+                                ? '✓ Analyzed (Re-scan)'
+                                : '🔍 Scan Motifs'}
+                            </span>
+                          </button>
+                        )}
 
                         {otherSlots.length > 0 && (
                           <div className="relative">
@@ -1839,6 +2038,33 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                 );
               })}
             </div>
+
+            {/* Swatch Scanning Indicator */}
+            {sareeDesignType === 'delicate_buttis' && analyzingSwatch && (
+              <div className="mt-6 p-4.5 rounded-2xl bg-gradient-to-r from-amber-100 via-amber-50 to-amber-100 border-2 border-amber-300 flex items-start sm:items-center gap-3.5 shadow-sm animate-pulse">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center shrink-0">
+                  <Loader2 className="w-5 h-5 text-amber-700 animate-spin" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="text-xs font-bold text-amber-950 uppercase tracking-wider">
+                      Neural Vision Scanning in Progress...
+                    </h4>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 border border-amber-300">
+                      Step Navigation Paused
+                    </span>
+                  </div>
+                  <p className="text-xs font-semibold text-amber-900 mt-1">
+                    {visionProgress || 'Analyzing Micro-Motif with Gemini Vision...'}
+                  </p>
+                  <p className="text-[11px] text-amber-700 mt-0.5 leading-relaxed">
+                    Gemini Vision is analyzing morphological butti structure, calculating physical scale, and locking in spatial negative spacing. Please wait before advancing to the next step.
+                  </p>
+                </div>
+              </div>
+            )}
+
+
           </Card>
         </div>
       )}
@@ -2318,6 +2544,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
             </div>
           </Card>
 
+
+
           {/* Action Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-cream-border shadow-xs">
             <div>
@@ -2719,29 +2947,45 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         </Button>
 
         {currentStep < steps.length - 1 && (
-          <Button onClick={() => {
-            if (currentContent === 'details') {
-              if (!productName.trim()) {
-                setValidationError('Please provide a Product Name.');
+          <div className="flex items-center gap-3">
+            {currentContent === 'details' && sareeDesignType === 'delicate_buttis' && analyzingSwatch && (
+              <span className="text-xs font-bold text-amber-800 bg-amber-100 border border-amber-300 px-3.5 py-2 rounded-xl flex items-center gap-2 animate-pulse shadow-2xs">
+                <Loader2 className="w-4 h-4 animate-spin text-amber-700 shrink-0" />
+                <span>Scanning Micro-Motif buttis... Please wait</span>
+              </span>
+            )}
+            <Button
+              disabled={currentContent === 'details' && sareeDesignType === 'delicate_buttis' && analyzingSwatch}
+              onClick={() => {
+                if (currentContent === 'details') {
+                  if (sareeDesignType === 'delicate_buttis' && analyzingSwatch) {
+                    setValidationError('Scanning in progress. Please wait for Gemini Vision to finish analyzing the micro-motif buttis before moving to the next step.');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    return;
+                  }
+                  if (!productName.trim()) {
+                    setValidationError('Please provide a Product Name.');
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    return;
+                  }
+                  const missingRequiredSlots = activeImageSlots.filter(
+                    slot => slot.isRequired && !uploadedImages[slot.id]
+                  );
+                  if (missingRequiredSlots && missingRequiredSlots.length > 0) {
+                    setValidationError(`Please upload photos for the required slots: ${missingRequiredSlots.map(s => s.name).join(', ')}`);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    return;
+                  }
+                }
+                setValidationError(null);
+                setCurrentStep(currentStep + 1);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
-                return;
-              }
-              const missingRequiredSlots = activeImageSlots.filter(
-                slot => slot.isRequired && !uploadedImages[slot.id]
-              );
-              if (missingRequiredSlots && missingRequiredSlots.length > 0) {
-                setValidationError(`Please upload photos for the required slots: ${missingRequiredSlots.map(s => s.name).join(', ')}`);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-                return;
-              }
-            }
-            setValidationError(null);
-            setCurrentStep(currentStep + 1);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}>
-            <span>Next Step</span>
-            <ArrowRight className="w-4 h-4" />
-          </Button>
+              }}
+            >
+              <span>Next Step</span>
+              <ArrowRight className="w-4 h-4" />
+            </Button>
+          </div>
         )}
       </div>
 

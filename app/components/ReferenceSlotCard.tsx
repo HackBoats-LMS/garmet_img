@@ -83,9 +83,16 @@ export const ReferenceSlotCard: React.FC<ReferenceSlotCardProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       try {
+        // Macro-motif / close-up slots need higher resolution & sharpening
+        // to preserve fine butti/embroidery detail for the AI model
+        const isMacroSlot = slot.id.toLowerCase().includes('macro') ||
+          slot.id.toLowerCase().includes('motif') ||
+          slot.id.toLowerCase().includes('close_up');
+
         const { file: compressedFile, dataUrl } = await compressImageOnClient(file, {
-          maxDimension: 1024,
-          quality: 0.85,
+          maxDimension: isMacroSlot ? 1536 : 1024,
+          quality: isMacroSlot ? 0.92 : 0.85,
+          sharpen: isMacroSlot,
         });
         onChange(slot.id, {
           ...currentRef,

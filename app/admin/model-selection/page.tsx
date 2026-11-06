@@ -85,6 +85,34 @@ const AddKieModelForm: React.FC<AddKieModelFormProps> = ({ onAdd, onClose }) => 
         </div>
 
         <div className="px-7 py-6 space-y-5">
+          {/* Quick Model Presets */}
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wider text-charcoal mb-1.5">Quick Model Presets</label>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { name: 'Seedance / Seedream 5 Pro', slug: 'seedream/5-pro-image-to-image', desc: 'ByteDance Seedream 5 Pro image-to-image in Kie.ai.' },
+                { name: 'Seedream 5 Flash', slug: 'seedream/5-flash-image-to-image', desc: 'ByteDance Seedream 5 Flash high-speed image-to-image.' },
+                { name: 'Seedream 5 Lite', slug: 'seedream/5-lite-image-to-image', desc: 'ByteDance Seedream 5 Lite cost-efficient image-to-image.' },
+                { name: 'Nano Banana 2.1 (2K)', slug: 'nano-banana-2-1 2k', desc: 'High-speed image generation model.' },
+                { name: 'Flux 2 Pro', slug: 'flux-2/pro-image-to-image', desc: 'High-end Flux Pro model for reference image processing.' },
+              ].map(p => (
+                <button
+                  key={p.slug}
+                  type="button"
+                  onClick={() => {
+                    setDisplayName(p.name);
+                    setModelId(p.slug);
+                    setDesc(p.desc);
+                    setIsImageToImage(true);
+                  }}
+                  className="text-[11px] px-2.5 py-1 rounded-lg border border-cream-border bg-cream hover:bg-cream-dark text-charcoal cursor-pointer transition-colors"
+                >
+                  + {p.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-charcoal mb-1.5">Display Name</label>
             <input
