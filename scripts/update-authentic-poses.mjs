@@ -52,7 +52,7 @@ const SAREE_POSES = [
     name: '6. The Pallu Cascade',
     category: 'detail',
     description: 'Three-quarter rear view — showing full pallu back design and blouse back cut',
-    promptSnippet: 'Three-quarter rear portrait view. The model is standing poised, gently turning her head to look back towards the camera over her shoulder. Prominently showcases the full, elegant fall of the pallu cascading down her back, displaying the complete decorative artwork from the Pallu reference swatch framed by a continuous, unbroken lengthwise border along the outer drape, along with the fitted blouse back neckline, dori tassels, and neat hair updo adorned with fresh jasmine (gajra).',
+    promptSnippet: 'Full-length three-quarter rear catalog view, capturing the model from head to floor at eye-level. The model is standing poised, gently turning her head to look back towards the camera over her shoulder. The saree skirt falls uninterrupted in clean vertical pleats all the way to the floor. The authentic pallu cascades gracefully down her entire back from the left shoulder all the way down to calf/ankle level (long elegant drape falling past the knees to lower calf), prominently showcasing the complete artwork and bottom tassels from the Pallu reference swatch hanging naturally at calf height. Neat fitted blouse back neckline with delicate dori tassels, and neat hair updo adorned with fresh jasmine (gajra). Realistic full garment length, full floor-length saree silhouette, and unbroken calf-length pallu with zero waist truncation.',
     purpose: 'Back view showcasing blouse craftsmanship, back cut, and grand pallu end motifs',
     fabricFocus: 'Full back pallu motifs, border finish, and blouse back tailoring',
     previewImage: '/poses/saree_pose_5.jpg',
