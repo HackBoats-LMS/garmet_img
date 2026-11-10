@@ -241,8 +241,11 @@ export async function POST(req: NextRequest) {
           console.log(`[Gemini] Added ${label} image (${match[1]}, ${Math.round(match[2].length / 1024)}KB base64)`);
         }
       } else if (resolved.startsWith('http')) {
-        // For remote URLs, we'll pass them as-is and Gemini will fetch them
-        console.log(`[Gemini] Skipping remote URL for ${label} (Gemini prefers inline_data)`);
+        // Collect remote HTTP URLs so Kie.ai receives all swatches
+        if (!orderedInputUrls.includes(resolved)) {
+          orderedInputUrls.push(resolved);
+        }
+        console.log(`[Gemini] Added remote URL for ${label}: ${resolved.substring(0, 80)}`);
       }
     };
 
@@ -293,6 +296,27 @@ export async function POST(req: NextRequest) {
     let imageInstructions = '';
     const defaultGarmentType = 'map the uploaded fabric swatches precisely to the corresponding garment sections';
     const garmentMapping = template?.garmentType || defaultGarmentType;
+
+    // Garment classification: Saree vs Kurti / Western / Salwar
+    const isKurti = Boolean(
+      template?.slug?.toLowerCase().includes('kurti') ||
+      template?.slug?.toLowerCase().includes('kurta') ||
+      template?.garmentType?.toLowerCase().includes('kurti') ||
+      template?.garmentType?.toLowerCase().includes('kurta') ||
+      template?.name?.toLowerCase().includes('kurti') ||
+      template?.name?.toLowerCase().includes('kurta') ||
+      productName?.toLowerCase().includes('kurti') ||
+      productName?.toLowerCase().includes('kurta') ||
+      (stockCode && (stockCode.toLowerCase().startsWith('k-') || stockCode.toLowerCase().startsWith('kp-') || stockCode.toLowerCase().startsWith('kpd-') || stockCode.toLowerCase().startsWith('sk-')))
+    );
+
+    const isSaree = !isKurti && Boolean(
+      template?.slug?.toLowerCase().includes('saree') ||
+      template?.garmentType?.toLowerCase().includes('saree') ||
+      template?.name?.toLowerCase().includes('saree') ||
+      sareeDesignType ||
+      borderStyle
+    );
 
     // Saree design mode & border architecture routing (decoupled)
     const isDelicate = (sareeDesignType || '') === 'delicate_buttis';
@@ -913,16 +937,37 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
 
           // Upscaling removed as per user request
 
-          // Upload to Cloudflare R2 for permanent storage
+          // Upload to Cloudflare R2 for permanent storage with retries
           let permanentUrl = finalImageUrl;
+          const isKieTemp = finalImageUrl.includes('tempfile') || finalImageUrl.includes('aiquickdraw') || finalImageUrl.includes('kie.ai');
+
           if (isStorageConfigured()) {
-            try {
-              const uId = userId || 'customer';
-              const oId = orderId || 'order';
-              const pId = poseId || taskId;
-              permanentUrl = await uploadGeneratedAsset(finalImageUrl, uId, oId, pId);
-            } catch (cloudErr) {
-              console.warn('[Storage] Failed to upload generated asset, falling back to direct URL:', cloudErr);
+            let uploadSuccess = false;
+            for (let rAttempt = 1; rAttempt <= 3; rAttempt++) {
+              try {
+                const uId = userId || 'customer';
+                const oId = orderId || 'order';
+                const pId = poseId || taskId;
+                console.log(`[Storage] Uploading generated asset to R2 (attempt ${rAttempt}/3)...`);
+                permanentUrl = await uploadGeneratedAsset(finalImageUrl, uId, oId, pId, { productName, stockCode });
+                uploadSuccess = true;
+                console.log(`[Storage] ✅ Generated asset permanently stored in R2: ${permanentUrl}`);
+                break;
+              } catch (cloudErr: any) {
+                console.warn(`[Storage] R2 upload attempt ${rAttempt}/3 failed:`, cloudErr?.message || cloudErr);
+                if (rAttempt < 3) {
+                  await new Promise(r => setTimeout(r, rAttempt * 1500));
+                }
+              }
+            }
+
+            if (!uploadSuccess && isKieTemp) {
+              console.error('[Storage Critical] Failed to upload generated asset to Cloudflare R2!');
+              return NextResponse.json({
+                error: 'AI image generated, but failed to save permanently to Cloudflare R2 storage. Please retry.',
+                temporaryUrl: finalImageUrl,
+                taskId,
+              }, { status: 500 });
             }
           }
 

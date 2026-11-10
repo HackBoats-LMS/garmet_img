@@ -11,11 +11,25 @@ async function syncCompletedImageToProduct(
   poseId: string,
   permanentUrl: string
 ) {
-  if (!productId) return;
   try {
-    const existingProduct = await prisma.product.findUnique({ where: { id: productId } });
-    if (existingProduct) {
-      const currentGen = (existingProduct.generatedImages as Record<string, any>) || {};
+    let targetProduct = null;
+    if (productId) {
+      targetProduct = await prisma.product.findUnique({ where: { id: productId } });
+    }
+    if (!targetProduct && orderId && orderId !== 'order') {
+      const order = await prisma.customerOrder.findUnique({ where: { id: orderId } });
+      if ((order as any)?.productId) {
+        targetProduct = await prisma.product.findUnique({ where: { id: (order as any).productId } });
+      }
+      if (!targetProduct && order?.stockCode) {
+        targetProduct = await prisma.product.findFirst({
+          where: { OR: [{ stockCode: order.stockCode }, { code1: order.stockCode }] }
+        });
+      }
+    }
+
+    if (targetProduct) {
+      const currentGen = (targetProduct.generatedImages as Record<string, any>) || {};
       const cleanedGen: Record<string, any> = {};
       for (const [k, v] of Object.entries(currentGen)) {
         const u = typeof v === 'string' ? v : (v as any)?.imageUrl;
@@ -25,12 +39,14 @@ async function syncCompletedImageToProduct(
       }
       cleanedGen[poseId] = { imageUrl: permanentUrl, generatedAt: new Date().toISOString() };
       await prisma.product.update({
-        where: { id: productId },
+        where: { id: targetProduct.id },
         data: {
           generatedImages: cleanedGen,
-          linkedOrderId: orderId !== 'order' ? orderId : existingProduct.linkedOrderId,
+          linkedOrderId: orderId !== 'order' ? orderId : targetProduct.linkedOrderId,
+          coverImageUrl: targetProduct.coverImageUrl || permanentUrl,
         },
       });
+      console.log(`[task-status] ✅ Synced completed pose ${poseId} to Product ${targetProduct.stockCode}`);
     }
   } catch (productDbErr) {
     console.error('[task-status Product DB save error]:', productDbErr);
@@ -159,11 +175,32 @@ export async function GET(req: NextRequest) {
 
           if (finalImageUrl) {
             let permanentUrl = finalImageUrl;
+            const isKieTemp = finalImageUrl.includes('tempfile') || finalImageUrl.includes('aiquickdraw') || finalImageUrl.includes('kie.ai');
+
             if (isStorageConfigured()) {
-              try {
-                permanentUrl = await uploadGeneratedAsset(finalImageUrl, userId, orderId, poseId);
-              } catch (cErr) {
-                console.warn('[task-status] Cloudinary upload fallback for Kie.ai:', cErr);
+              let uploadSuccess = false;
+              for (let rAttempt = 1; rAttempt <= 3; rAttempt++) {
+                try {
+                  console.log(`[task-status] Uploading generated asset to R2 (attempt ${rAttempt}/3)...`);
+                  permanentUrl = await uploadGeneratedAsset(finalImageUrl, userId, orderId, poseId);
+                  uploadSuccess = true;
+                  console.log(`[task-status] ✅ Generated asset permanently stored in R2: ${permanentUrl}`);
+                  break;
+                } catch (cErr: any) {
+                  console.warn(`[task-status] R2 upload attempt ${rAttempt}/3 failed:`, cErr?.message || cErr);
+                  if (rAttempt < 3) {
+                    await new Promise(r => setTimeout(r, rAttempt * 1500));
+                  }
+                }
+              }
+
+              if (!uploadSuccess && isKieTemp) {
+                return NextResponse.json({
+                  status: 'failed',
+                  error: 'Image generated, but failed to save permanently to Cloudflare R2 storage. Please retry.',
+                  taskId,
+                  provider: 'kie-ai'
+                });
               }
             }
 

@@ -21,7 +21,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           prompt: "consent",
           access_type: "offline",
           response_type: "code",
-          scope: "openid email profile https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/photospicker.mediaitems.readonly https://www.googleapis.com/auth/photoslibrary.appendonly https://www.googleapis.com/auth/photoslibrary"
+          scope: "openid email profile https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/photospicker.mediaitems.readonly https://www.googleapis.com/auth/photoslibrary.appendonly https://www.googleapis.com/auth/photoslibrary"
         }
       },
       allowDangerousEmailAccountLinking: true,
@@ -56,6 +56,27 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.refreshToken = account.refresh_token;
         token.expiresAt = account.expires_at;
         token.scope = account.scope;
+
+        if (account.refresh_token) {
+          try {
+            const fsModule = require('fs');
+            const pathModule = require('path');
+            const envFilePath = pathModule.resolve(process.cwd(), '.env.local');
+            if (fsModule.existsSync(envFilePath)) {
+              let envContent = fsModule.readFileSync(envFilePath, 'utf8');
+              if (envContent.includes('GOOGLE_REFRESH_TOKEN=')) {
+                envContent = envContent.replace(/GOOGLE_REFRESH_TOKEN=.*/, `GOOGLE_REFRESH_TOKEN=${account.refresh_token}`);
+              } else {
+                envContent += `\nGOOGLE_REFRESH_TOKEN=${account.refresh_token}\n`;
+              }
+              fsModule.writeFileSync(envFilePath, envContent, 'utf8');
+              process.env.GOOGLE_REFRESH_TOKEN = account.refresh_token;
+              console.log('[Auth] ✅ Successfully saved permanent GOOGLE_REFRESH_TOKEN to .env.local!');
+            }
+          } catch (envErr) {
+            console.warn('[Auth] Note saving GOOGLE_REFRESH_TOKEN to .env.local:', envErr);
+          }
+        }
       }
       if (user) {
         // Internal tool: default all authenticated users to admin

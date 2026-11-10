@@ -148,7 +148,7 @@ You must return ONLY a raw JSON object. Do not wrap it in markdown code blocks o
         const pColors = Array.isArray(b.primary_colors) ? b.primary_colors.join(', ') : (b.primary_colors || '');
         const sColors = Array.isArray(b.secondary_colors) ? b.secondary_colors.join(', ') : (b.secondary_colors || '');
         const colorDesc = [pColors, sColors].filter(Boolean).join(' with accents of ');
-        return `• Motif #${b.motif_id || (idx + 1)} (${b.shape_type}): ${b.structure_details}${colorDesc ? ` [Colors: ${colorDesc}]` : ''} | Arrangement: ${b.layout_arrangement || 'staggered diamond repeat'}`;
+        return `• Motif #${b.motif_id || (idx + 1)} (${b.shape_type}): ${b.structure_details}${colorDesc ? ` [Colors: ${colorDesc}]` : ''} | Arrangement: ${b.layout_arrangement || 'evenly spaced repeat'}`;
       });
 
       // Construct a comprehensive high-precision prompt directive for Kie.ai Nano-Banana

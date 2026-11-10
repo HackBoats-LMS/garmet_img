@@ -294,6 +294,27 @@ export async function POST(req: NextRequest) {
     const defaultGarmentType = 'map the uploaded fabric swatches precisely to the corresponding garment sections';
     const garmentMapping = template?.garmentType || defaultGarmentType;
 
+    // Garment classification: Saree vs Kurti / Western / Salwar
+    const isKurti = Boolean(
+      template?.slug?.toLowerCase().includes('kurti') ||
+      template?.slug?.toLowerCase().includes('kurta') ||
+      template?.garmentType?.toLowerCase().includes('kurti') ||
+      template?.garmentType?.toLowerCase().includes('kurta') ||
+      template?.name?.toLowerCase().includes('kurti') ||
+      template?.name?.toLowerCase().includes('kurta') ||
+      productName?.toLowerCase().includes('kurti') ||
+      productName?.toLowerCase().includes('kurta') ||
+      (stockCode && (stockCode.toLowerCase().startsWith('k-') || stockCode.toLowerCase().startsWith('kp-') || stockCode.toLowerCase().startsWith('kpd-') || stockCode.toLowerCase().startsWith('sk-')))
+    );
+
+    const isSaree = !isKurti && Boolean(
+      template?.slug?.toLowerCase().includes('saree') ||
+      template?.garmentType?.toLowerCase().includes('saree') ||
+      template?.name?.toLowerCase().includes('saree') ||
+      sareeDesignType ||
+      borderStyle
+    );
+
     // Saree design mode & border architecture routing (decoupled)
     const isDelicate = (sareeDesignType || '') === 'delicate_buttis';
     const isComplex = (sareeDesignType || '') === 'dual_tier_pleats' || (sareeDesignType || '').startsWith('complex');
@@ -304,7 +325,7 @@ export async function POST(req: NextRequest) {
       (sareeDesignType || '').includes('dual') ||
       (isComplex && borderStyle !== 'symmetric' && !isLowerOnly);
 
-    // Inject admin-described fabric mapping
+    // Inject garment-aware fabric mapping
     if (activeSlotsOrdered.length > 0) {
       const labelDescriptions = activeSlotsOrdered.map((slot, i) => {
         return `Image ${i + 1}: ${slot.label}`;
@@ -313,23 +334,25 @@ export async function POST(req: NextRequest) {
         `You MUST use the EXACT colors, patterns, motifs, weave texture, and design from these fabric swatches. ` +
         `Instruction: ${garmentMapping}. ` +
         `Do NOT invent new patterns or colors for the provided swatches. The generated garment sections must be a pixel-accurate replication of the provided fabric images.\n` +
-        `CRITICAL VISUAL GROUND TRUTH OVERRIDE: The visual colors, fabric textures, motifs, and borders shown in the uploaded fabric swatches represent the ABSOLUTE and FINAL ground truth. If any product name or text prompt conflicts with the visual colors, weave, or motifs in the reference swatch images, the visual reference swatches STRICTLY take precedence.\n` +
-`CRITICAL SAREE DRAPING ARCHITECTURE & ROLE BOUNDARIES:\n` +
+        `CRITICAL VISUAL GROUND TRUTH OVERRIDE: The visual colors, fabric textures, motifs, and borders shown in the uploaded fabric swatches represent the ABSOLUTE and FINAL ground truth. If any product name or text prompt conflicts with the visual colors, weave, or motifs in the reference swatch images, the visual reference swatches STRICTLY take precedence.\n`;
+
+      if (isSaree) {
+        imageInstructions += `CRITICAL SAREE DRAPING ARCHITECTURE & ROLE BOUNDARIES:\n` +
         `- BODY FABRIC: Forms the skirt, waist pleats, and the diagonal wrap across the chest/bust to the left shoulder.\n` +
         `- PALLU (ANCHAL) STRICT MOTIF ISOLATION & ZERO TEXTURE BLEED: The Pallu swatch features a distinct, dedicated decorative artwork (such as geometric tiles, folk prints, or pictorial panels). CRITICAL: Under NO circumstances should the repeating body print (e.g. vines, butis, florals) be copied, mixed, or bled into the pallu artwork. Even in monochrome sarees sharing similar color palettes, the pallu must preserve its EXACT unique grid, tiles, and motifs from the Pallu Swatch with crisp, razor-sharp fidelity.
-- PALLU GRAVITATIONAL ORIENTATION & PLEAT SCALE (6-8 INCHES / 18CM): The pallu is anchored securely at the LEFT SHOULDER and falls straight downward behind the left arm to calf/ankle level, exactly matching the vertical orientation of the Pallu reference swatch. The authentic decorative border runs vertically along the outer hanging edge down to the hem. Tassels (pom-poms / latkans) hang strictly along the bottom horizontal end hem at calf level—NEVER along vertical borders, side edges, or front drape. The pallu is NOT wrapped across the front abdomen.\n` +
+- PALLU GRAVITATIONAL ORIENTATION & PLEAT SCALE (6-8 INCHES / 18CM): The pallu is anchored securely at the LEFT SHOULDER and falls straight downward behind the left arm to calf/ankle level, exactly matching the vertical orientation of the Pallu reference swatch. The authentic reference border runs vertically along the outer hanging edge down to the hem. Tassels hang strictly along the bottom horizontal end hem at calf level—NEVER along vertical borders, side edges, or front drape. The pallu is NOT wrapped across the front abdomen.\n` +
         (isLowerOnly ? (
           isBorderlessLower ? (
 `- LOWER BORDER ONLY ARCHITECTURE (BORDERLESS SELF-FABRIC CHEST WRAP):
   * The saree features a single continuous lengthwise border along its bottom edge and outer pallu edge.
-  * LOWER HEM & PALLU DRAPE: The authentic decorative border from the reference swatch runs along the lower skirt hemline at the feet AND along the outer vertical drape of the cascading pallu down to the bottom tassels.
+  * LOWER HEM & PALLU DRAPE: The authentic reference border from the reference swatch runs along the lower skirt hemline at the feet AND along the outer vertical drape of the cascading pallu down to the bottom tassels.
   * CHEST WRAP ZERO-BORDER RULE: The diagonal chest wrap across the bust and over the shoulder consists purely of clean body fabric: plain unbordered folded edge meeting the blouse neckline.
   * BUTTI CONTINUITY TO THE TOP EDGE (ZERO BLANK MARGINS): Delicate repeating buttis MUST continue seamlessly across the chest wrap right up to the folded neckline edge and shoulder seam. There must be ZERO empty margins, ZERO plain dead bands, and ZERO unprinted stripes where an upper border would normally sit.
   * UNIFORM BUTTI SCALE: All buttis across the chest, pleats, and skirt must maintain strictly identical miniature scale (approx 1.2 cm - 1.5 cm). Under no circumstances should chest buttis be enlarged.\n`
           ) : (
 `- LOWER BORDER ONLY ARCHITECTURE (TOP BORDER RIBBON, BUTTIS TO THE RIBBON):
   * The saree features a single continuous lengthwise border along its bottom edge and outer pallu edge.
-  * LOWER HEM & PALLU DRAPE: The authentic decorative border from the reference swatch runs along the lower skirt hemline at the feet AND along the outer vertical drape of the cascading pallu down to the bottom tassels.
+  * LOWER HEM & PALLU DRAPE: The authentic reference border from the reference swatch runs along the lower skirt hemline at the feet AND along the outer vertical drape of the cascading pallu down to the bottom tassels.
   * CHEST WRAP TOP BORDER RIBBON: The diagonal chest wrap across the bust and over the shoulder features a neat, narrow finished border ribbon (~0.5 cm - 1 cm solid woven piping / edge ribbon) along its top edge meeting the blouse neckline.
   * BUTTI CONTINUITY TO THE BORDER RIBBON (ZERO BLANK MARGINS): Delicate repeating buttis MUST continue seamlessly across the chest wrap right into the top border area up to the border ribbon and shoulder seam. There must be ZERO empty margins, ZERO plain dead bands, and ZERO unprinted stripes.
   * UNIFORM BUTTI SCALE: All buttis across the chest, pleats, and skirt must maintain strictly identical miniature scale (approx 1.2 cm - 1.5 cm). Under no circumstances should chest buttis be enlarged.\n`
@@ -347,63 +370,47 @@ export async function POST(req: NextRequest) {
 - CRITICAL: DO NOT add beads, hanging pearl drops, tassels, fringes, pom-poms, or latkans to the end of the pallu or the bottom hem of the saree UNLESS they are clearly and explicitly present in the provided reference images. Do NOT invent beads or hanging ornaments; keep hems and pallu ends cleanly stitched and flat.
 - BLOUSE STYLING (FALLBACK): When no blouse swatch is uploaded, synthesize an elegantly tailored blouse using the saree base body fabric or clean matching solid tone with modest round neckline and elbow-length or short tailored sleeves (fully covered shoulders, tailored sleeves, strictly NOT sleeveless, NO bare shoulders).`;
 
-      // 1. Motif & Body Field Rules
-      if (isDelicate) {
-        // Check if macro-motif slot was uploaded
-        const hasMacroMotif = uploadedImages && (
-          uploadedImages['macro_motif'] || uploadedImages['motif'] ||
-          uploadedImages['macro'] || uploadedImages['close_up']
-        );
-        const macroSlotKeys = Object.keys(uploadedImages || {}).filter(k => {
-          const lk = k.toLowerCase();
-          return lk.includes('macro') || lk.includes('motif') || lk.includes('close_up');
-        });
-        // Find the image number for the macro-motif in the ordered slots
-        const macroSlotIdx = activeSlotsOrdered.findIndex(s => {
-          const lk = s.id.toLowerCase();
-          return lk.includes('macro') || lk.includes('motif') || lk.includes('close_up');
-        });
-        const macroImgNum = macroSlotIdx >= 0 ? macroSlotIdx + 1 : null;
+        if (isDelicate) {
+          const hasMacroMotif = uploadedImages && (
+            uploadedImages['macro_motif'] || uploadedImages['motif'] ||
+            uploadedImages['macro'] || uploadedImages['close_up']
+          );
+          const macroSlotIdx = activeSlotsOrdered.findIndex(s => {
+            const lk = s.id.toLowerCase();
+            return lk.includes('macro') || lk.includes('motif') || lk.includes('close_up');
+          });
+          const macroImgNum = macroSlotIdx >= 0 ? macroSlotIdx + 1 : null;
 
-        imageInstructions += '\nCRITICAL REFERENCE MOTIF FIDELITY:\n' +
-          '- EXACT REFERENCE MOTIF REPLICATION: The saree body features delicate, miniature motifs. Use the provided swatches to replicate their EXACT visual shapes, geometry, threadwork, and colors straight from the reference images with 100% fidelity.\n' +
-          '- TRUE DELICATE SCALE & SPACING: Motifs must remain small, delicate, and evenly spaced with generous negative space (plain base fabric field between motifs) exactly as shown in the reference swatch. Under NO circumstances should motifs be replaced with generic round circles, dots, or enlarged prints.\n' +
-          '- STRICT ZERO CHEST/TORSO EMBROIDERY: The torso wrap and bust must feature ONLY the delicate repeating miniature buttis from the swatch (identical 1:1 in scale to the pleats). Absolutely NO unreferenced foliage, branch sprays, leaves, or ornamental chest embroidery. The delicate buttis must continue all the way to the top edge with zero blank bands.\n';
+          imageInstructions += '\nCRITICAL REFERENCE MOTIF FIDELITY:\n' +
+            '- EXACT REFERENCE MOTIF REPLICATION: The saree body features delicate, miniature motifs. Use the provided swatches to replicate their EXACT visual shapes, geometry, threadwork, and colors straight from the reference images with 100% fidelity.\n' +
+            '- TRUE DELICATE SCALE & SPACING: Motifs must remain small, delicate, and evenly spaced with generous negative space exactly as shown in the reference swatch.\n' +
+            '- STRICT ZERO CHEST/TORSO EMBROIDERY: The torso wrap and bust must feature ONLY the delicate repeating miniature buttis from the swatch.\n';
 
-        if (hasMacroMotif && macroImgNum) {
-          imageInstructions += `\nCRITICAL MACRO CLOSE-UP GROUND TRUTH (Image ${macroImgNum} IS THE DETAIL REFERENCE ONLY):\n` +
-            `- Image ${macroImgNum} is a ZOOMED-IN photograph of the exact repeating motifs that appear on the saree body fabric. It shows the precise thread colors, stitch geometry, and visual details at high magnification.\n` +
-            `- MANDATORY: Every single motif rendered on the generated saree body MUST be a pixel-faithful copy of the motifs shown in Image ${macroImgNum}. Match the exact visual shapes, thread colors, and spacing straight from the image reference without text interpretation.\n` +
-            `- DO NOT simplify, abstract, enlarge, or stylize the motifs. DO NOT invent new motif types not present in Image ${macroImgNum}.\n` +
-            `- If Image ${macroImgNum} shows multiple distinct motif types, reproduce all types in their exact alternating arrangement.\n` +
-            `- SCALE: The motifs on the draped saree must appear at the same relative miniature scale as they do in the body swatch (Image 1), NOT at the magnified scale of Image ${macroImgNum}. Image ${macroImgNum} is for DETAIL REFERENCE only. Under NO circumstances should chest buttis be enlarged compared to pleats.\n`;
+          if (hasMacroMotif && macroImgNum) {
+            imageInstructions += `\nCRITICAL MACRO CLOSE-UP GROUND TRUTH (Image ${macroImgNum} IS THE DETAIL REFERENCE ONLY):\n` +
+              `- Image ${macroImgNum} is a ZOOMED-IN photograph of the exact repeating motifs. Reproduce them with 100% fidelity.\n`;
+          }
+        } else if (isComplex) {
+          imageInstructions += '\nCRITICAL COMPLEX DUAL-TIER SAREE ARCHITECTURE:\n' +
+            '- UPPER BODY & CHEST WRAP (75%-80% OF GARMENT HEIGHT): The base fabric covers upper body down past knees.\n' +
+            '- LOWER SKIRT & PLEAT ART SCALE (15%-20% HEIGHT ONLY): Lower hem border band occupying ONLY the bottom 15-20%.\n';
         }
-      } else if (isComplex) {
-        imageInstructions += '\nCRITICAL COMPLEX DUAL-TIER SAREE ARCHITECTURE (INDUSTRY PROPORTIONAL SCALE & ZONE MAPPING):\n' +
-          '- UPPER BODY & CHEST WRAP (75%-80% OF GARMENT HEIGHT): The base fabric (Image 1) must cover the diagonal chest wrap, bust drape, waist, hips, and the upper 80% of the skirt and pleats (from waist continuously down past knees to lower shin). Motifs must remain continuous with zero misplaced artwork.\n' +
-          '- LOWER SKIRT & PLEAT ART SCALE (STRICTLY 15%-20% HEIGHT ONLY): The separate decorative pleat art / peacock panel is a LOWER HEM BORDER BAND occupying ONLY the bottom 15% to 20% of the skirt (from floor up to lower shin/ankle, approx 8-10 inches high). DO NOT stretch or enlarge this artwork up to the knees, thighs, or waist. It must sit proportionally as a ground-level border ribbon.\n' +
-          '- PALLU SCALE & SLEEK SHOULDER DRAPE (6-8 INCHES / 18CM WIDTH): The pallu over the left shoulder must be an elegant, neatly pleated and pinned shoulder drape (approx 15-20cm / 6-8 inches wide), hanging straight down behind the left arm to calf/ankle level. DO NOT drape the pallu as a wide, oversized blanket, poncho, or loose shawl covering the model\'s torso or side.\n' +
-          '- BORDER RIBBON ACCURACY: Lengthwise edges along the chest wrap and bottom hem must replicate the exact longitudinal border ribbon swatch (plain woven zari / selvedge ribbon). Absolutely NO contrasting floral, vine, or pictorial ribbons along the neckline or bust.\n' +
-          '- BLOUSE: Tailored fitted blouse precisely matching the blouse swatch. Crisp clean boundaries between all fabric zones.\n';
-      }
 
-      // 2. Border Architecture Rules (Universal across all saree types)
-      if (isLowerOnly) {
-        imageInstructions += '\nCRITICAL SINGLE-BORDER ARCHITECTURE (LOWER HEMLINE & PALLU DRAPE):\n' +
-          '- CHEST WRAP ZERO-BORDER RULE: The diagonal drape across the chest and bust to the left shoulder has NO top border ribbon. The delicate repeating buttis must continue seamlessly right up to the top folded neckline edge with ZERO blank margins.\n' +
-          '- LOWER HEMLINE & PALLU DRAPE BORDER: The authentic decorative border from the Body swatch runs along the horizontal lower skirt hemline at floor level AND continues along the outer vertical drape of the cascading pallu down to the tassels.\n' +
-          '- STRICT UNIFORM BUTTI SCALE: All buttis on the chest drape and bust must match the exact miniature scale of the pleat buttis (approx 1.2 cm - 1.5 cm). Do NOT enlarge chest buttis.\n';
-      } else if (isDualBorders) {
-        imageInstructions += '\nCRITICAL TWO BORDER DESIGNS (TOP & BOTTOM BORDER DIFFERENT / GANGA-JAMUNA):\n' +
-          '- UPPER CHEST DRAPE BORDER: The diagonal border running across the bust to the left shoulder must strictly and exclusively replicate the Upper Border swatch (Image 2/Upper Border).\n' +
-          '- LOWER SKIRT HEMLINE BORDER: The horizontal border running along the floor at the feet must strictly replicate the Lower Border / Body swatch.\n' +
-          '- PALLU CASCADE OUTER BORDER: Replicates the Upper Border running down from the shoulder along the outer drape.\n' +
-          '- ZERO CROSS-BLEED: Do NOT mix the upper and lower border designs; maintain their separate distinct colors and patterns across their respective zones.\n';
+        if (isLowerOnly) {
+          imageInstructions += '\nCRITICAL SINGLE-BORDER ARCHITECTURE: Chest wrap has zero top border. Lower hem runs along floor and cascading pallu.\n';
+        } else if (isDualBorders) {
+          imageInstructions += '\nCRITICAL TWO BORDER DESIGNS: Upper chest drape uses upper border swatch. Lower skirt hemline uses lower border swatch.\n';
+        }
       } else {
-        // Default: Symmetrical Saree Borders
-        imageInstructions += '\nCRITICAL SYMMETRICAL LENGTHWISE BORDERS (DEFAULT ARCHITECTURE):\n' +
-          '- EXACT 1:1 BORDER CLONING: The saree features identical borders on both lengthwise edges. The diagonal chest drape across the bust, the lower skirt hemline at the feet, and the outer vertical edge of the cascading pallu must all be identical 1:1 clones of the reference border from the Body swatch.\n' +
-          '- ZERO ALTERNATE BORDERS: Under NO circumstances should the chest border or pallu border differ in pattern, color, or width from the lower hem border. Absolutely NO invented gold, metallic, or contrasting ribbons.\n';
+        // NON-SAREE / KURTI TAILORING ARCHITECTURE
+        imageInstructions += `CRITICAL KURTI / SALWAR SUIT TAILORING & ARCHITECTURE:
+- GARMENT & KURTI SILHOUETTE: An exquisitely tailored luxury Indian kurti / kurta set. Replicate the EXACT prints, colors, weave texture, and embroidery from the uploaded fabric swatches with pixel-level fidelity.
+- NECKLINE & CRAFTWORK: Authentic tailored modest neckline, crisp placket, and collar craft details with high-definition embroidery.
+- SLEEVES & SLITS: Tailored three-quarter or full sleeves with crisp side slits and natural, graceful garment drape.
+- BOTTOM PANT: Coordinated tailored bottom pant (straight-cut trousers, palazzo, or churidar) that complements or matches the provided bottom fabric swatch.
+- DUPATTA / SCARF: If a dupatta is included, it is gracefully draped over the model's shoulder or arms with matching finished borders and natural flow.
+- STRICT NON-SAREE RULE: Under NO circumstances should this garment be draped as a saree. Absolutely NO saree pallu, NO waist pleats, and NO bare-midriff saree blouse. This is strictly a tailored kurti / kurta ensemble.
+- ALL-OVER MOTIF CONTINUITY: Patterns, butis, or block prints must cover the garment continuously from collar to hemline without random blank or solid patches.`;
       }
     }
 
@@ -442,7 +449,7 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
     // Default template fallbacks (if not configured in DB)
     const fallbackSystemPrompt = 'Commercial fashion photoshoot for luxury Indian garments brand. Masterpiece, ultra-sharp focus, photorealistic 8k resolution, editorial Vogue India and Harpers Bazaar style.';
     const fallbackCamera = 'Shot on Hasselblad H6D-100c medium format camera paired with HC 100mm f/2.2 portrait lens. Superb optical sharpness, razor-sharp focus, crisp details, hyper-realistic depth of field, 8K UHD commercial fashion catalogue photography, true color reproduction, zero digital artifacting. Eye-level (peer POV), face always visible.';
-    const fallbackNegative = 'bad anatomy, deformed fingers, fused fingers, too many fingers, missing fingers, broken wrist, extra limbs, mutated hands, plastic skin, doll-like face, mannequin, oversaturated cartoon, 3d render, CGI, digital drawing, blur, out of focus, soft focus, low resolution, artifacts, poorly drawn face, asymmetric eyes, distorted fabric patterns, floating jewelry, melting jewelry, unnatural fabric tension, watermark, signature, blurry text, cropped head, unnatural poses, bright flash, evening bulb light, garish colors, pattern behind print, hanging beads, beads at hem, dangling beads, unwanted tassels, fringe, latkans, pom-poms at hem, dangling tassels at saree border, plain unprinted lap, solid unprinted pleats, blank fabric patches on lap, unprinted thighs, missing motifs on skirt, blank fabric on lap, broken border, fragmented border band, interrupted border ribbon, sliced border, disjointed border, blurry border edge, disappearing border, half border, fake chest border, invented neck border, gold foliage on chest, golden leaf spray, chest branch embroidery, mismatched chest border, contrasting bust border, invented gold sleeve cuff, fake gold blouse border, gold leaf spray, golden fern leaves, leafy branch embroidery on chest, gold foliage on chest, embroidered sleeve cuffs, border on blouse sleeve, metallic branch embroidery, pallu on chest, inverted pallu, upside down pallu design, misplaced pleat art on chest, distorted butti scale, giant enlarged butis, oversized pallu, wide blanket pallu, loose shawl pallu, curtain pallu covering entire back, unfolded pallu across back, blanket drape across shoulders, mismatched body print, scrambled floral motifs, invented border pattern, generic wavy border, wrong border motifs, substituted lace, blurred border embroidery, scrambled lattice border, hybrid border blending body and pallu, body print inside pallu, pallu texture bleed, body vines mixed into pallu, sideways rotated pallu, horizontal pallu hung vertically, distorted pallu tiles, oversized peacock border, tall pleat art, pleat art extending to knees, pleat art extending to thighs, giant lower border';
+    const fallbackNegative = 'bad anatomy, deformed fingers, fused fingers, too many fingers, missing fingers, broken wrist, extra limbs, mutated hands, plastic skin, doll-like face, mannequin, oversaturated cartoon, 3d render, CGI, digital drawing, blur, out of focus, soft focus, low resolution, artifacts, poorly drawn face, asymmetric eyes, distorted fabric patterns, floating jewelry, melting jewelry, unnatural fabric tension, watermark, signature, blurry text, cropped head, unnatural poses, bright flash, evening bulb light, garish colors, hanging beads, unwanted tassels, fringe, plain unprinted lap, solid unprinted pleats, blank fabric on lap, missing motifs on skirt, unreferenced patterns, unreferenced embroidery, unreferenced chest border, mismatched borders, oversized buttis, giant enlarged motifs, distorted motifs, oversized pallu, loose shawl pallu, mismatched body print, sideways rotated pallu, misplaced pleat art';
     
     const sysPrompt = template?.systemPrompt || fallbackSystemPrompt;
     const camSettings = template?.cameraSettings || fallbackCamera;
@@ -552,26 +559,46 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       throw new Error('Failed to upload reference image to temporary hosting (Kie.ai native upload failed).');
     };
 
+    // Collect reference image URLs for Kie.ai: supports BOTH hosted HTTP URLs and base64 swatches
     let inputUrls: string[] = [];
-    if (geminiImageParts.length > 0) {
-      for (let i = 0; i < geminiImageParts.length; i++) {
-        const part = geminiImageParts[i];
-        const dataUrl = `data:${part.inline_data.mime_type};base64,${part.inline_data.data}`;
-
-        try {
-          console.log(`[Kie.ai] Uploading reference image ${i + 1} to Kie.ai native temporary hosting...`);
-          const imgUrl = await uploadReferenceImageToKie(dataUrl, kieApiKeyBearer);
-          inputUrls.push(imgUrl);
-        } catch (err: any) {
-          console.error(`[Kie.ai] Failed to upload image ${i + 1}:`, err);
-          return NextResponse.json(
-            { error: `Failed to upload reference image for AI photoshoot: ${err?.message || err}` },
-            { status: 500 }
-          );
+    for (let i = 0; i < activeSlotsOrdered.length; i++) {
+      const slot = activeSlotsOrdered[i];
+      const rawUrl = slot.dataUrl;
+      if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+        inputUrls.push(rawUrl);
+        console.log(`[Kie.ai] Added swatch ${slot.label} as direct HTTP URL: ${rawUrl.substring(0, 80)}`);
+      } else {
+        const resolved = resolveImageToDataUrl(rawUrl);
+        if (resolved) {
+          try {
+            console.log(`[Kie.ai] Uploading swatch ${slot.label} to Kie.ai temporary hosting...`);
+            const imgUrl = await uploadReferenceImageToKie(resolved, kieApiKeyBearer);
+            inputUrls.push(imgUrl);
+          } catch (err: any) {
+            console.error(`[Kie.ai] Failed to upload swatch ${slot.label}:`, err);
+          }
         }
       }
-      console.log(`[Kie.ai] Successfully uploaded ${inputUrls.length} reference images to temporary hosting`);
     }
+
+    // Model face image
+    if (modelFaceUrl) {
+      if (modelFaceUrl.startsWith('http://') || modelFaceUrl.startsWith('https://')) {
+        inputUrls.push(modelFaceUrl);
+        console.log(`[Kie.ai] Added model face as direct HTTP URL`);
+      } else {
+        const resolvedModel = resolveImageToDataUrl(modelFaceUrl);
+        if (resolvedModel) {
+          try {
+            const imgUrl = await uploadReferenceImageToKie(resolvedModel, kieApiKeyBearer);
+            inputUrls.push(imgUrl);
+          } catch (mErr: any) {
+            console.warn('[Kie.ai] Failed to upload model face:', mErr?.message);
+          }
+        }
+      }
+    }
+    console.log(`[Kie.ai] Total reference images prepared for generation: ${inputUrls.length}`);
 
     // Determine model — prefer image-to-image when we have input images, else text-to-image
     // But always respect the admin-chosen model if it is explicitly an image-to-image type
@@ -589,13 +616,7 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       actualModelStr = 'nano-banana-2-1';
     }
 
-    // Saree Refactored Prompt Builder Branch
-    const isSaree = Boolean(
-      template?.slug?.toLowerCase().includes('saree') ||
-      template?.garmentType?.toLowerCase().includes('saree') ||
-      sareeDesignType ||
-      borderStyle
-    );
+    // Saree Refactored Prompt Builder Branch (isSaree defined earlier)
 
     let activePrompt = fluxPrompt;
     let activeInputUrls = inputUrls;
@@ -710,7 +731,7 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       activePrompt = sareePromptResult.finalPrompt;
       activeNegativePrompt = sareePromptResult.negativeExclusions || negPrompt;
       const negativePromptText = sareePromptResult.negativeExclusions ||
-        'bad anatomy, distorted fabric patterns, unreferenced embroidery, uninvited chest artwork not in swatch, fabricated motifs absent from reference images, hemline border copied to chest drape, floral vines on chest border, widened chest border, patterned upper border, mismatched motifs on back reflection, pattern fabrication, giant enlarged butis, blur, watermark.';
+        'bad anatomy, distorted fabric patterns, unreferenced motifs, unreferenced patterns, unreferenced embroidery, uninvited chest artwork not in swatch, hemline border copied to chest, mismatched borders, oversized buttis, giant enlarged buttis, blur, watermark.';
       if (isNanoBanana || isSeedream) {
         activePrompt += `\n\nNEGATIVE EXCLUSIONS (STRICTLY FORBIDDEN): ${negativePromptText}`;
       }
@@ -913,16 +934,37 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
 
           // Upscaling removed as per user request
 
-          // Upload to Cloudflare R2 for permanent storage
+          // Upload to Cloudflare R2 for permanent storage with retries
           let permanentUrl = finalImageUrl;
+          const isKieTemp = finalImageUrl.includes('tempfile') || finalImageUrl.includes('aiquickdraw') || finalImageUrl.includes('kie.ai');
+
           if (isStorageConfigured()) {
-            try {
-              const uId = userId || 'customer';
-              const oId = orderId || 'order';
-              const pId = poseId || taskId;
-              permanentUrl = await uploadGeneratedAsset(finalImageUrl, uId, oId, pId);
-            } catch (cloudErr) {
-              console.warn('[Storage] Failed to upload generated asset, falling back to direct URL:', cloudErr);
+            let uploadSuccess = false;
+            for (let rAttempt = 1; rAttempt <= 3; rAttempt++) {
+              try {
+                const uId = userId || 'customer';
+                const oId = orderId || 'order';
+                const pId = poseId || taskId;
+                console.log(`[Storage] Uploading generated asset to R2 (attempt ${rAttempt}/3)...`);
+                permanentUrl = await uploadGeneratedAsset(finalImageUrl, uId, oId, pId, { productName, stockCode });
+                uploadSuccess = true;
+                console.log(`[Storage] ✅ Generated asset permanently stored in R2: ${permanentUrl}`);
+                break;
+              } catch (cloudErr: any) {
+                console.warn(`[Storage] R2 upload attempt ${rAttempt}/3 failed:`, cloudErr?.message || cloudErr);
+                if (rAttempt < 3) {
+                  await new Promise(r => setTimeout(r, rAttempt * 1500));
+                }
+              }
+            }
+
+            if (!uploadSuccess && isKieTemp) {
+              console.error('[Storage Critical] Failed to upload generated asset to Cloudflare R2!');
+              return NextResponse.json({
+                error: 'AI image generated, but failed to save permanently to Cloudflare R2 storage. Please retry.',
+                temporaryUrl: finalImageUrl,
+                taskId,
+              }, { status: 500 });
             }
           }
 
