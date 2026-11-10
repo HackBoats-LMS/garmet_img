@@ -265,6 +265,35 @@ export function ProductForm({ productId }: Props) {
   const [linkedOrderId, setLinkedOrderId] = useState<string | null>(null);
   const [showCollageModal, setShowCollageModal] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
+
+  const handleCleanExpiredPhotos = () => {
+    if (!generatedImages) return;
+    const cleaned = Object.entries(generatedImages).filter(([poseId, img]: any) => {
+      const url = img?.imageUrl || '';
+      return !brokenImages[poseId] && !url.includes('tempfile') && !url.includes('aiquickdraw');
+    });
+    const reindexed = Object.fromEntries(cleaned.map(([id, val]: any, idx) => [id, { ...val, order: idx }]));
+    setGeneratedImages(Object.keys(reindexed).length > 0 ? reindexed : null);
+    setBrokenImages({});
+
+    let newCover = form.coverImageUrl;
+    if (newCover && (newCover.includes('tempfile') || newCover.includes('aiquickdraw') || !cleaned.some(([, v]: any) => v.imageUrl === newCover))) {
+      newCover = cleaned[0]?.[1]?.imageUrl || '';
+      set('coverImageUrl', newCover);
+    }
+
+    if (productId) {
+      fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          generatedImages: Object.keys(reindexed).length > 0 ? reindexed : null,
+          coverImageUrl: newCover,
+        }),
+      }).catch(err => console.warn('Clean expired photos failed:', err));
+    }
+  };
 
   // AI Generation State
   const [generatingName, setGeneratingName] = useState(false);
@@ -3418,6 +3447,21 @@ export function ProductForm({ productId }: Props) {
 
             {generatedImages && Object.keys(generatedImages).length > 0 ? (
               <>
+                {cataloguePhotosList.some(item => Boolean(brokenImages[item.poseId] || item.imageUrl.includes('tempfile') || item.imageUrl.includes('aiquickdraw'))) && (
+                  <div className="mb-2.5 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span className="text-[11px] font-medium">Some photos have expired temporary links.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCleanExpiredPhotos}
+                      className="px-2 py-1 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] transition-colors cursor-pointer shrink-0"
+                    >
+                      Clean Expired
+                    </button>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2.5">
                   {cataloguePhotosList.map((item, idx) => {
                     const isCover = item.isCover;
@@ -3430,26 +3474,47 @@ export function ProductForm({ productId }: Props) {
                             : 'border-cream-border hover:border-accent/60 shadow-xs'
                         } bg-cream-light group relative`}
                       >
-                        {/* The Image (Click to View in Lightbox) */}
-                        <div
-                          onClick={() => setLightboxIndex(idx)}
-                          className="w-full h-full cursor-zoom-in relative"
-                          title="Click to view full photo"
-                        >
-                          <img
-                            src={item.imageUrl}
-                            alt={`Catalogue Photo #${idx + 1}`}
-                            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                          />
-
-                          {/* Hover Overlay with Click to View hint */}
-                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-                            <div className="px-2.5 py-1 bg-black/75 backdrop-blur-md rounded-xl text-white text-[10px] font-bold flex items-center gap-1.5 shadow-md transform translate-y-1 group-hover:translate-y-0 transition-transform">
-                              <Eye className="w-3.5 h-3.5 text-accent" />
-                              <span>Click to View</span>
+                        {/* The Image (Click to View in Lightbox or Broken/Expired State) */}
+                        {brokenImages[item.poseId] || item.imageUrl.includes('tempfile') || item.imageUrl.includes('aiquickdraw') ? (
+                          <div className="w-full h-full flex flex-col items-center justify-center p-3 text-center bg-rose-50/70 border border-rose-200">
+                            <AlertCircle className="w-6 h-6 text-rose-500 mb-1 shrink-0" />
+                            <p className="text-[11px] font-bold text-rose-900 leading-tight">Image Expired</p>
+                            <p className="text-[9px] text-rose-600 mt-0.5 leading-tight">Temporary storage link has expired</p>
+                            <div className="flex flex-col gap-1 w-full mt-2.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteImage(item.poseId);
+                                }}
+                                className="w-full py-1 px-1.5 rounded bg-white border border-rose-300 hover:bg-rose-100 text-rose-700 text-[9px] font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                <Trash2 className="w-2.5 h-2.5" /> Remove Slot
+                              </button>
                             </div>
                           </div>
-                        </div>
+                        ) : (
+                          <div
+                            onClick={() => setLightboxIndex(idx)}
+                            className="w-full h-full cursor-zoom-in relative"
+                            title="Click to view full photo"
+                          >
+                            <img
+                              src={item.imageUrl}
+                              alt={`Catalogue Photo #${idx + 1}`}
+                              onError={() => setBrokenImages(prev => ({ ...prev, [item.poseId]: true }))}
+                              className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                            />
+
+                            {/* Hover Overlay with Click to View hint */}
+                            <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                              <div className="px-2.5 py-1 bg-black/75 backdrop-blur-md rounded-xl text-white text-[10px] font-bold flex items-center gap-1.5 shadow-md transform translate-y-1 group-hover:translate-y-0 transition-transform">
+                                <Eye className="w-3.5 h-3.5 text-accent" />
+                                <span>Click to View</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
 
                         {/* Top Left: Order Badge + Cover Tag */}
                         <div className="absolute top-2 left-2 flex items-center gap-1 z-10 pointer-events-none">

@@ -245,30 +245,30 @@ export async function analyzeSwatchBuffer(imageBuffer: Buffer): Promise<SwatchAn
       colors.push('coral_pink');
       if (blob.greenTotal > 5) {
         colors.push('leaf_green');
-        name = 'Embroidered Flower Butti with Green Foliage';
-        paletteDesc = 'Coral/Pink Petals with Olive-Green Calyx & Stem';
+        name = 'Multi-Tone Butti (Pink-Green from Swatch)';
+        paletteDesc = 'Pink tones with green accents from swatch';
       } else {
-        name = 'Embroidered Blossom Butti';
-        paletteDesc = 'Crimson/Pink Silk Threadwork';
+        name = 'Single-Tone Butti (Pink from Swatch)';
+        paletteDesc = 'Pink-toned motif from swatch';
       }
     } else if (blob.greenTotal > blob.tanGoldTotal && blob.greenTotal > 12) {
       category = 'foliage';
       colors.push('leaf_green');
-      name = 'Botanical Leaf Sprig / Foliage Motif';
-      paletteDesc = 'Delicate Green Threadwork';
+      name = 'Green-Accent Motif (from Swatch)';
+      paletteDesc = 'Green-toned motif from swatch';
     } else {
       category = 'geometric';
       colors.push('warm_tan_zari');
       const aspectRatio = bw / (bh || 1);
       if (aspectRatio > 1.5) {
-        name = 'Linear Chevron / Wave Scroll Motif';
-        paletteDesc = 'Tan/Zari Embroidery with Horizontal Motion';
+        name = 'Horizontal Repeat Motif (from Swatch)';
+        paletteDesc = 'Warm-toned horizontal motif from swatch';
       } else if (aspectRatio < 0.7) {
-        name = 'Vertical Threadwork Motif';
-        paletteDesc = 'Vertical embroidered motif matching swatch';
+        name = 'Vertical Repeat Motif (from Swatch)';
+        paletteDesc = 'Vertical motif matching swatch';
       } else {
-        name = 'Delicate Secondary Motif';
-        paletteDesc = 'Delicate secondary threadwork motif matching swatch';
+        name = 'Compact Repeat Motif (from Swatch)';
+        paletteDesc = 'Compact motif matching swatch';
       }
     }
 
@@ -398,13 +398,13 @@ export async function analyzeSwatchBuffer(imageBuffer: Buffer): Promise<SwatchAn
       `The macro close-up swatch has been analyzed and confirmed to possess MULTIPLE ALTERNATING BUTTIS: ` +
       `(1) ${motif1}, and (2) ${motif2}. ` +
       `MANDATORY COMPOSITION RULE: The AI must strictly replicate BOTH distinct motif styles across the saree body in an alternating staggered grid layout. ` +
-      `NEVER drop the ${motif2}, and NEVER render only flowers. Both ${motif1} and ${motif2} must be crisp, visible, and uniformly repeated across the skirt pleats, waist, and chest wrap.`;
+      `NEVER drop the ${motif2}, and NEVER render only one motif type. Both ${motif1} and ${motif2} must be crisp, visible, and uniformly repeated across the skirt pleats, waist, and chest wrap.`;
   } else if (distinctMotifs.length > 0) {
     const singleName = distinctMotifs[0].name;
     promptDirective =
       `AUTHENTIC SINGLE-MOTIF SPECIFICATION: ` +
       `The macro close-up displays delicate repeating ${singleName}. ` +
-      `MANDATORY: Replicate this exact motif shape, thread texture, and spacing continuously across the saree body with uniform scale. Absolutely NO oversized bouquets, NO branch embroidery, and NO uninvited motifs.`;
+      `MANDATORY: Replicate this exact motif shape, surface texture, and spacing continuously across the saree body with uniform scale. Absolutely NO oversized motifs, and NO unreferenced patterns.`;
   } else {
     promptDirective = 'Maintain uniform base fabric texture matching the reference image.';
   }

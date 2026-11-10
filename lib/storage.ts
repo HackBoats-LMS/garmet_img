@@ -42,7 +42,13 @@ export const isStorageConfigured = (): boolean => {
   const accountId = process.env.R2_ACCOUNT_ID || '';
   const accessKeyId = process.env.R2_ACCESS_KEY_ID || '';
   const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY || '';
-  return Boolean(accountId && accessKeyId && secretAccessKey);
+  const isR2 = Boolean(accountId && accessKeyId && secretAccessKey);
+  const isCloudinary = Boolean(
+    (process.env.CLOUDINARY_CLOUD_NAME || process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME) &&
+    (process.env.CLOUDINARY_API_KEY || process.env.NEXT_PUBLIC_CLOUDINARY_API_KEY) &&
+    process.env.CLOUDINARY_API_SECRET
+  );
+  return isR2 || isCloudinary;
 };
 
 export interface UploadOptions {
@@ -51,11 +57,14 @@ export interface UploadOptions {
   tags?: string[];
   preserveQuality?: boolean;
   bucket?: string;
+  productName?: string;
+  stockCode?: string;
 }
 
 /**
  * Helper to convert various image formats to a Buffer
  * Uses O(1) index slicing instead of backtracking regex to handle large base64 payloads safely
+ * Includes retry logic and content-type validation to prevent saving expired/broken URLs
  */
 async function getImageBuffer(fileInput: string): Promise<{ buffer: Buffer; mime: string; ext: string }> {
   // If it's a base64 data URL
@@ -72,18 +81,63 @@ async function getImageBuffer(fileInput: string): Promise<{ buffer: Buffer; mime
     const rawExt = mime.split('/')[1] || 'jpg';
     const ext = rawExt === 'jpeg' ? 'jpg' : rawExt.replace(/[^a-z0-9]/gi, '');
     const buffer = Buffer.from(base64Data, 'base64');
+    if (buffer.length < 50) {
+      throw new Error(`Image buffer too small (${buffer.length} bytes) — likely corrupt or empty base64 data`);
+    }
     return { buffer, mime, ext };
   }
 
-  // If it's an HTTP URL, fetch it
+  // If it's an HTTP URL, fetch it with retry and validation
   if (fileInput.startsWith('http')) {
-    const response = await fetch(fileInput);
-    if (!response.ok) throw new Error(`Failed to fetch image from URL: ${response.statusText}`);
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const mime = response.headers.get('content-type') || 'image/jpeg';
-    const ext = mime.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
-    return { buffer, mime, ext };
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+        const response = await fetch(fileInput, { signal: controller.signal });
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          throw new Error(
+            `Failed to fetch image from URL (HTTP ${response.status}): ${response.statusText} — URL: ${fileInput.substring(0, 120)}`
+          );
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+
+        // Validate the response is actually an image, not an error page or JSON
+        if (!contentType.includes('image/') && !contentType.includes('octet-stream')) {
+          const bodyPreview = await response.text().catch(() => '(unreadable)');
+          throw new Error(
+            `URL did not return an image (Content-Type: ${contentType}). ` +
+            `Response preview: ${bodyPreview.substring(0, 200)}. ` +
+            `URL: ${fileInput.substring(0, 120)}`
+          );
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        // Validate minimum size — a real image should be > 50 bytes
+        if (buffer.length < 50) {
+          throw new Error(
+            `Fetched image is suspiciously small (${buffer.length} bytes) — likely expired, empty, or error response. ` +
+            `URL: ${fileInput.substring(0, 120)}`
+          );
+        }
+
+        const mime = contentType.includes('image/') ? contentType.split(';')[0].trim() : 'image/jpeg';
+        const ext = mime.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+        return { buffer, mime, ext };
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[Storage] getImageBuffer attempt ${attempt}/3 failed:`, err?.message);
+        if (attempt < 3) {
+          await new Promise(r => setTimeout(r, attempt * 1000));
+        }
+      }
+    }
+    throw lastError || new Error(`Failed to fetch image from URL after 3 attempts: ${fileInput.substring(0, 120)}`);
   }
 
   throw new Error('Unsupported image input format. Must be base64 data URL or HTTP URL.');
@@ -96,11 +150,48 @@ export async function uploadToStorage(
   fileInput: string,
   options: UploadOptions
 ): Promise<{ url: string; publicId: string; format: string }> {
+  // Idempotent: return directly if already permanently stored in Cloudflare R2 or Cloudinary
+  if (typeof fileInput === 'string' && (
+    fileInput.includes('.r2.dev') ||
+    fileInput.includes('.r2.cloudflarestorage.com') ||
+    fileInput.includes('cloudinary.com') ||
+    fileInput.includes('res.cloudinary.com')
+  )) {
+    console.log('[Storage] Image is already permanently stored:', fileInput);
+    return {
+      url: fileInput,
+      publicId: fileInput.split('/').pop()?.split('.')[0] || 'existing',
+      format: fileInput.split('.').pop() || 'jpg',
+    };
+  }
   const client = getS3Client();
-  if (!client || !isStorageConfigured()) {
-    console.error('[Storage Error] Cloudflare R2 environment variables are missing on this server.');
+  if (!client) {
+    console.warn('[Storage] Cloudflare R2 is not configured. Engaging Cloudinary fallback...');
+    try {
+      const { uploadToCloudinary } = await import('@/lib/cloudinary');
+      let { buffer, mime, ext } = await getImageBuffer(fileInput);
+      const fileName = options.publicId ? `${options.publicId}.${ext}` : `${Date.now()}.${ext}`;
+      const cldResult = await uploadToCloudinary({
+        buffer,
+        fileName,
+        mimeType: mime,
+        folder: options.folder,
+        productName: options.productName,
+        stockCode: options.stockCode,
+      });
+      if (cldResult?.url) {
+        return {
+          url: cldResult.url,
+          publicId: cldResult.publicId,
+          format: cldResult.format || ext,
+        };
+      }
+    } catch (cldErr: any) {
+      console.error('[Storage] Cloudinary fallback failed:', cldErr?.message || cldErr);
+    }
+
     throw new Error(
-      'Cloudflare R2 storage is not configured. Please add R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_PUBLIC_URL to your Vercel Environment Variables.'
+      'Cloudflare R2 storage is not configured and Cloudinary fallback was unavailable.'
     );
   }
 
@@ -143,14 +234,57 @@ export async function uploadToStorage(
     const objectKey = options.folder ? `${options.folder}/${fileName}` : fileName;
     const targetBucket = options.bucket || R2_GENERATED_BUCKET;
 
-    await client.send(
-      new PutObjectCommand({
-        Bucket: targetBucket,
-        Key: objectKey,
-        Body: buffer,
-        ContentType: mime,
-      })
-    );
+    console.log(`[Storage] Uploading ${Math.round(buffer.length / 1024)}KB to R2 bucket '${targetBucket}' key '${objectKey}'`);
+
+    let uploadSuccess = false;
+    let lastUploadError: any = null;
+    for (let uAttempt = 1; uAttempt <= 3; uAttempt++) {
+      try {
+        await client.send(
+          new PutObjectCommand({
+            Bucket: targetBucket,
+            Key: objectKey,
+            Body: buffer,
+            ContentType: mime,
+          })
+        );
+        uploadSuccess = true;
+        break;
+      } catch (putErr: any) {
+        lastUploadError = putErr;
+        console.warn(`[Storage] PutObjectCommand attempt ${uAttempt}/3 failed:`, putErr?.message);
+        if (uAttempt < 3) {
+          await new Promise(r => setTimeout(r, uAttempt * 1000));
+        }
+      }
+    }
+    if (!uploadSuccess) {
+      console.warn(`[Storage] ⚠️ Cloudflare R2 upload failed after 3 attempts. Engaging Cloudinary failover...`);
+      try {
+        const { uploadToCloudinary } = await import('@/lib/cloudinary');
+        const cldResult = await uploadToCloudinary({
+          buffer,
+          fileName,
+          mimeType: mime,
+          folder: options.folder,
+          productName: options.productName,
+          stockCode: options.stockCode,
+        });
+
+        if (cldResult?.url) {
+          console.log(`[Storage] ✅ Cloudinary failover succeeded: ${cldResult.url}`);
+          return {
+            url: cldResult.url,
+            publicId: cldResult.publicId,
+            format: cldResult.format || ext,
+          };
+        }
+      } catch (cldErr: any) {
+        console.error('[Storage] Cloudinary failover exception:', cldErr?.message || cldErr);
+      }
+
+      throw lastUploadError || new Error(`Failed to upload object to R2 bucket '${targetBucket}' key '${objectKey}' and Cloudinary failover.`);
+    }
 
     const genPubUrl = (process.env.R2_GENERATED_PUBLIC_URL || process.env.R2_PUBLIC_URL || R2_GENERATED_PUBLIC_URL || '').replace(/\/$/, '');
     const imgPubUrl = (process.env.R2_IMAGES_PUBLIC_URL || process.env.R2_PUBLIC_URL || R2_IMAGES_PUBLIC_URL || '').replace(/\/$/, '');
@@ -164,6 +298,8 @@ export async function uploadToStorage(
     } else {
       fileUrl = genPubUrl ? `${genPubUrl}/${objectKey}` : `/api/images/${objectKey}`;
     }
+
+    console.log(`[Storage] ✅ Upload successful: ${fileUrl}`);
 
     return {
       url: fileUrl,
@@ -183,6 +319,17 @@ export async function deleteFromStorage(
   urlOrKey: string,
   customBucket?: string
 ): Promise<{ success: boolean; key: string; bucket: string }> {
+  if (urlOrKey.includes('cloudinary.com')) {
+    try {
+      const { deleteFromCloudinary } = await import('@/lib/cloudinary');
+      const success = await deleteFromCloudinary(urlOrKey);
+      return { success, key: urlOrKey, bucket: 'cloudinary' };
+    } catch (cldErr: any) {
+      console.error('[Storage] Cloudinary delete failed:', cldErr?.message || cldErr);
+      return { success: false, key: urlOrKey, bucket: 'cloudinary' };
+    }
+  }
+
   const client = getS3Client();
   if (!client) {
     console.warn('[Storage] Cannot delete from R2: S3Client not configured.');
@@ -300,12 +447,15 @@ export async function uploadGeneratedAsset(
   fileInput: string,
   userId: string,
   orderId: string,
-  poseId: string
+  poseId: string,
+  productInfo?: { productName?: string; stockCode?: string }
 ): Promise<string> {
   const res = await uploadToStorage(fileInput, {
     bucket: R2_GENERATED_BUCKET,
     folder: `coutureai/users/${userId}/generated/${orderId}`,
     publicId: `pose_${poseId}_${Date.now()}`,
+    productName: productInfo?.productName,
+    stockCode: productInfo?.stockCode,
   });
   return res.url;
 }

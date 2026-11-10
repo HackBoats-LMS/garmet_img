@@ -89,9 +89,9 @@ function runTests() {
 
         // 2. Check only ONE border block appears
         const borderBlocksCount = [
-          result.finalPrompt.includes('The same border design from Image 1 is used on both the hem and the chest/pallu edge.'),
-          result.finalPrompt.includes('Do not swap or blend them.'),
-          result.finalPrompt.includes('Border appears only at the hem. The chest wrap and pallu crossing edge are plain fabric with no border.'),
+          result.finalPrompt.includes('[BORDER ARCHITECTURE: SYMMETRIC BORDERS]:'),
+          result.finalPrompt.includes('[BORDER ARCHITECTURE: DUAL CONTRASTING BORDERS]:'),
+          result.finalPrompt.includes('[BORDER ARCHITECTURE: LOWER BORDER ONLY'),
         ].filter(Boolean).length;
 
         assert(
@@ -102,20 +102,20 @@ function runTests() {
         // 3. Check no text for an empty slot leaks into the prompt
         if (!variation.slots.macro_motif) {
           assert(
-            !result.finalPrompt.includes('macro close-up of the body fabric motif'),
+            !result.finalPrompt.includes('micro-motif close-up'),
             `Leaked macro_motif manifest when not uploaded in [${layout || 'default'} x ${border} x ${variation.name}]`
           );
           assert(
-            result.finalPrompt.includes('Do not add flowers or buttis beyond those visible in Image 1.'),
+            result.finalPrompt.includes('Motifs: Reproduce only the repeating buttis visible in Image 1.'),
             `Missing absent-slot rule for macro_motif in [${layout || 'default'} x ${border} x ${variation.name}]`
           );
         } else {
           assert(
-            result.finalPrompt.includes('macro close-up of the body fabric motif'),
+            result.finalPrompt.includes('micro-motif close-up'),
             `Missing macro_motif manifest when uploaded in [${layout || 'default'} x ${border} x ${variation.name}]`
           );
           assert(
-            !result.finalPrompt.includes('Do not add flowers or buttis beyond those visible in Image 1.'),
+            !result.finalPrompt.includes('Motifs: Reproduce only the repeating buttis visible in Image 1.'),
             `Leaked absent-slot rule when macro_motif IS uploaded in [${layout || 'default'} x ${border} x ${variation.name}]`
           );
         }
@@ -126,7 +126,7 @@ function runTests() {
             `Leaked blouse manifest when not uploaded in [${layout || 'default'} x ${border} x ${variation.name}]`
           );
           assert(
-            result.finalPrompt.includes('Blouse: Tailored fitted blouse using plain matching fabric'),
+            result.finalPrompt.includes('Blouse: Elegantly tailored fitted blouse'),
             `Missing default blouse behavior when blouse not uploaded in [${layout || 'default'} x ${border} x ${variation.name}]`
           );
         } else {
@@ -135,7 +135,7 @@ function runTests() {
             `Missing blouse manifest when blouse uploaded in [${layout || 'default'} x ${border} x ${variation.name}]`
           );
           assert(
-            !result.finalPrompt.includes('Blouse: Tailored fitted blouse using plain matching fabric'),
+            !result.finalPrompt.includes('Blouse: Elegantly tailored fitted blouse'),
             `Leaked default blouse behavior when blouse IS uploaded in [${layout || 'default'} x ${border} x ${variation.name}]`
           );
         }
