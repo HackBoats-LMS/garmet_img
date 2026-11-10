@@ -241,11 +241,7 @@ export async function POST(req: NextRequest) {
           console.log(`[Gemini] Added ${label} image (${match[1]}, ${Math.round(match[2].length / 1024)}KB base64)`);
         }
       } else if (resolved.startsWith('http')) {
-        // Collect remote HTTP URLs so Kie.ai receives all swatches
-        if (!orderedInputUrls.includes(resolved)) {
-          orderedInputUrls.push(resolved);
-        }
-        console.log(`[Gemini] Added remote URL for ${label}: ${resolved.substring(0, 80)}`);
+        console.log(`[Gemini] Skipping remote URL for ${label} (Gemini prefers inline_data)`);
       }
     };
 
@@ -613,13 +609,7 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       actualModelStr = 'nano-banana-2-1';
     }
 
-    // Saree Refactored Prompt Builder Branch
-    const isSaree = Boolean(
-      template?.slug?.toLowerCase().includes('saree') ||
-      template?.garmentType?.toLowerCase().includes('saree') ||
-      sareeDesignType ||
-      borderStyle
-    );
+    // Saree Refactored Prompt Builder Branch (isSaree defined earlier with !isKurti guard)
 
     let activePrompt = fluxPrompt;
     let activeInputUrls = inputUrls;
