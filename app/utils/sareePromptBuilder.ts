@@ -14,7 +14,8 @@ export interface SareePromptSlotInput {
 
 export interface BuildSareePromptInput {
   sareeLayoutMode?: string; // '' | 'default' | 'delicate_buttis' | 'dual_tier_pleats' | 'complex'
-  borderSelection?: string; // '' | 'symmetric' | 'different_borders' | 'dual_contrasting_borders' | 'lower_border_only'
+  borderSelection?: string; // '' | 'symmetric' | 'different_borders' | 'dual_contrasting_borders' | 'lower_border_only' | 'lower_border_borderless'
+  tasselStyle?: string; // '' | 'none' | 'tassels'
   uploadedImages?: SareePromptSlotInput;
   swatchAnalysis?: any;
   modelFaceUrl?: string | null;
@@ -169,6 +170,15 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     effectiveBorderMode = 'symmetric';
   }
 
+  // Tassel style resolution (Default to clean flat hem unless explicitly selected or requested)
+  const hasTassels = (input.tasselStyle || '').toLowerCase() === 'tassels';
+  const bottomPalluEndDesc = hasTassels
+    ? 'down to the authentic tassels at calf level.'
+    : 'down to the cleanly finished flat bottom hemline (zero tassels, zero dangling strings).';
+  const palluEndHemDesc = hasTassels
+    ? 'The authentic tassels hang strictly along the bottom horizontal end cross-hem at calf level.'
+    : 'CLEAN FLAT HEM - ZERO TASSELS: The bottom horizontal cross-cut edge is cleanly finished with a straight flat stitched hem with zero dangling strings, zero tassels, and zero fringe.';
+
   const uploads = input.uploadedImages || {};
 
   // Helper to safely find slot data
@@ -276,7 +286,7 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
       }
 
       placement =
-        'The authentic reference border at the bottom of this swatch runs strictly along the lower skirt hemline at floor level (feet and pleats) AND along the outer vertical fall of the cascading pallu drape down to the bottom tassels. ' +
+        `The authentic reference border at the bottom of this swatch runs strictly along the lower skirt hemline at floor level (feet and pleats) AND along the outer vertical fall of the cascading pallu drape ${bottomPalluEndDesc} ` +
         `The diagonal chest drape across the torso, bust, and left shoulder ${edgeDesc} ${bodyPatternDesc}`;
     }
     manifest.push({
@@ -294,11 +304,11 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     let placement =
       'Anchored securely at the left shoulder and falling straight downward behind the left arm/shoulder in a clean, vertical fall to lower calf level, exactly matching the vertical orientation and angle shown in this reference swatch. ' +
       'The authentic reference border runs vertically along the outer hanging edge from the shoulder down to the bottom hem. ' +
-      'The authentic tassels (pom-pom ties / latkans) hang strictly along the bottom horizontal end cross-hem at calf level. ' +
+      `${palluEndHemDesc} ` +
       'The pallu hangs straight down along the side/back and is NOT wrapped or bunched across the front torso.';
     if (effectiveBorderMode === 'lower_border_only' || effectiveBorderMode === 'lower_border_borderless') {
       placement +=
-        ' The outer vertical edge of the cascading pallu drape displays the continuous authentic saree border from the reference, framing the pallu drape down to the tassels.';
+        ` The outer vertical edge of the cascading pallu drape displays the continuous authentic saree border from the reference, framing the pallu drape ${bottomPalluEndDesc}`;
     }
     manifest.push({
       slotId: 'pallu',
@@ -603,7 +613,9 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     `${continuityDirective}` +
     `${uniformScaleDirective}` +
     `5. LOWER SKIRT & PALLU BORDER FIDELITY: The horizontal border along the feet at the bottom hem of the saree, as well as along the outer vertical drape of the cascading pallu, must replicate the EXACT colors, motifs, width, framing bands, and embroidery directly from the reference swatches (Image ${hemNum} and Image 2). Replicate the authentic border faithfully 1:1 without altering colors or adding unreferenced elements.\n` +
-    `6. PALLU ANGLE & GRAVITATIONAL ORIENTATION: The pallu from Image 2 is anchored securely at the left shoulder and falls straight down behind the left arm/shoulder in a clean vertical cascade to lower calf level, exactly matching the vertical orientation of Image 2. The authentic reference border runs vertically along the outer hanging edge from the shoulder down to the hem. The authentic tassels hang strictly along the bottom horizontal end hem at calf level. Tassels must NEVER be placed on the vertical border, on the side edges, or on the front drape.` +
+    `6. PALLU ANGLE & GRAVITATIONAL ORIENTATION: The pallu from Image 2 is anchored securely at the left shoulder and falls straight down behind the left arm/shoulder in a clean vertical cascade to lower calf level, exactly matching the vertical orientation of Image 2. The authentic reference border runs vertically along the outer hanging edge from the shoulder down to the hem. ${palluEndHemDesc} Tassels must NEVER be placed on the vertical border, on the side edges, or on the front drape.\n` +
+    `7. UNIFORM SAREE LENGTH & HEMLINE CONSISTENCY: Across all full-length standing and walking poses, the saree skirt hemline must consistently skim floor level at the feet (skimming naturally over footwear, touching the floor without high-water ankles or excessive floor puddling). Front waist pleats fall straight down to the floor. The pallu hangs to lower calf / upper ankle level (~6 to 8 inches above the floor), preserving identical placement, drape width, and motif scale across every pose.\n` +
+    `8. UNIFORM BLOUSE CUT & STYLING CONSISTENCY: The blouse must maintain a consistent tailored silhouette across all photoshoot poses, featuring tailored elbow-length sleeves (~10 inches), modest round neckline, and clean finish replicating the blouse fabric reference (Image ${manifest.find(m => m.slotId === 'blouse')?.imageNumber || 4}). Do NOT vary sleeve lengths between poses, do NOT alter the blouse into a jacket or crop top, and do NOT add random back strings, doris, or tassels.\n` +
     (faceNum
       ? `\n7. STRICT FACIAL IDENTITY FIDELITY (IMAGE ${faceNum}):\nThe model's face must replicate the exact facial structure, almond eye shape, nose, lip contours, jawline, cheekbones, and authentic skin tone directly from Image ${faceNum}. Ensure single coherent identity matching Image ${faceNum} with natural skin texture and serene expression without changing, altering, or morphing her face.`
       : '') +
@@ -645,30 +657,18 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     borderBlockText =
       `[BORDER ARCHITECTURE: DUAL CONTRASTING BORDERS]:\n` +
       `Lower hem border at the feet comes strictly from Image ${hemNum}. Chest border comes strictly from Image ${chestNum}. Do not swap or blend them. The lower hem border is confined to the floor hemline and must never be placed on the chest.`;
-  } else if (effectiveBorderMode === 'lower_border_borderless') {
-    // LOWER BORDER ONLY - BORDERLESS CHEST WRAP
+  } else {
+    // LOWER BORDER ONLY - BORDERLESS CHEST WRAP (ZERO CHEST BORDER)
     const bodyImgNum = manifest.find(m => m.slotId === 'body')?.imageNumber || 1;
 
     borderBlockText =
-      `[BORDER ARCHITECTURE: LOWER BORDER ONLY - BORDERLESS SELF-FABRIC CHEST WRAP]:\n` +
-      `• BROAD LOWER SKIRT & PALLU DRAPE BORDER: The authentic reference border from Image ${bodyImgNum} and Image 2 is strictly confined to two locations: (1) horizontally along the bottom skirt hemline at floor level (feet and pleats), and (2) vertically along the outer hanging edge of the cascading pallu drape down to the bottom tassels. NOWHERE ELSE.\n` +
-      `• 100% BORDERLESS CHEST WRAP: The diagonal chest drape running from the right waist across the bust to the left shoulder consists purely of clean saree body fabric. It has a plain, unbordered natural folded edge meeting the blouse neckline. The chest drape is completely free of any border band, ribbon, piping, or decorative edging.\n` +
+      `[BORDER ARCHITECTURE: SINGLE LOWER BORDER ONLY - ZERO CHEST BORDER / BORDERLESS CHEST WRAP]:\n` +
+      `• BROAD LOWER SKIRT & PALLU DRAPE BORDER: The authentic reference border from Image ${bodyImgNum} and Image 2 is strictly confined to two locations: (1) horizontally along the bottom skirt hemline at floor level (feet and pleats), and (2) vertically along the outer hanging edge of the cascading pallu drape ${bottomPalluEndDesc} NOWHERE ELSE.\n` +
+      `• 100% BORDERLESS CHEST WRAP (ZERO CHEST BORDER): The diagonal chest drape running from the right waist across the bust to the left shoulder consists purely of clean, unbordered saree body fabric. It has a plain, unbordered natural folded edge meeting the blouse neckline. The chest drape is completely free of any border band, ribbon, piping, gold foliage, leaf spray, or decorative edging. Do NOT invent or add any border to the chest or neckline.\n` +
       `• BUTTIS / PATTERN FILL ENTIRE CHEST SPACE TO THE FOLDED EDGE (ZERO EMPTY SPACE): Across the entire diagonal chest drape, bust, ribs, and collarbone, ${getChestPatternFill()} folded neckline edge. There must be ZERO empty white fabric margins, ZERO plain dead bands, and ZERO unprinted space anywhere on the chest wrap.\n` +
-      `• PALLU DRAPE & BOTTOM TASSEL ALIGNMENT: The pallu hangs straight down in a clean vertical fall behind the left arm to lower calf level, showing the authentic outer vertical border. The authentic tassels hang strictly from the bottom horizontal cross-cut hem at calf level. The pallu is NOT wrapped across the front abdomen.\n` +
+      `• PALLU DRAPE & BOTTOM HEM ALIGNMENT: The pallu hangs straight down in a clean vertical fall behind the left arm to lower calf level, showing the authentic outer vertical border. ${palluEndHemDesc} The pallu is NOT wrapped across the front abdomen.\n` +
       `• STRICT UNIFORM MOTIF SCALE: All motifs on the chest drape and bust must match the exact scale of the pleat motifs. Anchor pattern scale strictly to Image ${bodyImgNum}. Do NOT enlarge chest motifs.\n` +
       `• TORSO TEXTURE SOURCE: The chest drape and front waist pleats are textured from the body fabric of Image ${bodyImgNum}. Do NOT copy or propagate the lower hem border onto the chest or shoulder.`;
-  } else {
-    // LOWER BORDER ONLY - WITH TOP BORDER RIBBON
-    const bodyImgNum = manifest.find(m => m.slotId === 'body')?.imageNumber || 1;
-
-    borderBlockText =
-      `[BORDER ARCHITECTURE: LOWER BORDER ONLY - SINGLE LENGTHWISE BORDER WITH TOP BORDER RIBBON]:\n` +
-      `• BROAD LOWER SKIRT & PALLU DRAPE BORDER: The wide reference border from Image ${bodyImgNum} is strictly confined to two locations: (1) horizontally along the bottom skirt hemline at floor level (feet and pleats), and (2) vertically along the outer hanging fall of the cascading pallu drape down to the tassels. NOWHERE ELSE.\n` +
-      `• TOP BORDER RIBBON ALONG CHEST DRAPE: The diagonal chest drape running from the right waist across the bust to the left shoulder features a neat, narrow finished border ribbon (~0.5 cm to 1 cm solid woven piping / edge ribbon) along its topmost folded edge where it meets the blouse neckline.\n` +
-      `• BUTTIS / PATTERN FILL ENTIRE CHEST SPACE TO THE BORDER RIBBON (ZERO EMPTY SPACE): Across the entire diagonal chest drape, bust, ribs, and collarbone, ${getChestPatternFill()} narrow border ribbon. There must be ZERO empty white fabric margins, ZERO plain dead bands, and ZERO unprinted space anywhere on the chest wrap.\n` +
-      `• PALLU DRAPE & BOTTOM TASSEL ALIGNMENT: The pallu hangs straight down in a clean vertical fall behind the left arm to lower calf level, showing the authentic outer vertical border. The authentic tassels hang strictly from the bottom horizontal cross-cut hem at calf level. The pallu is NOT wrapped across the front abdomen.\n` +
-      `• STRICT UNIFORM MOTIF SCALE: All motifs on the chest drape and bust must match the exact scale of the pleat motifs. Anchor pattern scale strictly to Image ${bodyImgNum}. Do NOT enlarge chest motifs.\n` +
-      `• TORSO TEXTURE SOURCE: The chest drape and front waist pleats are textured from the body fabric of Image ${bodyImgNum}. Do NOT copy or propagate the wide lower hem border onto the chest or shoulder.`;
   }
 
   // Absent Slot Rules
@@ -696,29 +696,17 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
   // Helper to build consistent chest drape description across all poses
   const getChestText = (context: 'mirror' | 'closeUp' | 'seated' | 'walk' | 'front') => {
     const patternFill = getChestPatternFill();
-    if (effectiveBorderMode === 'lower_border_borderless') {
+    if (effectiveBorderMode === 'lower_border_borderless' || effectiveBorderMode === 'lower_border_only') {
       if (context === 'mirror') {
-        return `The chest wrap reflected in the mirror is completely borderless self-fabric; ${patternFill} natural folded neckline edge with zero blank margins.`;
+        return `The chest wrap reflected in the mirror is completely borderless self-fabric with zero chest border; ${patternFill} natural folded neckline edge with zero blank margins.`;
       }
       if (context === 'closeUp') {
-        return ` The diagonal chest wrap across the bust and collarbone is completely borderless self-fabric; ${patternFill} folded neckline edge with zero blank margins.`;
+        return ` The diagonal chest wrap across the bust and collarbone is completely borderless self-fabric with zero chest border; ${patternFill} folded neckline edge with zero blank margins.`;
       }
       if (context === 'seated' || context === 'walk') {
-        return ` The diagonal chest wrap across the bust is completely borderless self-fabric; ${patternFill} folded neckline edge with zero blank margins.`;
+        return ` The diagonal chest wrap across the bust is completely borderless self-fabric with zero chest border; ${patternFill} folded neckline edge with zero blank margins.`;
       }
-      return ` The diagonal chest wrap across the bust is completely borderless self-fabric; ${patternFill} folded neckline edge and left shoulder with zero blank margins. `;
-    }
-    if (effectiveBorderMode === 'lower_border_only') {
-      if (context === 'mirror') {
-        return `The chest wrap reflected in the mirror features a neat narrow border ribbon (~0.5 cm - 1 cm solid edge ribbon); ${patternFill} border ribbon with zero blank margins.`;
-      }
-      if (context === 'closeUp') {
-        return ` The diagonal chest wrap across the bust and collarbone features a neat narrow border ribbon (~0.5 cm - 1 cm solid edge ribbon); ${patternFill} border ribbon with zero blank margins.`;
-      }
-      if (context === 'seated' || context === 'walk') {
-        return ` The diagonal chest wrap across the bust features a neat narrow border ribbon (~0.5 cm - 1 cm solid edge ribbon); ${patternFill} border ribbon with zero blank margins.`;
-      }
-      return ` The diagonal chest wrap across the bust features a neat narrow border ribbon (~0.5 cm - 1 cm solid edge ribbon); ${patternFill} border ribbon and left shoulder with zero blank margins. `;
+      return ` The diagonal chest wrap across the bust is completely borderless self-fabric with zero chest border; ${patternFill} folded neckline edge and left shoulder with zero blank margins. `;
     }
     // symmetric / different
     if (context === 'mirror') {
@@ -740,13 +728,16 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     // 1. The Mirror Moment (Over-the-shoulder medium shot reflection)
     const mirrorChest = getChestText('mirror');
 
+    const blouseNum = manifest.find(m => m.slotId === 'blouse')?.imageNumber || 4;
+
     poseSnippet =
       `MANDATORY OVER-THE-SHOULDER MIRROR ANGLE: ` +
       `Medium shot framed over the model's left shoulder from behind, looking past her into a vintage warm teakwood dressing mirror. ` +
       `The model is positioned with her back and shoulder towards the camera in the foreground, facing into the mirror. ` +
-      `The model wears an elegantly tailored full jacket-style blouse with modest high back neckline and elbow sleeves (fully covered back, not backless). ` +
+      `The model wears the tailored blouse replicating the blouse reference swatch (Image ${blouseNum}) with classic elbow sleeves and modest round back neckline, identical in cut and style to the other poses. ` +
+      `In the foreground closest to the camera, the cascading pallu hanging behind her left shoulder prominently displays the authentic decorative artwork, peacock panels, and outer vertical border directly from the Pallu swatch (Image 2). ` +
       `Her serene face looking directly into her own eyes in the glass with a quiet confident half-smile, ${mirrorChest} ` +
-      `Her hand is gracefully raised adjusting the shoulder drape at her left shoulder, and the reflection mirrors her hand, gold bangles, and the outer pallu drape displaying the authentic continuous border ribbon. ` +
+      `Her hand is gracefully raised adjusting the shoulder drape at her left shoulder, and the reflection mirrors her hand, gold bangles, and the front chest drape displaying the authentic saree body motifs at uniform scale matching Image 1. ` +
       `The lower body and feet are outside the frame (medium shot framing).`;
   } else if (isCloseUp) {
     // 5. The Glance (Close-up chest-up portrait)
@@ -770,7 +761,7 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     poseSnippet +=
       ' The saree skirt falls uninterrupted in crisp vertical pleats to the floor with the authentic lower hem border along the feet. ' +
       'The pallu cascades gracefully down her entire back from the left shoulder down to lower calf level, ' +
-      'framed by the continuous, unbroken lengthwise border along the outer drape and displaying the authentic pallu artwork and bottom tassels. ' +
+      `framed by the continuous, unbroken lengthwise border along the outer drape and displaying the authentic pallu artwork ${bottomPalluEndDesc} ` +
       (isDenseJaal
         ? 'The authentic all-over interlocking jaal pattern and framed motifs continue continuously across the visible back body fabric at uniform miniature scale matching the reference swatch 1:1.'
         : 'Delicate repeating buttis continue across the visible back body fabric at uniform miniature scale with wide, airy negative spacing (10x to 15x spacing, approx 15-20 cm apart).');
@@ -801,7 +792,7 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
 
     poseSnippet +=
       `${walkChestText} ` +
-      `The pallu cascades straight down from the left shoulder along her left side in a natural vertical fall, showing the outer decorative border and bottom tassels. ` +
+      `The pallu cascades straight down from the left shoulder along her left side in a natural vertical fall, showing the outer decorative border ${bottomPalluEndDesc} ` +
       `The lower hemline border is cleanly visible along the bottom edge of the skirt and pleats at floor level as she strides. ` +
       (isDenseJaal
         ? `The continuous all-over jaal pattern and motifs across the chest wrap, waist, and walking pleats maintain uniform authentic scale matching the reference swatch.`
@@ -820,7 +811,7 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
 
     poseSnippet +=
       `${frontChestText}` +
-      `The pallu is anchored at the left shoulder and hangs straight downward behind the left arm in a clean vertical fall to lower calf level, showing the authentic outer vertical border and bottom tassels. ` +
+      `The pallu is anchored at the left shoulder and hangs straight downward behind the left arm in a clean vertical fall to lower calf level, showing the authentic outer vertical border ${bottomPalluEndDesc} ` +
       `The front waist pleats fall straight to the floor, where the lower skirt hemline features the authentic horizontal border. ` +
       (isDenseJaal
         ? `Strict 1:1 uniform pattern scale: the authentic continuous jaal (lattice grid) with framed repeating motifs extends uniformly across the chest drape, bust, waist pleats, and skirt matching the reference swatch.`
@@ -867,19 +858,26 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
   if (effectiveBorderMode === 'lower_border_only' || effectiveBorderMode === 'lower_border_borderless') {
     const isDenseOrRepeating = isContinuousJaal || isStripesOrLeheriya || isChecksOrKattam || isBandhani || isMediumRepeat;
     const lowerBorderNegatives = isDenseOrRepeating
-      ? 'chest border, border across bust, upper border, neckline border, thick chest border, widened chest border, dual borders, symmetric borders, blank unprinted chest margins, missing motifs along chest drape, unreferenced motifs, enlarged chest motifs, oversized motifs on torso, unequal motif sizing, mismatched motif scale, misplaced tassels, pallu wrapped across front, bunched pallu on waist, sideways rotated pallu'
-      : 'chest border, border across bust, upper border, neckline border, thick chest border, widened chest border, dual borders, symmetric borders, blank unprinted chest margins, missing buttis along chest drape, crowded buttis, dense butti spacing, clustered motifs, unreferenced motifs, enlarged chest motifs, magnified buttis on chest, oversized buttis on torso, unequal motif sizing, mismatched butti scale, misplaced tassels, pallu wrapped across front, bunched pallu on waist, sideways rotated pallu';
+      ? 'chest border, border across bust, upper border, neckline border, thick chest border, widened chest border, dual borders, symmetric borders, blank unprinted chest margins, missing motifs along chest drape, unreferenced motifs, enlarged chest motifs, oversized motifs on torso, unequal motif sizing, mismatched motif scale, misplaced tassels, pallu wrapped across front, bunched pallu on waist, sideways rotated pallu, border ribbon on chest, edge ribbon on bust, piping on chest, contrasting piping, gold ribbon along neckline'
+      : 'chest border, border across bust, upper border, neckline border, thick chest border, widened chest border, dual borders, symmetric borders, blank unprinted chest margins, missing buttis along chest drape, crowded buttis, dense butti spacing, clustered motifs, unreferenced motifs, enlarged chest motifs, magnified buttis on chest, oversized buttis on torso, unequal motif sizing, mismatched butti scale, misplaced tassels, pallu wrapped across front, bunched pallu on waist, sideways rotated pallu, border ribbon on chest, edge ribbon on bust, piping on chest, contrasting piping, gold ribbon along neckline';
     priorityNegatives.push(lowerBorderNegatives);
-    if (effectiveBorderMode === 'lower_border_borderless') {
-      priorityNegatives.push(
-        'border ribbon on chest, edge ribbon on bust, piping on chest, contrasting piping'
-      );
-    }
   } else if (effectiveBorderMode === 'different') {
     priorityNegatives.push(
       'hemline border copied to chest, widened chest border, mismatched chest border, swapped upper and lower borders'
     );
   }
+
+  // Tassels exclusion: If user did NOT select tassels, aggressively block them
+  if (!hasTassels) {
+    priorityNegatives.push(
+      'tassels, fringe, latkans, hanging strings, dangling threads, loose threads, pom-poms, beads at hem, dori tassels, hanging kuchu, string decorations at hem, hanging ornaments at border, hanging beads'
+    );
+  }
+
+  // Saree length & blouse consistency negatives
+  priorityNegatives.push(
+    'short saree, ankle crop, cropped hem, high-water saree, dragging puddling hem, unequal sleeve length, mismatched blouse, sleeveless blouse, altered blouse cut, jacket collar, back ties, dori strings'
+  );
 
   // Blouse styling: strictly modest sleeves for all poses unless explicit blouse swatch indicates otherwise
   priorityNegatives.push(

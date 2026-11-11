@@ -53,7 +53,7 @@ export const CATEGORY_POSES_MAP: Record<string, PoseDefinition[]> = {
       category: 'seated',
       name: '1. The Mirror Moment',
       description: 'Over-the-shoulder dressing mirror check — 30-sec certainty reset before stepping out',
-      promptSnippet: 'Over-the-shoulder medium shot angled 45 degrees behind the model, looking past her shoulder into a vintage warm teakwood dressing mirror. Strict optical reflection physics: the mirror reflection cleanly captures her serene, poised face looking directly into her own eyes in the glass with a quiet confident half-smile. Her hand is gracefully raised checking the pallu pin at her shoulder, and the reflection geometrically mirrors her hand, gold bangles, and the saree border with exact optical symmetry and matching warm morning ambient lighting. Zero reflection distortion, single coherent identity.',
+      promptSnippet: 'Over-the-shoulder medium shot angled behind the model, looking past her left shoulder into a vintage warm teakwood dressing mirror. Strict optical reflection physics: the mirror reflection cleanly captures her serene, poised face looking directly into her own eyes in the glass with a quiet confident half-smile. The model wears the tailored blouse matching the blouse reference fabric with classic elbow-length sleeves and modest neckline. In the foreground, the cascading pallu hanging behind her left shoulder clearly displays the authentic decorative artwork, peacock panels, and outer vertical border directly from the Pallu swatch. The mirror reflection geometrically mirrors her hand adjusting the shoulder pleats, gold bangles, and the diagonal chest drape showing the body fabric motifs at uniform scale.',
       defaultSample: '/poses/saree_pose_mirror.jpg',
     },
     {
@@ -98,7 +98,7 @@ export const CATEGORY_POSES_MAP: Record<string, PoseDefinition[]> = {
       category: 'detail',
       name: '6. The Pallu Cascade',
       description: 'Three-quarter rear view — showing full pallu back design and blouse back cut',
-      promptSnippet: 'Three-quarter rear portrait view. The model is standing poised, gently turning her head to look back towards the camera over her shoulder. Prominently showcases the full, elegant fall of the pallu cascading down her back, displaying the complete decorative artwork from the Pallu reference swatch framed by a continuous, unbroken lengthwise border along the outer drape, along with the fitted blouse back neckline, dori tassels, and neat hair updo adorned with fresh jasmine (gajra).',
+      promptSnippet: 'Three-quarter rear portrait view. The model is standing poised, gently turning her head to look back towards the camera over her shoulder. Prominently showcases the full, elegant fall of the pallu cascading down her back, displaying the complete decorative artwork from the Pallu reference swatch framed by a continuous, unbroken lengthwise border along the outer drape, along with the tailored blouse back neckline matching the blouse reference swatch, clean floor-skimming saree hemline, and neat hair updo adorned with fresh jasmine (gajra).',
       defaultSample: '/poses/saree_pose_5.jpg',
     },
   ],

@@ -1559,7 +1559,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               </div>
               {/* Saree Layout Mode & Border Selection */}
               {template.slug?.toLowerCase().includes('saree') && (
-                <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-5 p-4 rounded-2xl bg-amber-500/5 border border-amber-500/20">
+                <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-5 p-4 rounded-2xl bg-amber-500/5 border border-amber-500/20">
                   <div>
                     <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase mb-1.5 flex items-center gap-1.5">
                       <span>Saree Layout Mode</span>
@@ -1606,17 +1606,35 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                     >
                       <option value="symmetric">📍 Symmetric Borders (Default — Both Borders Identical)</option>
                       <option value="different_borders">🎭 Different Borders (Top & Bottom Border Different)</option>
-                      <option value="lower_border_only">📍 Lower Border Only (with Top Border Ribbon, Pallu Drape Border Preserved)</option>
-                      <option value="lower_border_borderless">📍 Lower Border Only (Borderless Self-Fabric Edge, Pallu Drape Border Preserved)</option>
+                      <option value="lower_border_only">📍 Single Border (Bottom Only — Zero Top Border / Clean Chest)</option>
+                      <option value="lower_border_borderless">📍 Single Border (Bottom Only — 100% Borderless Self-Fabric)</option>
                     </select>
                     <p className="text-[10px] text-charcoal-muted mt-1">
                       {(borderStyle === 'different_borders' || (!borderStyle && sareeDesignType === 'dual_tier_pleats'))
                         ? '🎭 Different Borders: Upper chest border and lower hem have distinct designs (unlocks dedicated border slot).' 
-                        : borderStyle === 'lower_border_borderless'
-                        ? '📍 Lower Border Only: Saree has border along bottom hem & outer pallu drape. Chest wrap is 100% borderless self-fabric, with buttis continuing seamlessly to the folded neckline edge.'
-                        : borderStyle === 'lower_border_only'
-                        ? '📍 Lower Border Only: Saree has border along bottom hem & outer pallu drape. Chest wrap has a neat finished border ribbon (~0.5–1 cm) with buttis continuing seamlessly right to the ribbon without empty space.'
+                        : (borderStyle === 'lower_border_only' || borderStyle === 'lower_border_borderless')
+                        ? '📍 Single Border Bottom: Saree has border along bottom hem & outer pallu drape. Chest wrap is 100% borderless self-fabric with zero chest border.'
                         : '📍 Symmetric: Upper chest border and lower hem will be identical clones.'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase mb-1.5 flex items-center gap-1.5">
+                      <span>Pallu End / Hem Style</span>
+                      <span className="text-[10px] text-accent font-normal">(Tassels / Finish)</span>
+                    </label>
+                    <select
+                      value={tasselStyle || 'none'}
+                      onChange={e => setTasselStyle(e.target.value)}
+                      className="w-full px-4 py-3 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent"
+                    >
+                      <option value="none">✨ Clean Flat Hem (Default — Zero Tassels / Strings / Fringe)</option>
+                      <option value="tassels">🪡 Traditional Tassels (Hanging Pom-poms / Latkans at Pallu End)</option>
+                    </select>
+                    <p className="text-[10px] text-charcoal-muted mt-1">
+                      {tasselStyle === 'tassels'
+                        ? '🪡 Traditional Tassels: Pallu end cross-hem features authentic tied fringe / latkans.'
+                        : '✨ Clean Flat Hem: Pallu end and lower hemline are cleanly stitched and flat with zero hanging threads or strings.'}
                     </p>
                   </div>
                 </div>

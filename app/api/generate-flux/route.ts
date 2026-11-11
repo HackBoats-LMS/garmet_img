@@ -342,14 +342,14 @@ export async function POST(req: NextRequest) {
           isBorderlessLower ? (
 `- LOWER BORDER ONLY ARCHITECTURE (BORDERLESS SELF-FABRIC CHEST WRAP):
   * The saree features a single continuous lengthwise border along its bottom edge and outer pallu edge.
-  * LOWER HEM & PALLU DRAPE: The authentic decorative border from the reference swatch runs along the lower skirt hemline at the feet AND along the outer vertical drape of the cascading pallu down to the bottom tassels.
+  * LOWER HEM & PALLU DRAPE: The authentic decorative border from the reference swatch runs along the lower skirt hemline at the feet AND along the outer vertical drape of the cascading pallu ${tasselStyle === 'tassels' ? 'down to the bottom tassels.' : 'down to the clean flat bottom hemline.'}
   * CHEST WRAP ZERO-BORDER RULE: The diagonal chest wrap across the bust and over the shoulder consists purely of clean body fabric: plain unbordered folded edge meeting the blouse neckline.
   * BUTTI CONTINUITY TO THE TOP EDGE (ZERO BLANK MARGINS): Delicate repeating buttis MUST continue seamlessly across the chest wrap right up to the folded neckline edge and shoulder seam. There must be ZERO empty margins, ZERO plain dead bands, and ZERO unprinted stripes where an upper border would normally sit.
   * UNIFORM BUTTI SCALE: All buttis across the chest, pleats, and skirt must maintain strictly identical miniature scale (approx 1.2 cm - 1.5 cm). Under no circumstances should chest buttis be enlarged.\n`
           ) : (
 `- LOWER BORDER ONLY ARCHITECTURE (TOP BORDER RIBBON, BUTTIS TO THE RIBBON):
   * The saree features a single continuous lengthwise border along its bottom edge and outer pallu edge.
-  * LOWER HEM & PALLU DRAPE: The authentic decorative border from the reference swatch runs along the lower skirt hemline at the feet AND along the outer vertical drape of the cascading pallu down to the bottom tassels.
+  * LOWER HEM & PALLU DRAPE: The authentic decorative border from the reference swatch runs along the lower skirt hemline at the feet AND along the outer vertical drape of the cascading pallu ${tasselStyle === 'tassels' ? 'down to the bottom tassels.' : 'down to the clean flat bottom hemline.'}
   * CHEST WRAP TOP BORDER RIBBON: The diagonal chest wrap across the bust and over the shoulder features a neat, narrow finished border ribbon (~0.5 cm - 1 cm solid woven piping / edge ribbon) along its top edge meeting the blouse neckline.
   * BUTTI CONTINUITY TO THE BORDER RIBBON (ZERO BLANK MARGINS): Delicate repeating buttis MUST continue seamlessly across the chest wrap right into the top border area up to the border ribbon and shoulder seam. There must be ZERO empty margins, ZERO plain dead bands, and ZERO unprinted stripes.
   * UNIFORM BUTTI SCALE: All buttis across the chest, pleats, and skirt must maintain strictly identical miniature scale (approx 1.2 cm - 1.5 cm). Under no circumstances should chest buttis be enlarged.\n`
@@ -691,6 +691,7 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       const sareePromptResult = buildSareePrompt({
         sareeLayoutMode: sareeDesignType,
         borderSelection: borderStyle,
+        tasselStyle: tasselStyle || undefined,
         uploadedImages: uploadedImages && typeof uploadedImages === 'object' ? uploadedImages : {},
         modelFaceUrl: effectiveModelFaceUrl,
         posePreviewUrl: effectiveSendPosePreview ? effectivePosePreviewUrl : null,
