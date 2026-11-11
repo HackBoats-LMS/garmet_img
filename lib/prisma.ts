@@ -14,6 +14,13 @@ export const prisma =
     log: logLevel,
   });
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+if (process.env.NODE_ENV !== 'production') {
+  globalForPrisma.prisma = prisma;
+} else {
+  // In production (Next.js server), prevent creating multiple PrismaClient instances across requests
+  if (!globalForPrisma.prisma) {
+    globalForPrisma.prisma = prisma;
+  }
+}
 
 export default prisma;
