@@ -634,6 +634,10 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     borderDesign?: string;
     palluDesign?: string;
     fabricNotes?: string;
+    has_tassels?: boolean;
+    tassel_description?: string;
+    pallu_hem_features?: any;
+    [key: string]: any;
     vision?: {
       isMultiMotif: boolean;
       motifCount: number;
@@ -655,6 +659,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const [visionProvider, setVisionProvider] = useState<'kie' | 'google'>('kie');
   const [scanError, setScanError] = useState<{ message: string; raw?: string; status?: number; provider?: string } | null>(null);
   const [showAnalysisModal, setShowAnalysisModal] = useState<boolean>(false);
+  const [palluAnalysis, setPalluAnalysis] = useState<any>(null);
+  const [analyzingPallu, setAnalyzingPallu] = useState<boolean>(false);
 
   // Unified image processing (canvas compression to 1024px jpeg)
   // Reusable scanner for Micro-Motif close-up using Kie.ai or Google Gemini Vision
@@ -725,6 +731,40 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     await scanMacroMotif(targetImg, prov);
   };
 
+  // High-precision automated Pallu Hem & Tassel Analyzer
+  const scanPalluHem = async (imgDataUrl: string) => {
+    if (!imgDataUrl) return;
+    try {
+      setAnalyzingPallu(true);
+      const anRes = await fetch('/api/analyze-swatch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: imgDataUrl,
+          slotType: 'pallu',
+          provider: visionProvider,
+        }),
+      });
+      const anData = await anRes.json().catch(() => null);
+      if (anRes.ok && anData?.success && anData?.analysis?.vision) {
+        const v = anData.analysis.vision;
+        const hasT = Boolean(v.has_tassels);
+        setPalluAnalysis(v);
+        setTasselStyle(hasT ? 'tassels' : 'none');
+        setSwatchAnalysis((prev: any) => ({
+          ...(prev || {}),
+          has_tassels: hasT,
+          tassel_description: v.tassel_description,
+          pallu_hem_features: v.pallu_hem_features,
+        }));
+      }
+    } catch (err) {
+      console.warn('[Pallu Hem Scan] Error:', err);
+    } finally {
+      setAnalyzingPallu(false);
+    }
+  };
+
   const processImageFile = async (slotId: string, file: File) => {
     if (!file || !file.type.startsWith('image/')) return;
     try {
@@ -735,6 +775,9 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       });
       setUploadedImages(prev => ({ ...prev, [slotId]: dataUrl }));
       setValidationError(null);
+      if (slotId === 'pallu') {
+        scanPalluHem(dataUrl);
+      }
     } catch (err) {
       console.error('Client compression error, fallback to FileReader:', err);
       const reader = new FileReader();
@@ -765,6 +808,9 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
       setUploadedImages(prev => ({ ...prev, [slotId]: dataUrl }));
       setValidationError(null);
+      if (slotId === 'pallu') {
+        scanPalluHem(dataUrl);
+      }
     };
     img.onerror = () => {
       console.error('Failed to load image from URL:', url);
@@ -1618,25 +1664,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                     </p>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-charcoal tracking-wide uppercase mb-1.5 flex items-center gap-1.5">
-                      <span>Pallu End / Hem Style</span>
-                      <span className="text-[10px] text-accent font-normal">(Tassels / Finish)</span>
-                    </label>
-                    <select
-                      value={tasselStyle || 'none'}
-                      onChange={e => setTasselStyle(e.target.value)}
-                      className="w-full px-4 py-3 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent"
-                    >
-                      <option value="none">✨ Clean Flat Hem (Default — Zero Tassels / Strings / Fringe)</option>
-                      <option value="tassels">🪡 Traditional Tassels (Hanging Pom-poms / Latkans at Pallu End)</option>
-                    </select>
-                    <p className="text-[10px] text-charcoal-muted mt-1">
-                      {tasselStyle === 'tassels'
-                        ? '🪡 Traditional Tassels: Pallu end cross-hem features authentic tied fringe / latkans.'
-                        : '✨ Clean Flat Hem: Pallu end and lower hemline are cleanly stitched and flat with zero hanging threads or strings.'}
-                    </p>
-                  </div>
+
                 </div>
               )}
 
@@ -1954,6 +1982,21 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                                   <Eye className="w-3.5 h-3.5 text-accent" />
                                   <span>Full View</span>
                                 </button>
+                                {slot.id === 'pallu' && (
+                                  <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-black/70 backdrop-blur-sm text-white text-xs font-bold shadow-md">
+                                    {analyzingPallu ? (
+                                      <span className="flex items-center gap-1 text-amber-300">
+                                        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Hem scan...
+                                      </span>
+                                    ) : (
+                                      <span>
+                                        {((swatchAnalysis as any)?.has_tassels ?? (swatchAnalysis?.vision as any)?.has_tassels ?? palluAnalysis?.has_tassels)
+                                          ? '🪡 Tassels detected'
+                                          : '✨ Clean flat hem'}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                                 {(slot.id === 'macro_motif' || slot.id === 'motif' || (!uploadedImages['macro_motif'] && (slot.id === 'body' || slot.id === 'garment'))) && sareeDesignType === 'delicate_buttis' && (
                                   <>
                                     {swatchAnalysis && (
@@ -2217,6 +2260,39 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                             <span>Crop</span>
                           </button>
                         </div>
+
+                        {/* Pallu Hem Finish & Tassels Indicator */}
+                        {slot.id === 'pallu' && (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <div className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 font-bold border border-emerald-300 text-xs shadow-2xs">
+                              {analyzingPallu ? (
+                                <span className="flex items-center gap-1 text-amber-700">
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                                  <span>Scanning hem...</span>
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1">
+                                  <span>{((swatchAnalysis as any)?.has_tassels ?? (swatchAnalysis?.vision as any)?.has_tassels ?? palluAnalysis?.has_tassels) ? '🪡 Tassels detected' : '✨ Clean flat hem (zero tassels)'}</span>
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              disabled={analyzingPallu}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (uploadedImages['pallu']) {
+                                  scanPalluHem(uploadedImages['pallu']);
+                                }
+                              }}
+                              className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-white hover:bg-cream-warm text-charcoal font-semibold border border-cream-border text-xs cursor-pointer shadow-2xs"
+                              title="Re-check Pallu hem for tassels"
+                            >
+                              <RefreshCw className={`w-3 h-3 text-accent ${analyzingPallu ? 'animate-spin' : ''}`} />
+                              <span>Re-check</span>
+                            </button>
+                          </div>
+                        )}
 
                         {/* Dedicated Manual Scan / Re-scan & View Output Buttons directly beneath the photo */}
                         {(slot.id === 'macro_motif' || slot.id === 'motif' || (!uploadedImages['macro_motif'] && (slot.id === 'body' || slot.id === 'garment'))) && sareeDesignType === 'delicate_buttis' && (
