@@ -811,6 +811,28 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       );
     }
 
+    // Inspect Kie.ai inner API response code (e.g. 401 key expired, 402 insufficient balance)
+    if (submitData.code && submitData.code !== 200) {
+      const rawMsg = submitData.msg || submitData.error || submitText;
+      console.error(`[Kie.ai Error] Code ${submitData.code}: ${rawMsg}`);
+      let userFriendlyMsg = `Kie.ai Error (${submitData.code}): ${rawMsg}`;
+      if (submitData.code === 401) {
+        userFriendlyMsg = `Kie.ai API key is expired or invalid. Please configure an active KIE_API_KEY from https://kie.ai/api-key. (Details: ${rawMsg})`;
+      } else if (submitData.code === 402) {
+        userFriendlyMsg = `Kie.ai account balance is insufficient (Credits depleted). Please top up credits at https://kie.ai/credits to continue generating. (Details: ${rawMsg})`;
+      }
+      return NextResponse.json(
+        {
+          error: userFriendlyMsg,
+          code: submitData.code,
+          needsKey: submitData.code === 401,
+          needsCredits: submitData.code === 402,
+          raw: submitData,
+        },
+        { status: 400 }
+      );
+    }
+
     const taskId = submitData?.data?.taskId || submitData?.data?.id || submitData?.data?.task_id || submitData?.task_id || submitData?.id || submitData?.taskId;
     if (!taskId) {
       return NextResponse.json(
@@ -846,6 +868,18 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
         checkData = JSON.parse(checkText);
       } catch {
         continue;
+      }
+
+      if (checkData.code && checkData.code !== 200) {
+        const rawPollMsg = checkData.msg || checkData.error || checkText;
+        console.error(`[Kie.ai Poll Error] Code ${checkData.code}: ${rawPollMsg}`);
+        let pollUserMsg = `Kie.ai Generation Error (${checkData.code}): ${rawPollMsg}`;
+        if (checkData.code === 401) {
+          pollUserMsg = `Kie.ai API key expired or invalid: ${rawPollMsg}`;
+        } else if (checkData.code === 402) {
+          pollUserMsg = `Kie.ai credits depleted during generation: ${rawPollMsg}`;
+        }
+        return NextResponse.json({ error: pollUserMsg, code: checkData.code, taskId }, { status: 400 });
       }
 
       const status = checkData?.data?.state || checkData?.state || checkData?.data?.status || checkData?.status;
@@ -1151,12 +1185,14 @@ async function saveGeneratedOrder(params: {
             mergedGen[k] = v;
           }
           for (const [k, v] of Object.entries(existingProductGen)) {
-            const u = (v as any)?.imageUrl ? String((v as any).imageUrl).trim() : null;
-            if (u && !seenGenUrls.has(u)) {
-              seenGenUrls.add(u);
-              mergedGen[k] = v;
-            } else if (!u && !mergedGen[k]) {
-              mergedGen[k] = v;
+            if (!mergedGen[k]) {
+              const u = (v as any)?.imageUrl ? String((v as any).imageUrl).trim() : null;
+              if (u && !seenGenUrls.has(u)) {
+                seenGenUrls.add(u);
+                mergedGen[k] = v;
+              } else if (!u) {
+                mergedGen[k] = v;
+              }
             }
           }
 
@@ -1169,7 +1205,7 @@ async function saveGeneratedOrder(params: {
           const currentCover = targetProduct.coverImageUrl;
           const hasValidCoverInCatalogue = currentCover &&
             !currentCover.includes('tempfile') &&
-            Object.values(existingProductGen).some((img: any) => img.imageUrl === currentCover);
+            Object.values(mergedGen).some((img: any) => img?.imageUrl === currentCover);
 
           const finalCover = hasValidCoverInCatalogue ? currentCover : (firstImage?.imageUrl || currentCover);
 
@@ -1229,12 +1265,14 @@ async function saveGeneratedOrder(params: {
             mergedGen[k] = v;
           }
           for (const [k, v] of Object.entries(existingProductGen)) {
-            const u = (v as any)?.imageUrl ? String((v as any).imageUrl).trim() : null;
-            if (u && !seenGenUrls.has(u)) {
-              seenGenUrls.add(u);
-              mergedGen[k] = v;
-            } else if (!u && !mergedGen[k]) {
-              mergedGen[k] = v;
+            if (!mergedGen[k]) {
+              const u = (v as any)?.imageUrl ? String((v as any).imageUrl).trim() : null;
+              if (u && !seenGenUrls.has(u)) {
+                seenGenUrls.add(u);
+                mergedGen[k] = v;
+              } else if (!u) {
+                mergedGen[k] = v;
+              }
             }
           }
 
@@ -1246,7 +1284,7 @@ async function saveGeneratedOrder(params: {
           const currentCover = targetProduct.coverImageUrl;
           const hasValidCoverInCatalogue = currentCover &&
             !currentCover.includes('tempfile') &&
-            Object.values(existingProductGen).some((img: any) => img.imageUrl === currentCover);
+            Object.values(mergedGen).some((img: any) => img?.imageUrl === currentCover);
 
           const finalCover = hasValidCoverInCatalogue ? currentCover : (firstImage?.imageUrl || currentCover);
 

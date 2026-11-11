@@ -191,7 +191,7 @@ export async function POST(
           where: { id: targetProduct.id },
           data: {
             generatedImages: mergedProd as any,
-            coverImageUrl: targetProduct.coverImageUrl || newImageUrl,
+            coverImageUrl: (!targetProduct.coverImageUrl || targetProduct.coverImageUrl === prodGen[poseId]?.imageUrl) ? newImageUrl : targetProduct.coverImageUrl,
           },
         });
         console.log(`[Regenerate] Synced regenerated pose ${poseId} to Product ${targetProduct.stockCode}`);

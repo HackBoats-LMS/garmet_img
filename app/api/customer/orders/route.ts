@@ -25,15 +25,17 @@ function mergeAndDeduplicateImages(
 
   // Then add existingImages only if their imageUrl is NOT already present
   for (const [key, val] of Object.entries(existingImages)) {
-    const url = typeof val === 'string' ? val : (val as any)?.imageUrl;
-    if (url) {
-      const cleanUrl = url.trim().replace(/[\\'";,\s]+$/, '');
-      if (!seenUrls.has(cleanUrl)) {
-        seenUrls.add(cleanUrl);
+    if (!merged[key]) {
+      const url = typeof val === 'string' ? val : (val as any)?.imageUrl;
+      if (url) {
+        const cleanUrl = url.trim().replace(/[\\'";,\s]+$/, '');
+        if (!seenUrls.has(cleanUrl)) {
+          seenUrls.add(cleanUrl);
+          merged[key] = val;
+        }
+      } else {
         merged[key] = val;
       }
-    } else if (!merged[key]) {
-      merged[key] = val;
     }
   }
 
@@ -142,7 +144,7 @@ export async function POST(req: NextRequest) {
               generatedImages: mergedImages as any,
               linkedOrderId: id,
               aspectRatio: aspectRatio || product.aspectRatio,
-              coverImageUrl: product.coverImageUrl || firstImage?.imageUrl,
+              coverImageUrl: (!product.coverImageUrl || !Object.values(mergedImages as Record<string, any>).some((img: any) => img?.imageUrl === product.coverImageUrl)) ? (firstImage?.imageUrl || product.coverImageUrl) : product.coverImageUrl,
               captions: captions ? captions as any : product.captions,
             },
           });
@@ -190,7 +192,7 @@ export async function POST(req: NextRequest) {
             generatedImages: mergedImages as any,
             linkedOrderId: order.id,
             aspectRatio: aspectRatio || product.aspectRatio,
-            coverImageUrl: product.coverImageUrl || firstImage?.imageUrl,
+            coverImageUrl: (!product.coverImageUrl || !Object.values(mergedImages as Record<string, any>).some((img: any) => img?.imageUrl === product.coverImageUrl)) ? (firstImage?.imageUrl || product.coverImageUrl) : product.coverImageUrl,
             captions: captions ? captions as any : product.captions,
           },
         });

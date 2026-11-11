@@ -1113,7 +1113,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           }
         }
         setGeneratedImages(prev => {
-          const next = { ...prev, [poseId]: { imageUrl: finalUrl, prompt } };
+          const next = { ...cleanedImages, [poseId]: { imageUrl: finalUrl, prompt } };
           handleSaveOrder(next).catch(console.error);
           return next;
         });
