@@ -53,7 +53,7 @@ export function buildKieTaskPayload(options: KieTaskInputOptions): KieTaskPayloa
   // Models like Flux, Nano Banana, and Seedream reject the 'negative_prompt' API parameter,
   // so negative exclusions must be appended directly to the prompt text.
   let finalPrompt = prompt;
-  const negativeExclusions = negativePrompt || 'bad anatomy, distorted fabric patterns, unreferenced motifs, unreferenced patterns, unreferenced embroidery, uninvited chest artwork not in swatch, hemline border copied to chest, mismatched borders, oversized buttis, giant enlarged buttis, blur, watermark.';
+  const negativeExclusions = negativePrompt || 'bad anatomy, distorted fabric patterns, unreferenced embroidery, uninvited chest artwork not in swatch, fabricated motifs absent from reference images, hemline border copied to chest drape, floral vines on chest border, widened chest border, patterned upper border, mismatched motifs on back reflection, pattern fabrication, giant enlarged butis, blur, watermark.';
 
   const inputPayload: Record<string, any> = {
     prompt: finalPrompt,
@@ -86,6 +86,8 @@ export function buildKieTaskPayload(options: KieTaskInputOptions): KieTaskPayloa
 
     if (imageUrls.length > 0) {
       inputPayload.image_input = imageUrls;
+      inputPayload.image_urls = imageUrls;
+      inputPayload.input_urls = imageUrls;
     }
   } else if (isFlux) {
     // Flux Pro / Dev / Schnell

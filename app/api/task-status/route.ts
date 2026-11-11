@@ -43,7 +43,7 @@ async function syncCompletedImageToProduct(
         data: {
           generatedImages: cleanedGen,
           linkedOrderId: orderId !== 'order' ? orderId : targetProduct.linkedOrderId,
-          coverImageUrl: targetProduct.coverImageUrl || permanentUrl,
+          coverImageUrl: (!targetProduct.coverImageUrl || targetProduct.coverImageUrl === currentGen[poseId]?.imageUrl) ? permanentUrl : targetProduct.coverImageUrl,
         },
       });
       console.log(`[task-status] ✅ Synced completed pose ${poseId} to Product ${targetProduct.stockCode}`);
@@ -114,6 +114,20 @@ export async function GET(req: NextRequest) {
           return NextResponse.json({ status: 'pending', taskId, provider: 'kie-ai' });
         }
 
+        if (checkData.code && checkData.code !== 200) {
+          const rawErr = checkData.msg || checkData.error || checkText;
+          return NextResponse.json({
+            status: 'failed',
+            error: checkData.code === 401
+              ? `Kie.ai API key is expired or invalid (${rawErr})`
+              : checkData.code === 402
+              ? `Kie.ai account balance is insufficient / credits depleted (${rawErr})`
+              : `Kie.ai error (${checkData.code}): ${rawErr}`,
+            code: checkData.code,
+            taskId,
+            provider: 'kie-ai'
+          });
+        }
         const status = (checkData?.data?.state || checkData?.state || checkData?.data?.status || checkData?.status || '').toLowerCase();
         if (status === 'completed' || status === 'success') {
           const output = checkData?.data?.result || checkData?.data?.output || checkData?.result || checkData?.output || checkData?.data?.url || checkData?.data?.images || checkData?.data;
