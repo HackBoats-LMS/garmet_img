@@ -769,6 +769,31 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     }
   };
 
+  // Upload image to Cloudflare R2 / Storage helper (returns permanent HTTPS URL)
+  // Ensures payload to /api/generate is tiny (<1KB instead of 10MB base64), eliminating HTTP 413 Content Too Large
+  const uploadImageToStorage = async (dataUrlOrHttp: string, slotId: string = 'swatch'): Promise<string> => {
+    if (!dataUrlOrHttp) return '';
+    if (dataUrlOrHttp.startsWith('http://') || dataUrlOrHttp.startsWith('https://')) {
+      return dataUrlOrHttp;
+    }
+    try {
+      const res = await fetch('/api/upload-temp-ref', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: dataUrlOrHttp }),
+      });
+      if (res.ok) {
+        const d = await res.json();
+        if (d?.url) {
+          return d.url;
+        }
+      }
+    } catch (err) {
+      console.warn('[uploadImageToStorage] Temp upload failed, falling back to dataUrl:', err);
+    }
+    return dataUrlOrHttp;
+  };
+
   // Compress image for API transmission (Preserves full 2K/2560px quality, guarantees < 3.8MB, avoids multi-compression)
   const compressImageForAPI = (dataUrl: string): Promise<string> => {
     return new Promise((resolve) => {
@@ -882,7 +907,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     poseId: string,
     cachedCompressedUploaded?: Record<string, string>,
     cachedCompressedFabric?: string[],
-    customPromptOverride?: string
+    customPromptOverride?: string,
+    asyncMode: boolean = false
   ) => {
     const pose = template?.poses.find(p => p.id === poseId);
     const model = models.find(m => m.id === selectedModelId);
@@ -1043,6 +1069,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           garment_des: textileDetails || (productName ? `${productName} ${description || ''}` : description || prompt),
           category: template.slug?.includes('pant') || template.slug?.includes('skirt') ? 'lower_body' : (template.slug?.includes('saree') || template.slug?.includes('dress') || template.slug?.includes('lehenga') ? 'dresses' : 'upper_body'),
           crop: false,
+          asyncMode,
           seed: 42,
           steps: 30,
           userId: (session?.user as any)?.id || 'customer',
@@ -1135,57 +1162,67 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     }
   };
 
-  // Generate all poses (parallel batch with pre-compression)
+  // Generate all poses (Full Concurrent Parallel Execution)
   const handleGenerateAll = async () => {
     if (!template?.poses?.length) return;
     setIsGeneratingAll(true);
     setGenError(null);
     try {
-      setGenStatus('Pre-compressing swatches for batch generation...');
+      setGenStatus('Pre-compressing swatches for concurrent batch generation...');
       const allFabricImages = (activeImageSlots || [])
         .map(slot => uploadedImages[slot.id])
         .filter(Boolean);
       if (allFabricImages.length === 0) {
         allFabricImages.push(...Object.values(uploadedImages).filter(Boolean));
       }
+      setGenStatus('Uploading swatches to high-speed cloud storage to bypass payload limits...');
       const cachedCompressedUploaded: Record<string, string> = {};
       for (const key of Object.keys(uploadedImages)) {
         if (uploadedImages[key]) {
-          cachedCompressedUploaded[key] = await compressImageForAPI(uploadedImages[key]);
+          const comp = await compressImageForAPI(uploadedImages[key]);
+          // Upload to R2 so request payload is a lightweight URL (<100 bytes) avoiding Vercel 4.5MB 413 error!
+          cachedCompressedUploaded[key] = await uploadImageToStorage(comp, key);
         }
       }
-      const cachedCompressedFabric = await Promise.all(
-        allFabricImages.map(img => compressImageForAPI(img as string))
-      );
+      const cachedCompressedFabric: string[] = [];
+      for (let i = 0; i < allFabricImages.length; i++) {
+        const comp = await compressImageForAPI(allFabricImages[i] as string);
+        cachedCompressedFabric.push(await uploadImageToStorage(comp, `fabric_${i}`));
+      }
 
-      setGenStatus(`Launching ${template.poses.length} poses concurrently for ultra-fast generation...`);
-      
-      // Mark all poses as generating immediately so UI shows active progress across all cards simultaneously
+      const totalPoses = template.poses.length;
+      setGenStatus(`⚡ Launching all ${totalPoses} poses concurrently...`);
+
+      // Mark all poses as generating immediately so UI shows active loading overlays on all cards concurrently
       setGeneratingPoseIds(new Set(template.poses.map(p => p.id)));
 
-      // Dispatch parallel batches with slight 250ms staggering to prevent HTTP handshake congestion
-      const promises = template.poses.map((pose, idx) => {
-        return new Promise(resolve => setTimeout(resolve, idx * 250)).then(() =>
-          handleGeneratePose(pose.id, cachedCompressedUploaded, cachedCompressedFabric)
-        );
-      });
+      // Dispatch all poses concurrently to Kie.ai at once
+      const promises = template.poses.map((pose) =>
+        handleGeneratePose(pose.id, cachedCompressedUploaded, cachedCompressedFabric, undefined, true).catch(poseErr => {
+          console.warn([Concurrent Batch] Pose  error:, poseErr);
+        })
+      );
+
       await Promise.allSettled(promises);
+
+      setGenStatus(`All ${totalPoses} photoshoot poses finished!`);
+      setTimeout(() => setGenStatus(null), 4000);
     } catch (e: any) {
-      setGenError(e.message || 'Generation failed');
+      setGenError(e.message || 'Concurrent generation failed');
     } finally {
       setIsGeneratingAll(false);
       setGeneratingPose(null);
-      setGenStatus(null);
+      setGeneratingPoseIds(new Set());
     }
   };
 
-  // Generate selected poses (parallel batch)
+  // Generate selected poses (Full Concurrent Parallel Execution)
   const handleGenerateSelected = async () => {
     if (selectedPoses.size === 0 || !template?.poses?.length) return;
     setIsGeneratingSelected(true);
     setGenError(null);
     try {
-      setGenStatus('Pre-compressing swatches...');
+      setGenStatus('Pre-compressing swatches for concurrent generation...');
       const allFabricImages = (activeImageSlots || [])
         .map(slot => uploadedImages[slot.id])
         .filter(Boolean);
@@ -1198,28 +1235,35 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           cachedCompressedUploaded[key] = await compressImageForAPI(uploadedImages[key]);
         }
       }
-      const cachedCompressedFabric = await Promise.all(
-        allFabricImages.map(img => compressImageForAPI(img as string))
+      const cachedCompressedFabric: string[] = [];
+      for (const img of allFabricImages) {
+        cachedCompressedFabric.push(await compressImageForAPI(img as string));
+      }
+
+      const posesToGenerate = template.poses.filter(p => selectedPoses.has(p.id));
+      const totalSelected = posesToGenerate.length;
+      setGenStatus(`⚡ Launching ${totalSelected} selected poses concurrently...`);
+
+      // Mark all selected poses as generating immediately
+      setGeneratingPoseIds(new Set(posesToGenerate.map(p => p.id)));
+
+      // Dispatch all selected poses concurrently in parallel with 350ms staggering
+      const promises = posesToGenerate.map((pose) =>
+        handleGeneratePose(pose.id, cachedCompressedUploaded, cachedCompressedFabric, undefined, true).catch(poseErr => {
+          console.warn([Concurrent Selected Batch] Pose  error:, poseErr);
+        })
       );
 
-      const posesToGenerate = Array.from(selectedPoses);
-      setGenStatus(`Launching ${posesToGenerate.length} selected poses concurrently...`);
-      
-      // Mark selected poses as generating immediately
-      setGeneratingPoseIds(new Set(posesToGenerate));
-
-      const promises = posesToGenerate.map((poseId, idx) => {
-        return new Promise(resolve => setTimeout(resolve, idx * 250)).then(() =>
-          handleGeneratePose(poseId, cachedCompressedUploaded, cachedCompressedFabric)
-        );
-      });
       await Promise.allSettled(promises);
+
+      setGenStatus(`Selected poses finished!`);
+      setTimeout(() => setGenStatus(null), 4000);
     } catch (e: any) {
-      setGenError(e.message || 'Generation failed');
+      setGenError(e.message || 'Selected generation failed');
     } finally {
       setIsGeneratingSelected(false);
       setGeneratingPose(null);
-      setGenStatus(null);
+      setGeneratingPoseIds(new Set());
     }
   };
 
@@ -2655,17 +2699,6 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                           <span>✨ AI Generated</span>
                         </div>
                       </>
-                    ) : isGenerating ? (
-                      <div className="relative w-full h-full flex items-center justify-center">
-                        {previewImgSrc && (
-                          <img src={previewImgSrc} alt="Reference" className="absolute inset-0 w-full h-full object-cover filter blur-xs opacity-40 scale-105" />
-                        )}
-                        <div className="relative z-10 text-center p-6 bg-charcoal/70 backdrop-blur-md rounded-2xl mx-4 shadow-xl border border-white/10">
-                          <div className="w-10 h-10 border-3 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-                          <p className="text-xs font-bold text-white">Generating photoshoot...</p>
-                          <p className="text-[10px] text-cream-dark/80 mt-1">Applying studio lighting & model drape</p>
-                        </div>
-                      </div>
                     ) : previewImgSrc ? (
                       <div 
                         className="relative w-full h-full overflow-hidden cursor-pointer"
@@ -2728,26 +2761,67 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                         <p className="text-xs text-charcoal-muted font-medium">Ready to generate</p>
                       </div>
                     )}
+
+                    {/* Prominent Overlay during Generation (New or Regeneration) */}
+                    {isGenerating && (
+                      <div className="absolute inset-0 z-30 flex items-center justify-center bg-charcoal/80 backdrop-blur-md p-4 animate-fade-in">
+                        <div className="text-center p-5 bg-charcoal/90 rounded-2xl border border-white/15 shadow-2xl max-w-[90%]">
+                          <div className="w-10 h-10 border-3 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                          <p className="text-xs font-bold text-white tracking-wide">
+                            {cleanImageUrl ? 'Regenerating pose...' : 'Generating photoshoot...'}
+                          </p>
+                          <p className="text-[11px] text-amber-200 mt-1 font-medium">
+                            Connecting to Kie.ai Studio & rendering...
+                          </p>
+                          <p className="text-[10px] text-cream-dark/70 mt-1">
+                            Please wait ~30-60s
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="p-4 bg-white border-t border-cream-border/60 flex flex-col justify-between gap-3 flex-1">
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-bold text-charcoal">{pose.name}</p>
-                        <span className="inline-block text-[10px] font-bold uppercase tracking-wider text-charcoal-light px-2 py-0.5 rounded-md bg-cream-light border border-cream-border">
-                          {pose.category}
-                        </span>
+                    <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-bold text-charcoal">{pose.name}</p>
+                          <span className="inline-block text-[10px] font-bold uppercase tracking-wider text-charcoal-light px-2 py-0.5 rounded-md bg-cream-light border border-cream-border">
+                            {pose.category}
+                          </span>
+                        </div>
+                        {pose.purpose && (
+                          <p className="text-[11px] text-charcoal-muted line-clamp-1 italic">
+                            🎯 {pose.purpose}
+                          </p>
+                        )}
+                        {pose.fabricFocus && (
+                          <p className="text-[10px] text-accent line-clamp-1 font-medium">
+                            ✨ Focus: {pose.fabricFocus}
+                          </p>
+                        )}
+
+                        {/* In-Card Error Feedback */}
+                        {poseErrors[pose.id] && (
+                          <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-left space-y-1">
+                            <div className="flex items-center gap-1.5 text-[11px] font-bold text-red-700">
+                              <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                              <span>Generation Issue</span>
+                            </div>
+                            <p className="text-[10px] text-red-700 leading-snug line-clamp-3">
+                              {poseErrors[pose.id]}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleGeneratePose(pose.id);
+                              }}
+                              className="text-[10px] font-bold text-red-800 hover:text-red-950 underline cursor-pointer mt-0.5 inline-block"
+                            >
+                              Retry Generation ↺
+                            </button>
+                          </div>
+                        )}
                       </div>
-                      {pose.purpose && (
-                        <p className="text-[11px] text-charcoal-muted line-clamp-1 italic">
-                          🎯 {pose.purpose}
-                        </p>
-                      )}
-                      {pose.fabricFocus && (
-                        <p className="text-[10px] text-accent line-clamp-1 font-medium">
-                          ✨ Focus: {pose.fabricFocus}
-                        </p>
-                      )}
-                    </div>
 
                     <div className="flex items-center justify-between pt-1 border-t border-cream-border/40">
                       {previewImgSrc ? (
@@ -2768,12 +2842,17 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                         </button>
                       ) : <div />}
 
-                      {!cleanImageUrl && !isGenerating && (
+                      {isGenerating ? (
+                        <Button size="sm" disabled className="gap-1.5 opacity-90 cursor-not-allowed">
+                          <Sparkles className="w-3.5 h-3.5 animate-spin text-accent" />
+                          <span>Generating...</span>
+                        </Button>
+                      ) : !cleanImageUrl ? (
                         <Button size="sm" onClick={(e) => { e.stopPropagation(); handleGeneratePose(pose.id); }} disabled={isGeneratingAll || isGeneratingSelected}>
                           <Sparkles className="w-3.5 h-3.5" /> Generate
                         </Button>
-                      )}
-                      {cleanImageUrl && (
+                      ) : null}
+                      {cleanImageUrl && !isGenerating && (
                         <div className="flex items-center gap-2">
                           <Button
                             size="sm"
@@ -2787,7 +2866,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                                 currentImageUrl: cleanImageUrl,
                               });
                             }}
-                            disabled={isGenerating || isGeneratingAll || isGeneratingSelected}
+                            disabled={isGeneratingAll || isGeneratingSelected}
                             className="bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold gap-1.5"
                             title="Regenerate this pose with specific custom instructions or corrections"
                           >
