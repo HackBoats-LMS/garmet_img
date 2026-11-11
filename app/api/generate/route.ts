@@ -39,7 +39,7 @@ function resolveImageToDataUrl(imgStr: string): string | null {
 export async function POST(req: NextRequest) {
   try {
     const ip = getClientIp(req);
-    const rateCheck = checkRateLimit('api:generate', ip, { windowMs: 60 * 1000, max: 20 });
+    const rateCheck = checkRateLimit('api:generate', ip, { windowMs: 60 * 1000, max: 120 });
     if (!rateCheck.allowed) {
       return NextResponse.json(
         { error: 'Too many generation requests. Please wait a moment.' },
@@ -848,7 +848,23 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       );
     }
 
-    console.log(`[Kie.ai] Task ID: ${taskId}. Polling for completion...`);
+    console.log(`[Kie.ai] Task ID: ${taskId}.`);
+
+    // If client requested async processing (e.g. concurrent batch generation), return taskId immediately!
+    // This allows browser to launch all poses at once without holding 6+ open long-polling HTTP connections.
+    if (body.asyncMode) {
+      return NextResponse.json(
+        {
+          taskId,
+          provider: 'kie-ai',
+          isProcessing: true,
+          status: 'processing',
+        },
+        { status: 202 }
+      );
+    }
+
+    console.log(`[Kie.ai] Polling for completion...`);
 
     // Poll task status (up to 80 attempts x 3s = ~240s / 4 minutes) to catch models and avoid Vercel timeouts
     for (let attempt = 1; attempt <= 80; attempt++) {
