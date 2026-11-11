@@ -336,6 +336,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   const [selectedPoses, setSelectedPoses] = useState<Set<string>>(new Set());
   const [genStatus, setGenStatus] = useState<string | null>(null);
   const [genError, setGenError] = useState<string | null>(null);
+  const [poseErrors, setPoseErrors] = useState<Record<string, string>>({});
   const [exportingGooglePhotos, setExportingGooglePhotos] = useState(false);
   const [googlePhotosSuccess, setGooglePhotosSuccess] = useState<{ albumTitle: string; albumUrl?: string; photosUploaded: number } | null>(null);
   const [googlePhotosError, setGooglePhotosError] = useState<string | null>(null);
@@ -917,6 +918,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     setGeneratingPose(poseId);
     setGeneratingPoseIds(prev => new Set(prev).add(poseId));
     setGenError(null);
+    setPoseErrors(prev => { const n = { ...prev }; delete n[poseId]; return n; });
 
     // Build options string
     const optStr = Object.entries(selectedOptions)
@@ -1123,7 +1125,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               finalUrl = (cd.imageUrl as string).trim().replace(/[\\'";,\s]+$/, '').replace(/%5C$/i, '');
               break;
             }
-            if (cd.status === 'failed') { setGenError(cd.error || 'Generation failed'); break; }
+            if (cd.status === 'failed') { const errMsg = cd.error || 'Generation failed'; setGenError(errMsg); setPoseErrors(prev => ({ ...prev, [poseId]: errMsg })); break; }
           }
           await new Promise((r) => setTimeout(r, 2500));
         }
@@ -1148,10 +1150,14 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
         setGenStatus(`${pose.name} generated!`);
         setTimeout(() => setGenStatus(null), 3000);
       } else if (!genError) {
-        setGenError(data?.error || 'Generation is still processing.');
+        const errMsg = data?.error || 'Generation is still processing.';
+        setGenError(errMsg);
+        setPoseErrors(prev => ({ ...prev, [poseId]: errMsg }));
       }
     } catch (err: any) {
-      setGenError(err?.message || 'Network error occurred');
+      const errMsg = err?.message || 'Network error occurred';
+      setGenError(errMsg);
+      setPoseErrors(prev => ({ ...prev, [poseId]: errMsg }));
     } finally {
       setGeneratingPose(null);
       setGeneratingPoseIds(prev => {
@@ -1199,7 +1205,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       // Dispatch all poses concurrently to Kie.ai at once
       const promises = template.poses.map((pose) =>
         handleGeneratePose(pose.id, cachedCompressedUploaded, cachedCompressedFabric, undefined, true).catch(poseErr => {
-          console.warn([Concurrent Batch] Pose  error:, poseErr);
+          console.warn(`[Concurrent Batch] Pose ${pose.name} error:`, poseErr);
         })
       );
 
@@ -1250,7 +1256,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       // Dispatch all selected poses concurrently in parallel with 350ms staggering
       const promises = posesToGenerate.map((pose) =>
         handleGeneratePose(pose.id, cachedCompressedUploaded, cachedCompressedFabric, undefined, true).catch(poseErr => {
-          console.warn([Concurrent Selected Batch] Pose  error:, poseErr);
+          console.warn(`[Concurrent Selected Batch] Pose ${pose.name} error:`, poseErr);
         })
       );
 
