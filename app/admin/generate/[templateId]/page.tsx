@@ -835,8 +835,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
 
       // Calculate approximate binary size from base64 string length
       const approxSizeBytes = (dataUrl.length * 3) / 4;
-      const MAX_SIZE_BYTES = 3.8 * 1024 * 1024; // 3.8 MB (< 4MB limit)
-      const MAX_DIM = 2560;
+      const MAX_SIZE_BYTES = 2.2 * 1024 * 1024; // 2.2 MB (guarantees base64 JSON payload stays well under Vercel's 4.5MB serverless limit)
+      const MAX_DIM = 2048;
 
       try {
         const img = new Image();
@@ -934,6 +934,64 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     });
   };
 
+  // Helper to pre-process, compress, and offload all uploaded fabric swatches to cloud storage
+  // Transforms multi-megabyte base64 images into tiny HTTPS URLs (<100 bytes), completely eliminating HTTP 413
+  const prepareGenerationImages = async (): Promise<{
+    compressedUploaded: Record<string, string>;
+    compressedFabric: string[];
+    compressedModelFace: string | null;
+  }> => {
+    setGenStatus('Optimizing and uploading fabric swatches...');
+    
+    // 1. Gather all fabric images according to active slots
+    const allFabricImages: string[] = [];
+    const orderedSlots = activeImageSlots?.length ? activeImageSlots.map(s => s.id) : Object.keys(uploadedImages);
+    for (const slotId of orderedSlots) {
+      if (uploadedImages[slotId]) {
+        allFabricImages.push(uploadedImages[slotId]);
+      }
+    }
+    if (allFabricImages.length === 0) {
+      allFabricImages.push(...Object.values(uploadedImages).filter(Boolean));
+    }
+
+    // 2. Compress and upload uploadedImages dictionary
+    const compressedUploaded: Record<string, string> = {};
+    for (const key of Object.keys(uploadedImages)) {
+      if (uploadedImages[key]) {
+        const comp = await compressImageForAPI(uploadedImages[key]);
+        compressedUploaded[key] = await uploadImageToStorage(comp, key);
+      }
+    }
+
+    // 3. Compress and upload fabric images list (reusing any slot URL already processed)
+    const compressedFabric: string[] = [];
+    for (let i = 0; i < allFabricImages.length; i++) {
+      const img = allFabricImages[i];
+      const matchingSlotKey = Object.keys(uploadedImages).find(k => uploadedImages[k] === img);
+      if (matchingSlotKey && compressedUploaded[matchingSlotKey]) {
+        compressedFabric.push(compressedUploaded[matchingSlotKey]);
+      } else {
+        const comp = await compressImageForAPI(img);
+        compressedFabric.push(await uploadImageToStorage(comp, `fabric_${i}`));
+      }
+    }
+
+    // 4. Compress and upload model face if base64
+    const selectedModel = models.find(m => m.id === selectedModelId);
+    let compressedModelFace = selectedModel?.imageUrl || null;
+    if (compressedModelFace && compressedModelFace.startsWith('data:image/')) {
+      const comp = await compressImageForAPI(compressedModelFace);
+      compressedModelFace = await uploadImageToStorage(comp, 'model_face');
+    }
+
+    return {
+      compressedUploaded,
+      compressedFabric,
+      compressedModelFace,
+    };
+  };
+
   // Generate single pose
   const handleGeneratePose = async (
     poseId: string,
@@ -960,30 +1018,21 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       .filter(Boolean)
       .join(', ');
 
-    // Collect ALL raw uploaded fabric images for Gemini (it can see each one separately)
-    const allFabricImages = (activeImageSlots || [])
-      .map(slot => uploadedImages[slot.id])
-      .filter(Boolean);
-    // Fallback if no slots defined
-    if (allFabricImages.length === 0) {
-      const vals = Object.values(uploadedImages).filter(Boolean);
-      allFabricImages.push(...vals);
-    }
-
-    // Use cached compressed images if passed (from parallel batch) or compress now
+    // Use cached compressed images if passed (from parallel batch) or prepare now
     let compressedUploadedImages = cachedCompressedUploaded;
     let compressedFabricImages = cachedCompressedFabric;
+    let finalModelFace = model?.imageUrl || null;
+
     if (!compressedUploadedImages || !compressedFabricImages) {
-      setGenStatus('Compressing images for AI...');
-      compressedUploadedImages = {};
-      for (const key of Object.keys(uploadedImages)) {
-        if (uploadedImages[key]) {
-          compressedUploadedImages[key] = await compressImageForAPI(uploadedImages[key]);
-        }
+      const prepared = await prepareGenerationImages();
+      compressedUploadedImages = prepared.compressedUploaded;
+      compressedFabricImages = prepared.compressedFabric;
+      if (prepared.compressedModelFace) {
+        finalModelFace = prepared.compressedModelFace;
       }
-      compressedFabricImages = await Promise.all(
-        allFabricImages.map(img => compressImageForAPI(img as string))
-      );
+    } else if (finalModelFace && finalModelFace.startsWith('data:image/')) {
+      const compFace = await compressImageForAPI(finalModelFace);
+      finalModelFace = await uploadImageToStorage(compFace, 'model_face');
     }
     const rawGarmentRef = compressedFabricImages[0] || null;
     const validImages = compressedFabricImages;
@@ -1071,11 +1120,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     // Construct full photorealistic photoshoot prompt: Subject -> Wearing Garment -> Pose -> Styling -> Lighting & Camera
     const prompt = `Authentic raw commercial catalogue fashion photography of ${modelSubject} elegantly dressed in an authentic luxury ${productName || template.name}. ${backgroundSetting} Pose & Angle: ${pose.name} — ${pose.promptSnippet}.${mirrorPhysicsGuidance} Garment & Draping: ${garmentDrapeDetails}${userSuggestionsText} ${textileDetails ? `${textileDetails}. ` : ''}${dynamicStyling} Photography & Aesthetics: Shot on Hasselblad H6D-100c with HC 100mm f/2.2 lens, softbox key lighting, soft natural ambient shadows, photorealistic skin with natural pores and subtle skin texture, realistic hands and fingers, 8k UHD editorial Vogue India fashion catalogue, zero CGI, zero plastic skin, authentic human realism.`;
 
-    // Compress model face if it's a data URL
-    let compressedModelFace = model?.imageUrl || null;
-    if (compressedModelFace && compressedModelFace.startsWith('data:image/')) {
-      compressedModelFace = await compressImageForAPI(compressedModelFace);
-    }
+    // Use the optimized model face URL (either permanent URL or cloud uploaded URL)
+    const compressedModelFace = finalModelFace;
 
     try {
       // Fetch the configured generation API route (generate vs generate-flux)
@@ -1136,6 +1182,27 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           ],
         }),
       });
+
+      if (!res.ok) {
+        let errMessage = `Generation failed (${res.status})`;
+        try {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const errData = await res.json();
+            errMessage = errData?.error || errData?.message || errMessage;
+          } else {
+            const rawText = await res.text();
+            if (res.status === 413 || rawText.includes('Request Entity Too Large')) {
+              errMessage = 'The uploaded swatches exceeded payload limit. Please try re-selecting your images.';
+            } else if (rawText) {
+              errMessage = rawText.slice(0, 200);
+            }
+          }
+        } catch (parseErr) {
+          console.warn('Failed to parse error response:', parseErr);
+        }
+        throw new Error(errMessage);
+      }
 
       const data = await res.json();
       let finalUrl = (data?.imageUrl || '').trim().replace(/[\\'";,\s]+$/, '').replace(/%5C$/i, '');
@@ -1205,27 +1272,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     setIsGeneratingAll(true);
     setGenError(null);
     try {
-      setGenStatus('Pre-compressing swatches for concurrent batch generation...');
-      const allFabricImages = (activeImageSlots || [])
-        .map(slot => uploadedImages[slot.id])
-        .filter(Boolean);
-      if (allFabricImages.length === 0) {
-        allFabricImages.push(...Object.values(uploadedImages).filter(Boolean));
-      }
-      setGenStatus('Uploading swatches to high-speed cloud storage to bypass payload limits...');
-      const cachedCompressedUploaded: Record<string, string> = {};
-      for (const key of Object.keys(uploadedImages)) {
-        if (uploadedImages[key]) {
-          const comp = await compressImageForAPI(uploadedImages[key]);
-          // Upload to R2 so request payload is a lightweight URL (<100 bytes) avoiding Vercel 4.5MB 413 error!
-          cachedCompressedUploaded[key] = await uploadImageToStorage(comp, key);
-        }
-      }
-      const cachedCompressedFabric: string[] = [];
-      for (let i = 0; i < allFabricImages.length; i++) {
-        const comp = await compressImageForAPI(allFabricImages[i] as string);
-        cachedCompressedFabric.push(await uploadImageToStorage(comp, `fabric_${i}`));
-      }
+      setGenStatus('⚡ Preparing and optimizing fabric images...');
+      const { compressedUploaded: cachedCompressedUploaded, compressedFabric: cachedCompressedFabric } = await prepareGenerationImages();
 
       const totalPoses = template.poses.length;
       setGenStatus(`⚡ Launching all ${totalPoses} poses concurrently...`);
@@ -1259,23 +1307,8 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     setIsGeneratingSelected(true);
     setGenError(null);
     try {
-      setGenStatus('Pre-compressing swatches for concurrent generation...');
-      const allFabricImages = (activeImageSlots || [])
-        .map(slot => uploadedImages[slot.id])
-        .filter(Boolean);
-      if (allFabricImages.length === 0) {
-        allFabricImages.push(...Object.values(uploadedImages).filter(Boolean));
-      }
-      const cachedCompressedUploaded: Record<string, string> = {};
-      for (const key of Object.keys(uploadedImages)) {
-        if (uploadedImages[key]) {
-          cachedCompressedUploaded[key] = await compressImageForAPI(uploadedImages[key]);
-        }
-      }
-      const cachedCompressedFabric: string[] = [];
-      for (const img of allFabricImages) {
-        cachedCompressedFabric.push(await compressImageForAPI(img as string));
-      }
+      setGenStatus('⚡ Preparing and optimizing fabric images...');
+      const { compressedUploaded: cachedCompressedUploaded, compressedFabric: cachedCompressedFabric } = await prepareGenerationImages();
 
       const posesToGenerate = template.poses.filter(p => selectedPoses.has(p.id));
       const totalSelected = posesToGenerate.length;
