@@ -17,6 +17,7 @@ import useDrivePicker from 'react-google-drive-picker';
 import { useGooglePhotosPicker } from '@/app/hooks/useGooglePhotosPicker';
 import { CollageCreator, CollageInputImage } from '@/app/components/CollageCreator';
 import { PointCropperModal } from '@/app/components/PointCropperModal';
+import { SwatchAnalysisModal } from '@/app/components/SwatchAnalysisModal';
 import { compressImageOnClient } from '@/lib/client-compress';
 
 interface TemplateData {
@@ -651,36 +652,63 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       [key: string]: any;
     };
   } | null>(null);
+  const [visionProvider, setVisionProvider] = useState<'kie' | 'google'>('kie');
+  const [scanError, setScanError] = useState<{ message: string; raw?: string; status?: number; provider?: string } | null>(null);
+  const [showAnalysisModal, setShowAnalysisModal] = useState<boolean>(false);
 
   // Unified image processing (canvas compression to 1024px jpeg)
-  // Reusable scanner for Micro-Motif close-up using Gemini Vision
-  const scanMacroMotif = async (imgDataUrl: string) => {
+  // Reusable scanner for Micro-Motif close-up using Kie.ai or Google Gemini Vision
+  const scanMacroMotif = async (imgDataUrl: string, selectedProvider: 'kie' | 'google' = visionProvider) => {
     if (!imgDataUrl) return;
     try {
       setAnalyzingSwatch(true);
-      setVisionProgress('Analyzing motifs with Gemini 3.5 Flash Vision...');
+      setScanError(null);
+      setVisionProgress(
+        selectedProvider === 'kie'
+          ? 'Scanning motifs with Kie.ai (gemini-3-6-flash)...'
+          : 'Scanning motifs with Google Gemini (gemini-3.6-flash)...'
+      );
 
-      // 1. High-precision Gemini 3.5 Flash Vision Server Analyzer
+      // High-precision Textile & Swatch Analyzer
       const anRes = await fetch('/api/analyze-swatch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: imgDataUrl }),
+        body: JSON.stringify({
+          imageBase64: imgDataUrl,
+          provider: selectedProvider,
+        }),
       });
-      if (anRes.ok) {
-        const anData = await anRes.json();
-        if (anData?.analysis?.vision) {
-          setSwatchAnalysis(anData.analysis);
-        }
+
+      const anData = await anRes.json().catch(() => null);
+
+      if (anRes.ok && anData?.success && anData?.analysis?.vision) {
+        setSwatchAnalysis(anData.analysis);
+        setScanError(null);
+      } else {
+        // Crucial: do NOT show success / ✓ Analyzed on failure!
+        setSwatchAnalysis(null);
+        const errMsg = anData?.error || anData?.message || `Server error (${anRes.status})`;
+        setScanError({
+          message: errMsg,
+          raw: anData?.rawOutput || anData?.rawError || (anData ? JSON.stringify(anData, null, 2) : ''),
+          status: anRes.status,
+          provider: selectedProvider,
+        });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('[Macro Motif Analysis] Error:', err);
+      setSwatchAnalysis(null);
+      setScanError({
+        message: err?.message || 'Network error while contacting analysis server',
+        provider: selectedProvider,
+      });
     } finally {
       setAnalyzingSwatch(false);
       setVisionProgress('');
     }
   };
 
-  const handleRescanMacroMotif = async () => {
+  const handleRescanMacroMotif = async (overrideProvider?: 'kie' | 'google') => {
     const targetImg =
       uploadedImages['macro_motif'] ||
       uploadedImages['motif'] ||
@@ -690,8 +718,11 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       setValidationError('Please upload a saree body or Micro-Motif photo first before scanning.');
       return;
     }
-    setSwatchAnalysis(null);
-    await scanMacroMotif(targetImg);
+    const prov = overrideProvider || visionProvider;
+    if (overrideProvider && overrideProvider !== visionProvider) {
+      setVisionProvider(overrideProvider);
+    }
+    await scanMacroMotif(targetImg, prov);
   };
 
   const processImageFile = async (slotId: string, file: File) => {
@@ -1090,7 +1121,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           borderStyle: borderStyle || undefined,
           tasselStyle: tasselStyle || undefined,
           blouseStyle: blouseStyle || undefined,
-          swatchAnalysis: (sareeDesignType === 'delicate_buttis' && (swatchAnalysis as any)?.vision) ? (swatchAnalysis as any).vision : undefined,
+          swatchAnalysis: (swatchAnalysis as any)?.vision ? (swatchAnalysis as any).vision : (swatchAnalysis || undefined),
           promptSuggestions: (customPromptOverride && customPromptOverride.trim()) 
             ? (promptSuggestions.trim() ? `${promptSuggestions.trim()}. ${customPromptOverride.trim()}` : customPromptOverride.trim())
             : (promptSuggestions && promptSuggestions.trim() ? promptSuggestions.trim() : undefined),
@@ -1659,19 +1690,36 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
               </div>
             </div>
 
-            {/* Manual Gemini Swatch Scan Banner for Delicate Buttis */}
+            {/* Manual AI Swatch Scan Banner for Delicate Buttis */}
             {sareeDesignType === 'delicate_buttis' && (
-              <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-50 via-white to-amber-50 border border-amber-300 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+              <div className={`p-4 rounded-2xl border flex flex-wrap items-center justify-between gap-3 shadow-2xs transition-all ${
+                scanError
+                  ? 'bg-rose-50/80 border-rose-300'
+                  : swatchAnalysis
+                  ? 'bg-emerald-50/50 border-emerald-300'
+                  : 'bg-gradient-to-r from-amber-50 via-white to-amber-50 border-amber-300'
+              }`}>
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-700 font-bold text-base shadow-2xs">
-                    🌸
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-base shadow-2xs ${
+                    scanError
+                      ? 'bg-rose-500/10 text-rose-700'
+                      : swatchAnalysis
+                      ? 'bg-emerald-500/10 text-emerald-700'
+                      : 'bg-amber-500/10 text-amber-700'
+                  }`}>
+                    {scanError ? '⚠️' : '🌸'}
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-xs font-bold text-amber-950 uppercase tracking-wider">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h4 className="text-xs font-bold text-charcoal uppercase tracking-wider">
                         Delicate Buttis Mode
                       </h4>
-                      {swatchAnalysis ? (
+                      {analyzingSwatch ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1">
+                          <Loader2 className="w-3 h-3 animate-spin text-blue-600" />
+                          Scanning with {visionProvider === 'kie' ? 'Kie.ai' : 'Google Gemini'}...
+                        </span>
+                      ) : swatchAnalysis ? (
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex items-center gap-1 ${
                           swatchAnalysis?.vision?.modelUsed?.includes('Fallback')
                             ? 'bg-amber-100 text-amber-800 border-amber-300'
@@ -1680,37 +1728,113 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                           <Check className="w-3 h-3 text-emerald-600" />
                           {swatchAnalysis?.vision?.modelUsed || 'Motifs Analyzed'}
                         </span>
+                      ) : scanError ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-300 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3 text-rose-600" />
+                          Scan Failed ({scanError.message})
+                        </span>
                       ) : (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
-                          Manual Scan Ready
+                          Ready to Scan
                         </span>
                       )}
                     </div>
-                    <p className="text-[11px] text-amber-800 mt-0.5">
-                      {swatchAnalysis
-                        ? `Analyzed via ${swatchAnalysis.vision?.modelUsed || 'Gemini Vision'}. Motifs, scale (1.2–1.5 cm), and wide negative spacing locked.`
-                        : 'Upload your saree swatch below, then click "Scan Motifs with Gemini" to extract butti anatomy and spacing.'}
+                    <p className="text-[11px] text-charcoal-muted mt-0.5">
+                      {analyzingSwatch
+                        ? `Sending image to ${visionProvider === 'kie' ? 'Kie.ai (gemini-3-6-flash)' : 'Google Gemini (gemini-3.6-flash)'}...`
+                        : scanError
+                        ? `Scan failed with ${scanError.provider === 'google' ? 'Google Gemini' : 'Kie.ai'}. Click "View Error" to inspect or "Retry Scan".`
+                        : swatchAnalysis
+                        ? `Analyzed via ${swatchAnalysis.vision?.modelUsed || 'AI Vision'}. Pattern: ${swatchAnalysis.vision?.pattern_type || 'Motifs'}, ${swatchAnalysis.vision?.distinctMotifs?.length || 1} distinct motif(s) locked.`
+                        : 'Upload your saree swatch below, select your AI engine, then click "Scan Motifs" to extract butti anatomy and spacing.'}
                     </p>
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  disabled={analyzingSwatch || (!uploadedImages['macro_motif'] && !uploadedImages['motif'] && !uploadedImages['body'] && !uploadedImages['garment'])}
-                  onClick={handleRescanMacroMotif}
-                  className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-white font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50 text-xs ${
-                    swatchAnalysis ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-500 hover:bg-amber-600'
-                  }`}
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${analyzingSwatch ? 'animate-spin' : ''}`} />
-                  <span>
-                    {analyzingSwatch
-                      ? 'Scanning with Gemini...'
-                      : swatchAnalysis
-                      ? 'Re-scan Motifs'
-                      : '🔍 Scan Motifs with Gemini'}
-                  </span>
-                </button>
+                {/* Right controls: Engine selector + Action buttons */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Engine Selector */}
+                  <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-cream-border shadow-2xs">
+                    <span className="text-[10px] font-bold text-charcoal-muted px-1.5 uppercase">Engine:</span>
+                    <button
+                      type="button"
+                      disabled={analyzingSwatch}
+                      onClick={() => setVisionProvider('kie')}
+                      className={`px-2 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        visionProvider === 'kie'
+                          ? 'bg-accent text-white shadow-2xs'
+                          : 'text-charcoal hover:bg-cream'
+                      }`}
+                      title="Kie.ai gemini-3-6-flash"
+                    >
+                      Kie.ai
+                    </button>
+                    <button
+                      type="button"
+                      disabled={analyzingSwatch}
+                      onClick={() => setVisionProvider('google')}
+                      className={`px-2 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        visionProvider === 'google'
+                          ? 'bg-accent text-white shadow-2xs'
+                          : 'text-charcoal hover:bg-cream'
+                      }`}
+                      title="Google gemini-3.6-flash Vision"
+                    >
+                      Google Gemini
+                    </button>
+                  </div>
+
+                  {/* View Output Button */}
+                  {swatchAnalysis && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAnalysisModal(true)}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-50 font-bold transition-all shadow-xs cursor-pointer text-xs"
+                      title="View Extracted Motifs & Vision Output"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>View Output</span>
+                    </button>
+                  )}
+
+                  {/* View Error Button */}
+                  {scanError && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAnalysisModal(true)}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-rose-300 text-rose-800 hover:bg-rose-50 font-bold transition-all shadow-xs cursor-pointer text-xs"
+                      title="Inspect server error details"
+                    >
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                      <span>View Error</span>
+                    </button>
+                  )}
+
+                  {/* Main Scan / Re-scan Button */}
+                  <button
+                    type="button"
+                    disabled={analyzingSwatch || (!uploadedImages['macro_motif'] && !uploadedImages['motif'] && !uploadedImages['body'] && !uploadedImages['garment'])}
+                    onClick={() => handleRescanMacroMotif()}
+                    className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-white font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50 text-xs ${
+                      scanError
+                        ? 'bg-rose-600 hover:bg-rose-700'
+                        : swatchAnalysis
+                        ? 'bg-emerald-600 hover:bg-emerald-700'
+                        : 'bg-amber-500 hover:bg-amber-600'
+                    }`}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${analyzingSwatch ? 'animate-spin' : ''}`} />
+                    <span>
+                      {analyzingSwatch
+                        ? `Scanning with ${visionProvider === 'kie' ? 'Kie.ai' : 'Gemini'}...`
+                        : scanError
+                        ? 'Retry Scan'
+                        : swatchAnalysis
+                        ? 'Re-scan Motifs'
+                        : `🔍 Scan Motifs (${visionProvider === 'kie' ? 'Kie.ai' : 'Gemini'})`}
+                    </span>
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1780,29 +1904,49 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                                   <span>Full View</span>
                                 </button>
                                 {(slot.id === 'macro_motif' || slot.id === 'motif' || (!uploadedImages['macro_motif'] && (slot.id === 'body' || slot.id === 'garment'))) && sareeDesignType === 'delicate_buttis' && (
-                                  <button
-                                    type="button"
-                                    disabled={analyzingSwatch}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleRescanMacroMotif();
-                                    }}
-                                    className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-white text-xs font-bold shadow-md transition-colors cursor-pointer disabled:opacity-50 ${
-                                      swatchAnalysis ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-500 hover:bg-amber-600'
-                                    }`}
-                                    title={swatchAnalysis ? "Re-scan buttis with Gemini" : "Manually scan and analyze buttis with Gemini"}
-                                  >
-                                    <RefreshCw className={`w-3.5 h-3.5 ${analyzingSwatch ? 'animate-spin' : ''}`} />
-                                    <span>
-                                      {analyzingSwatch
-                                        ? 'Scanning...'
-                                        : swatchAnalysis?.vision?.modelUsed?.includes('Fallback')
-                                        ? '⚠️ Fallback'
-                                        : swatchAnalysis
-                                        ? '✓ Analyzed'
-                                        : '🔍 Scan'}
-                                    </span>
-                                  </button>
+                                  <>
+                                    {swatchAnalysis && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setShowAnalysisModal(true);
+                                        }}
+                                        className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white text-emerald-800 text-xs font-bold shadow-md hover:bg-emerald-50 transition-colors cursor-pointer border border-emerald-200"
+                                        title="View Swatch Analysis Output"
+                                      >
+                                        <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                                        <span>Output</span>
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      disabled={analyzingSwatch}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRescanMacroMotif();
+                                      }}
+                                      className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-white text-xs font-bold shadow-md transition-colors cursor-pointer disabled:opacity-50 ${
+                                        swatchAnalysis
+                                          ? 'bg-emerald-600 hover:bg-emerald-700'
+                                          : scanError
+                                          ? 'bg-rose-600 hover:bg-rose-700'
+                                          : 'bg-amber-500 hover:bg-amber-600'
+                                      }`}
+                                      title={swatchAnalysis ? `Re-scan with ${visionProvider === 'kie' ? 'Kie.ai' : 'Gemini'}` : scanError ? 'Retry Scan' : `Scan with ${visionProvider === 'kie' ? 'Kie.ai' : 'Gemini'}`}
+                                    >
+                                      <RefreshCw className={`w-3.5 h-3.5 ${analyzingSwatch ? 'animate-spin' : ''}`} />
+                                      <span>
+                                        {analyzingSwatch
+                                          ? 'Scanning...'
+                                          : swatchAnalysis
+                                          ? '✓ Analyzed'
+                                          : scanError
+                                          ? '⚠️ Retry'
+                                          : '🔍 Scan'}
+                                      </span>
+                                    </button>
+                                  </>
                                 )}
                               </div>
 
@@ -2023,29 +2167,67 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                           </button>
                         </div>
 
-                        {/* Dedicated Manual Scan / Re-scan Button directly beneath the photo */}
+                        {/* Dedicated Manual Scan / Re-scan & View Output Buttons directly beneath the photo */}
                         {(slot.id === 'macro_motif' || slot.id === 'motif' || (!uploadedImages['macro_motif'] && (slot.id === 'body' || slot.id === 'garment'))) && sareeDesignType === 'delicate_buttis' && (
-                          <button
-                            type="button"
-                            disabled={analyzingSwatch}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRescanMacroMotif();
-                            }}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50 text-xs ${
-                              swatchAnalysis ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-500 hover:bg-amber-600'
-                            }`}
-                            title={swatchAnalysis ? "Re-scan buttis with Gemini" : "Manually scan and analyze buttis with Gemini"}
-                          >
-                            <RefreshCw className={`w-3.5 h-3.5 ${analyzingSwatch ? 'animate-spin' : ''}`} />
-                            <span>
-                              {analyzingSwatch
-                                ? 'Scanning...'
-                                : swatchAnalysis
-                                ? '✓ Analyzed (Re-scan)'
-                                : '🔍 Scan Motifs'}
-                            </span>
-                          </button>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {swatchAnalysis && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowAnalysisModal(true);
+                                }}
+                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold transition-all border border-emerald-300 text-xs cursor-pointer shadow-2xs"
+                                title="View Extracted Motifs & Analysis Output"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>Output</span>
+                              </button>
+                            )}
+
+                            {scanError && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setShowAnalysisModal(true);
+                                }}
+                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold transition-all border border-rose-300 text-xs cursor-pointer shadow-2xs"
+                                title="View Error Details"
+                              >
+                                <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                                <span>Error</span>
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              disabled={analyzingSwatch}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRescanMacroMotif();
+                              }}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50 text-xs ${
+                                swatchAnalysis
+                                  ? 'bg-emerald-600 hover:bg-emerald-700'
+                                  : scanError
+                                  ? 'bg-rose-600 hover:bg-rose-700'
+                                  : 'bg-amber-500 hover:bg-amber-600'
+                              }`}
+                              title={swatchAnalysis ? `Re-scan with ${visionProvider === 'kie' ? 'Kie.ai' : 'Gemini'}` : scanError ? 'Retry Scan' : `Scan with ${visionProvider === 'kie' ? 'Kie.ai' : 'Gemini'}`}
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${analyzingSwatch ? 'animate-spin' : ''}`} />
+                              <span>
+                                {analyzingSwatch
+                                  ? 'Scanning...'
+                                  : swatchAnalysis
+                                  ? '✓ Analyzed (Re-scan)'
+                                  : scanError
+                                  ? '⚠️ Retry Scan'
+                                  : '🔍 Scan Motifs'}
+                              </span>
+                            </button>
+                          </div>
                         )}
 
                         {otherSlots.length > 0 && (
@@ -3530,6 +3712,25 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           </div>
         </div>,
         document.body
+      )}
+
+      {/* Fabric Swatch Vision Analysis Output & Error Modal */}
+      {showAnalysisModal && (
+        <SwatchAnalysisModal
+          isOpen={showAnalysisModal}
+          onClose={() => setShowAnalysisModal(false)}
+          swatchAnalysis={swatchAnalysis}
+          scanError={scanError}
+          swatchImageUrl={
+            uploadedImages['macro_motif'] ||
+            uploadedImages['motif'] ||
+            uploadedImages['body'] ||
+            uploadedImages['garment']
+          }
+          currentProvider={visionProvider}
+          onRescan={(prov) => handleRescanMacroMotif(prov)}
+          isScanning={analyzingSwatch}
+        />
       )}
 
       {/* Collage Studio Modal */}
