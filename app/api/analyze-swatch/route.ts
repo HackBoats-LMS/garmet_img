@@ -13,7 +13,8 @@ export const runtime = 'nodejs';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { imageBase64, imageUrl, provider = 'kie', allowLocalFallback = false } = body;
+    const { imageBase64, imageUrl, provider = 'kie', allowLocalFallback = false, slotType = 'body' } = body;
+    const isPalluSlot = slotType === 'pallu' || slotType === 'anchal';
 
     let buffer: Buffer | null = null;
     let mimeType = 'image/jpeg';
@@ -56,6 +57,76 @@ export async function POST(req: NextRequest) {
     const rawGoogleKey = process.env.GEMINI_API_KEY || '';
     const googleGeminiKey = rawGoogleKey.trim().replace(/^["']|["']$/g, '');
 
+    const palluVisionPrompt = `You are a world-class Indian textile, handloom, and saree expert AI analyzer.
+Analyze this uploaded Saree PALLU (anchal) swatch image with maximum precision.
+
+CRITICAL INSPECTION OBJECTIVES:
+1. PALLU END & HEM FINISH (CRITICAL - ZERO HALLUCINATIONS):
+   - Inspect the bottom horizontal cross-cut edge / end hem of the pallu fabric.
+   - Look closely: are there authentic physical dangling tassels, tied thread kuchu, pom-poms, fringe cords, or latkans attached to the edge?
+   - Set "has_tassels": true ONLY if authentic physical hanging string tassels or tied thread fringe are clearly visible protruding from the hem edge.
+   - If the edge is a clean, flat, straight stitched hem, a cut fabric edge, a woven border selvedge, or a clean flat finish with ZERO hanging strings or tassels, set "has_tassels": false.
+   - Be completely honest: do NOT invent tassels if they are not in the photo.
+2. PALLU ARTWORK & MOTIF HIERARCHY:
+   - Identify the primary motifs on the pallu (e.g. peacock panels, floral border bands, tree of life, zari geometric bands).
+   - Identify the background ground color and border bands framing the pallu.
+   - Identify the craft/weave technique (e.g. Patola weave, Banarasi brocade, printed silk).
+
+Return ONLY a raw JSON object (no markdown, no conversational text) matching this schema:
+{
+  "craft_technique": "string",
+  "pallu_hem_features": {
+    "has_tassels": boolean,
+    "tassel_notes": "string"
+  },
+  "has_tassels": boolean,
+  "fabric_background": {
+    "base_color": "string",
+    "texture_notes": "string"
+  },
+  "pallu_hem_features": {
+    "has_tassels": boolean,
+    "tassel_type": "none | tied_kuchu | pom_poms | thread_fringe | latkans",
+    "tassel_description": "string",
+    "edge_finish": "clean_flat_hem | tied_tassels_kuchu | fringed_threads | embroidered_scallop"
+  },
+  "has_tassels": boolean,
+  "tassel_description": "string",
+  "pattern_type": "traditional_narrative | dense_jaal | medium_repeat | border_and_plain",
+  "spatial_density": {
+    "type": "dense_jaal",
+    "spacing_description": "string",
+    "is_continuous_grid": false
+  },
+  "body_motifs": [
+    {
+      "motif_id": 1,
+      "shape_type": "string",
+      "category": "bird_fauna | floral | geometric | traditional_folk",
+      "structure_details": "string",
+      "primary_colors": ["string"],
+      "secondary_colors": ["string"],
+      "scale_estimate": "string",
+      "layout_arrangement": "string",
+      "visibility_confidence": "high | medium | low"
+    }
+  ],
+  "border_elements": [
+    {
+      "border_id": 1,
+      "type": "string",
+      "description": "string",
+      "colors": ["string"],
+      "width_estimate": "string"
+    }
+  ],
+  "replication_instructions": {
+    "body_distribution_rule": "string",
+    "scale_rule": "string",
+    "negative_prompt_forbidden": ["string"]
+  }
+}`;
+
     const refinedVisionPrompt = `You are a world-class Indian textile, ethnic wear, and handloom fabric analysis AI expert.
 Analyze the uploaded saree swatch or fabric photo with maximum precision.
 This analyzer must accurately identify ANY Indian textile design, craft, weave, motif, or print style.
@@ -80,6 +151,11 @@ CRITICAL DISTINCTIONS:
    - Identify whether it is Woven Zari Brocade, Hand Block Print (Ajrakh/Bagru), Ikat/Patola Tie-Dye, Bandhani Tie-Dye, Delicate Embroidery (Chikankari/Resham/Kantha), Mirror/Zardozi Work, Handloom Plain Weave, etc.
 5. EXACT COLOR EXTRACTION:
    - Accurately name the fabric base color (e.g., "Dusty Terracotta Rose", "Off-White / Ivory Cream", "Mustard Yellow", "Peacock Teal", "Deep Crimson", etc.) from the fabric itself, not the backdrop.
+6. INSPECT HEM FINISH & TASSELS (CRITICAL - ZERO HALLUCINATION):
+   - Look closely at the edges, hemline, or cross-cut ends of the fabric.
+   - Set "has_tassels": true ONLY if authentic physical dangling string tassels, tied thread kuchu, pom-poms, or latkans are clearly visible attached along the edge.
+   - If the edge is flat, stitched, woven border, or cut fabric with NO dangling strings or tassels, set "has_tassels": false.
+   - Record findings in "pallu_hem_features": { "has_tassels": boolean, "tassel_notes": "string" }.
 
 Return ONLY a raw JSON object (no markdown, no conversational text) matching this schema:
 {
@@ -124,6 +200,8 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
 }`;
 
     // Helper: Parse Gemini response text whether it is single JSON or SSE stream chunks
+    const activeVisionPrompt = isPalluSlot ? palluVisionPrompt : refinedVisionPrompt;
+
     const extractJsonFromGeminiResponse = (rawText: string): any | null => {
       if (!rawText) return null;
       try {
@@ -299,7 +377,21 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
 
       // Construct dynamic directive based on detected pattern architecture
       let detailedDirective = '';
-      if (isDenseJaal) {
+      const hasTassels = Boolean(parsed?.pallu_hem_features?.has_tassels === true || parsed?.has_tassels === true);
+      const tasselDesc = parsed?.pallu_hem_features?.tassel_description || parsed?.tassel_description || parsed?.pallu_hem_features?.tassel_notes || (hasTassels ? "authentic tied thread tassels" : "");
+
+      if (isPalluSlot) {
+        detailedDirective =
+          `AUTHENTIC PALLU & HEM GROUND TRUTH DIRECTIVE:\n` +
+          `1. FABRIC BACKGROUND: Base color: ${baseColor} | Craft & weave: ${craftTechnique} (${textureNotes}).\n` +
+          `2. PALLU HEM & FINISH: ${hasTassels ? `Authentic tied thread tassels (${tasselDesc || "kuchu"}) along the bottom end cross-hem.` : "Clean flat stitched hemline (zero dangling strings, zero tassels, clean straight hem)."}\n` +
+          `3. PALLU PANELS & MOTIFS (${normalizedButtis.length} Elements):\n${buttiBulletLines.join("\n")}\n` +
+          (borderBulletLines.length > 0 ? `4. FRAMING BORDERS:\n${borderBulletLines.join("\n")}\n` : "") +
+          `5. REPLICATION INSTRUCTION:\n` +
+          `- The pallu cascades straight down from the left shoulder to lower calf level behind the left arm.\n` +
+          `- Replicate the authentic decorative panels, peacock figures, and framing borders directly from this swatch.\n` +
+          `- Bottom end hemline must be ${hasTassels ? "finished with authentic tied tassels" : "a crisp flat tailored hem with zero tassels and zero dangling strings"}.`;
+      } else if (isDenseJaal) {
         detailedDirective =
           `AUTHENTIC PATTERN STRUCTURE & SPATIAL DISTRIBUTION DIRECTIVE (KIE.AI NANO-BANANA GROUND TRUTH):\n` +
           `1. FABRIC BACKGROUND: Base color: ${baseColor} | Craft & weave: ${craftTechnique} (${textureNotes}).\n` +
@@ -410,6 +502,9 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
 
       const motifNames = normalizedButtis.map(b => b.shape_type).filter(Boolean);
       let bodyMotifsText = '';
+      if (isPalluSlot) {
+        bodyMotifsText = `Pallu Artwork: ${motifNames.join(", ") || "decorative panels"} with ${hasTassels ? "tied thread tassels" : "clean flat stitched hem (zero tassels)"}`;
+      } else
       if (isDenseJaal) {
         bodyMotifsText = `Continuous All-Over Jaal: ${motifNames.join(', ')} framed in an interlocking lattice grid`;
       } else if (isStripesOrLeheriya) {
@@ -477,6 +572,14 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
           distributionRule: parsed.replication_instructions?.body_distribution_rule || 'Uniform distribution across skirt, pleats, and chest wrap'
         },
         scaleAndSizingRule: parsed.replication_instructions?.scale_rule || (isDenseJaal ? 'Maintain miniature dense grid scale uniformly' : 'Maintain miniature scale (1.2 cm to 1.5 cm) uniformly across chest and pleats'),
+        has_tassels: hasTassels,
+        tassel_description: tasselDesc,
+        pallu_hem_features: parsed.pallu_hem_features || {
+          has_tassels: hasTassels,
+          tassel_type: hasTassels ? "tied_kuchu" : "none",
+          tassel_description: tasselDesc,
+          edge_finish: hasTassels ? "tied_tassels_kuchu" : "clean_flat_hem",
+        },
         promptDirective: detailedDirective,
         modelUsed: modelLabel,
         rawJson: parsed,
@@ -514,7 +617,7 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
                   data: base64String,
                 },
               },
-              { text: refinedVisionPrompt },
+              { text: activeVisionPrompt },
             ],
           },
         ],
@@ -642,7 +745,7 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
                     data: base64String,
                   },
                 },
-                { text: refinedVisionPrompt },
+                { text: activeVisionPrompt },
               ],
             },
           ],
