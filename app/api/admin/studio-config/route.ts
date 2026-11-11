@@ -20,11 +20,11 @@ async function ensureStudioConfigTable() {
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    // Try to add the column in case the table existed before apiRoute was added
+    // Try to add column if it does not exist
     try {
-      await prisma.$executeRawUnsafe(`ALTER TABLE "StudioConfig" ADD COLUMN "apiRoute" TEXT NOT NULL DEFAULT 'generate';`);
-    } catch(err) {
-      // Ignore, likely means the column already exists
+      await prisma.$executeRawUnsafe('ALTER TABLE "StudioConfig" ADD COLUMN IF NOT EXISTS "apiRoute" TEXT NOT NULL DEFAULT \'generate\';');
+    } catch (err) {
+      // Ignore if exists
     }
   } catch (e) {
     console.warn('[StudioConfig DB Check]', e);
