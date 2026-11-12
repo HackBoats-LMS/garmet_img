@@ -235,14 +235,24 @@ export function formatProductPayload(product: any, variantSize?: string): Record
       barcode: vBarcode,
       barcodes: vCodes.join(', '),
       stock_code: sData.stockCode || vBarcode || masterStockCode,
-      stock_codes: vCodes,
+      stock_codes: vCodes.join(', '),
       title: vName,
       name: vName,
       productName: vName,
       product_name: vName,
       size: sz,
+      Size: sz,
+      size_name: sz,
+      Size_name: sz,
+      size_title: sz,
       variant: sz,
+      Variant: sz,
       variant_name: sz,
+      variantName: sz,
+      variant_size: sz,
+      variantSize: sz,
+      size_inventory: sz,
+      sizeInventory: sz,
       color: String(product.color || '').trim(),
       category: category,
       product_type: category.toLowerCase(),
@@ -295,7 +305,7 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     code1: code1 || masterStockCode,
     barcode: variantSpecificBarcode || (allBarcodes[0] ?? variantCode),
     barcodes: allBarcodes.join(', '),
-    stock_codes: variantStockCodes.length > 0 ? variantStockCodes : allBarcodes,
+    stock_codes: (variantStockCodes.length > 0 ? variantStockCodes : allBarcodes).join(', '),
 
     // 2. Core Details & Variant Name
     title: effectiveProductName,
@@ -359,17 +369,30 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     qty: effectiveQuantity,
     stock: effectiveQuantity,
     size: String(effectiveSize).trim(),
+    Size: String(effectiveSize).trim(),
+    size_name: String(effectiveSize).trim(),
+    Size_name: String(effectiveSize).trim(),
+    size_title: String(effectiveSize).trim(),
     variant: String(effectiveSize).trim(),
+    Variant: String(effectiveSize).trim(),
     variant_name: String(effectiveSize).trim(),
     variantName: String(effectiveSize).trim(),
+    variant_size: String(effectiveSize).trim(),
+    variantSize: String(effectiveSize).trim(),
     option_name: 'Size',
     option_value: String(effectiveSize).trim(),
     option1_name: 'Size',
     option1_value: String(effectiveSize).trim(),
-    size_inventory: normalizedSizes,
+    // Clean string for size_inventory: never pass a raw object here because PHP stringifies arrays/objects to "Array"!
+    size_inventory: variantSize
+      ? String(effectiveSize).trim()
+      : (availableSizes.length > 0 ? availableSizes.join(', ') : String(effectiveSize).trim()),
+    sizeInventory: variantSize
+      ? String(effectiveSize).trim()
+      : (availableSizes.length > 0 ? availableSizes.join(', ') : String(effectiveSize).trim()),
 
-    // 6. Nested Variants List (For connectors supporting structured variant arrays)
-    variants: variantsList.length > 0 ? variantsList : undefined,
+    // 6. Nested Variants List (Omit when pushing individual variant to prevent PHP array-to-string issues)
+    variants: variantSize ? undefined : (variantsList.length > 0 ? variantsList : undefined),
 
     // 7. Product Images (Direct public JPEG URLs < 5MB)
     image_link: image1,
@@ -640,8 +663,10 @@ export async function updatePickyProduct(
                 'variant_sku', 'variant_id', 'variant_code', 'variantCode',
                 'item_group_id', 'itemGroupId', 'code1',
                 'quantity', 'qty', 'stock',
-                'size', 'variant', 'variant_name', 'variantName',
-                'option_value', 'option1_value',
+                'size', 'Size', 'size_name', 'Size_name', 'size_title',
+                'variant', 'Variant', 'variant_name', 'variantName', 'variant_size', 'variantSize',
+                'option_name', 'option_value', 'option1_name', 'option1_value',
+                'size_inventory', 'sizeInventory', 'variants',
                 'barcode', 'barcodes', 'stock_codes',
                 'title', 'name', 'productName', 'product_name',
                 'whatsapp_catalogue_title', 'whatsappCatalogueTitle'
@@ -807,7 +832,7 @@ export async function syncPickyProductWithDiff(localProduct: any): Promise<{
     { key: 'coverImageUrl', localVal: localFormatted.coverImageUrl, remoteVal: remote.coverImageUrl ?? remote.cover_image_url ?? remote.image_link },
     { key: 'description', localVal: localFormatted.description, remoteVal: remote.description ?? remote.productDescription },
     { key: 'size', localVal: localFormatted.size, remoteVal: remote.size ?? remote.length_Size },
-    { key: 'size_inventory', localVal: JSON.stringify(localFormatted.size_inventory), remoteVal: remote.size_inventory ? JSON.stringify(remote.size_inventory) : undefined },
+    { key: 'size_inventory', localVal: String(localFormatted.size_inventory || ''), remoteVal: remote.size_inventory ? String(remote.size_inventory) : undefined },
     { key: 'kurta_length', localVal: localFormatted.kurta_length, remoteVal: remote.kurta_length ?? remote.kurtaLength },
     { key: 'pant_style', localVal: localFormatted.pant_style, remoteVal: remote.pant_style ?? remote.pantStyle },
     { key: 'embroidery_type', localVal: localFormatted.embroidery_type, remoteVal: remote.embroidery_type ?? remote.embroideryType },
@@ -823,7 +848,7 @@ export async function syncPickyProductWithDiff(localProduct: any): Promise<{
 
       if (loc !== rem) {
         diff[f.key] = { local: f.localVal, remote: f.remoteVal };
-        changedFields[f.key] = f.key === 'size_inventory' ? localFormatted.size_inventory : f.localVal;
+        changedFields[f.key] = f.localVal;
       }
     }
   }
