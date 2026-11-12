@@ -7,6 +7,7 @@ export interface PickyAssistProductPayload {
   stock_code: string;
   code1?: string;
   productName?: string;
+  product_name?: string;
   title?: string;
   productDescription?: string;
   description?: string;
@@ -42,6 +43,24 @@ export interface PickyAssistProductPayload {
  * 2. generatedImages (sorted by order)
  * 3. referenceImages (uploaded swatches)
  */
+/**
+ * Appends the garment size to the product title/name if not already present.
+ * e.g. ("Floral Georgette Kurti", "XL") => "Floral Georgette Kurti - XL"
+ * e.g. ("Floral Georgette Kurti - XL", "XL") => "Floral Georgette Kurti - XL"
+ */
+export function appendSizeToTitle(baseTitle: string, size?: string | null): string {
+  const cleanTitle = String(baseTitle || '').trim();
+  const cleanSize = String(size || '').trim();
+  if (!cleanTitle) return cleanSize;
+  if (!cleanSize) return cleanTitle;
+  const escaped = cleanSize.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sizeRegex = new RegExp('(?:^|[\\s\\-_/\\(\\[\\u2013\\u2014])' + escaped + '(?:[\\s\\-_/\\)\\]\\u2013\\u2014]|$)', 'i');
+  if (sizeRegex.test(cleanTitle)) {
+    return cleanTitle;
+  }
+  return cleanTitle + ' - ' + cleanSize;
+}
+
 export function extractProductImages(product: any): string[] {
   const images: string[] = [];
 
@@ -172,14 +191,36 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     const singleData = normalizedSizes[availableSizes[0]];
     variantStockCodes = singleData?.stockCodes || (singleData?.stockCode ? [singleData.stockCode] : []);
     variantSpecificBarcode = variantStockCodes[0] || singleData?.stockCode || variantCode;
+    effectiveSize = availableSizes[0];
   }
+
+  // Append size to product name if a size variant/specification exists and isn't already in the name
+  const sizeToAppend = String(
+    variantSize ||
+    (availableSizes.length === 1 && availableSizes[0].toUpperCase() !== 'FREE' ? availableSizes[0] : '') ||
+    product.length_Size ||
+    product.size ||
+    ''
+  ).trim();
+
+  if (sizeToAppend) {
+    effectiveProductName = appendSizeToTitle(baseProductName, sizeToAppend);
+  }
+
+  const effectiveWaTitle = product.whatsappCatalogueTitle
+    ? appendSizeToTitle(product.whatsappCatalogueTitle, sizeToAppend)
+    : effectiveProductName;
+
+  const effectiveShopifyTitle = product.shopifyTitle
+    ? appendSizeToTitle(product.shopifyTitle, sizeToAppend)
+    : '';
 
   // Build nested variants array for Picky Assist catalog / CRM connectors that support batch variant objects
   const variantsList = Object.entries(normalizedSizes).map(([sz, sData]) => {
     const vCode = `${itemGroupId}-${sz.toLowerCase()}`;
     const vCodes = sData.stockCodes && sData.stockCodes.length > 0 ? sData.stockCodes : (sData.stockCode ? [sData.stockCode] : []);
     const vBarcode = vCodes[0] || sData.stockCode || vCode;
-
+    const vName = appendSizeToTitle(baseProductName, sz);
     return {
       id: vCode,
       product_id: vCode,
@@ -195,8 +236,10 @@ export function formatProductPayload(product: any, variantSize?: string): Record
       barcodes: vCodes.join(', '),
       stock_code: sData.stockCode || vBarcode || masterStockCode,
       stock_codes: vCodes,
-      title: `${effectiveProductName} - ${sz}`,
-      name: `${effectiveProductName} - ${sz}`,
+      title: vName,
+      name: vName,
+      productName: vName,
+      product_name: vName,
       size: sz,
       variant: sz,
       variant_name: sz,
@@ -258,6 +301,7 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     title: effectiveProductName,
     name: effectiveProductName,
     productName: effectiveProductName,
+    product_name: effectiveProductName,
     description: description,
     productDescription: description,
     color: String(product.color || '').trim(),
@@ -342,12 +386,12 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     image_5: image5,
 
     // 8. WhatsApp Catalog & Broadcast Helpers
-    whatsapp_catalogue_title: product.whatsappCatalogueTitle || effectiveProductName,
+    whatsapp_catalogue_title: effectiveWaTitle,
     whatsapp_retail: product.whatsappRetail || description,
     whatsapp_wholesale: product.whatsappWholesale || '',
     instagram_caption: product.instagramCaption || '',
     facebook_caption: product.facebookCaption || '',
-    shopify_title: product.shopifyTitle || '',
+    shopify_title: effectiveShopifyTitle,
   };
 }
 
@@ -598,7 +642,9 @@ export async function updatePickyProduct(
                 'quantity', 'qty', 'stock',
                 'size', 'variant', 'variant_name', 'variantName',
                 'option_value', 'option1_value',
-                'barcode', 'barcodes', 'stock_codes'
+                'barcode', 'barcodes', 'stock_codes',
+                'title', 'name', 'productName', 'product_name',
+                'whatsapp_catalogue_title', 'whatsappCatalogueTitle'
               ];
               if (!protectedKeys.includes(k)) {
                 payload[k] = v;
