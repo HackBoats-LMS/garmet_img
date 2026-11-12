@@ -45,8 +45,8 @@ export interface PickyAssistProductPayload {
  */
 /**
  * Appends the garment size to the product title/name if not already present.
- * e.g. ("Floral Georgette Kurti", "XL") => "Floral Georgette Kurti - XL"
- * e.g. ("Floral Georgette Kurti - XL", "XL") => "Floral Georgette Kurti - XL"
+ * e.g. ("Floral Georgette Kurti", "XL") => "Floral Georgette Kurti XL"
+ * e.g. ("Floral Georgette Kurti XL", "XL") => "Floral Georgette Kurti XL"
  */
 export function appendSizeToTitle(baseTitle: string, size?: string | null): string {
   const cleanTitle = String(baseTitle || '').trim();
@@ -58,7 +58,7 @@ export function appendSizeToTitle(baseTitle: string, size?: string | null): stri
   if (sizeRegex.test(cleanTitle)) {
     return cleanTitle;
   }
-  return cleanTitle + ' - ' + cleanSize;
+  return cleanTitle + ' ' + cleanSize;
 }
 
 export function extractProductImages(product: any): string[] {
