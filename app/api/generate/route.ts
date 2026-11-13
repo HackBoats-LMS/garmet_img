@@ -464,11 +464,11 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
     );
 
     const mirrorPhysicsRule = isMirror
-      ? '\n- OPTICAL MIRROR PHYSICS: The mirror reflection must obey real-world optical ray-tracing geometry. The reflection in the mirror must show the model looking directly into her own eyes in the glass with matching body position, raised hand, and pallu pin placement in exact geometric symmetry with the foreground model. Zero distorted reflections, no impossible angles, no duplicate limbs, single coherent identity.'
+      ? '\n- OPTICAL MIRROR PHYSICS & DRAPE CONTINUITY: The mirror reflection must obey real-world optical ray-tracing geometry. The reflection in the mirror shows the exact same model from the face reference looking directly into her own eyes in the glass with matching body position, raised hand, and continuous saree drape. The front chest wrap rising to the shoulder pleats in the mirror reflection connects seamlessly over the shoulder crest to the pallu cascading in the foreground. Single coherent human identity, zero distorted reflections, no detached shoulder pallu, no impossible angles.'
       : '';
 
     const mirrorNeg = isMirror
-      ? ', broken mirror physics, distorted reflection, impossible reflection angle, reflection looking at camera while body faces away, double faces, duplicate limbs, floating hands, misaligned reflections, uncanny valley reflection, two different people in mirror'
+      ? ', broken mirror physics, distorted reflection, impossible reflection angle, reflection looking at camera while body faces away, double faces, duplicate limbs, floating hands, misaligned reflections, uncanny valley reflection, two different people in mirror, pallu starting from shoulder seam, detached cape pallu, cloth starting abruptly at shoulder seam'
       : '';
 
     const negPrompt = (template?.negativePrompt || fallbackNegative) + mirrorNeg;
@@ -681,12 +681,7 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       let effectivePosePreviewUrl = posePreviewUrl;
       let effectiveSendPosePreview = Boolean(sendPosePreview);
 
-      if (isMirror) {
-        if (!effectivePosePreviewUrl) {
-          effectivePosePreviewUrl = '/poses/saree_pose_mirror.jpg';
-        }
-        effectiveSendPosePreview = true;
-      } else if (!sanitizedPoseSnippet) {
+      if (!sanitizedPoseSnippet) {
         sanitizedPoseSnippet = 'Full-length front standing portrait at eye-level, poised and dignified posture.';
       }
 

@@ -1152,11 +1152,11 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     const isMirrorPose = pose.name.toLowerCase().includes('mirror') || (pose.promptSnippet && pose.promptSnippet.toLowerCase().includes('mirror'));
 
     const mirrorPhysicsGuidance = isMirrorPose
-      ? ' CRITICAL OPTICAL PHYSICS & RAY-TRACED MIRROR ACCURACY: Camera is positioned over-the-shoulder 45 degrees behind the model looking into the dressing mirror. The mirror reflection must obey real-world optical physics: the reflection cleanly shows the model looking directly into her own eyes in the glass with a calm, composed expression. Her raised hand adjusting her shoulder pallu pin must geometrically and symmetrically mirror her true physical 3D position in the foreground with matching directional lighting, ambient shadows, and jewelry. Coherent single human identity, realistic reflection depth, zero optical distortion, and zero warped limbs.'
+      ? ' CRITICAL OPTICAL PHYSICS & CONTINUOUS SAREE DRAPE: Camera is positioned over-the-shoulder 45 degrees behind the model looking into the dressing mirror. The mirror reflection must obey real-world optical physics: the reflection cleanly shows the model looking directly into her own eyes in the glass with a calm, composed expression, matching the model face identity 1:1. Saree is an unbroken continuous 6-yard drape: the front chest drape in the mirror gathers into shoulder pleats and curves seamlessly over the crest of the left shoulder into the foreground pallu cascade (strictly NOT starting abruptly at the shoulder seam, NOT a detached cape). Her raised hand adjusting her shoulder pleats geometrically and symmetrically mirrors her physical position with matching directional lighting and jewelry. Coherent single human identity, realistic reflection depth, zero optical distortion.'
       : '';
 
     const mirrorNegative = isMirrorPose
-      ? ', broken mirror physics, distorted reflection, impossible reflection angle, reflection looking at camera while body faces away, double faces, duplicate limbs, floating hands, misaligned reflections, uncanny valley reflection, two different people in mirror, warped glass'
+      ? ', broken mirror physics, distorted reflection, impossible reflection angle, reflection looking at camera while body faces away, double faces, duplicate limbs, floating hands, misaligned reflections, uncanny valley reflection, two different people in mirror, warped glass, pallu starting from shoulder seam, detached cape pallu, disconnected shoulder drape, cloth starting abruptly at shoulder seam'
       : '';
 
     const userSuggestionsText = promptSuggestions && promptSuggestions.trim()
