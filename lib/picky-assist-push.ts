@@ -203,13 +203,18 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     ''
   ).trim();
 
+  let productNameWithSize = baseProductName;
   if (sizeToAppend) {
-    effectiveProductName = appendSizeToTitle(baseProductName, sizeToAppend);
+    productNameWithSize = appendSizeToTitle(baseProductName, sizeToAppend);
   }
 
-  const effectiveWaTitle = product.whatsappCatalogueTitle
-    ? appendSizeToTitle(product.whatsappCatalogueTitle, sizeToAppend)
-    : effectiveProductName;
+  // Base title for WhatsApp / Meta Catalog
+  // CRITICAL: Meta Commerce Manager variant grouping REQUIRES all variants of the same item_group_id
+  // to share the EXACT same base catalog title (e.g. "SHORT KURTIS").
+  // When variants share the base title, WhatsApp groups them together and renders the variant capsules ([3XL] [4XL] [5X] [XL] [XXL]).
+  // In WhatsApp's UI, when the user clicks a capsule (e.g. [5X]), WhatsApp automatically displays "[Base Title] [Selected Option]" -> "SHORT KURTIS 5X".
+  // If the size is hardcoded into `title` or `whatsapp_catalogue_title`, Meta treats them as different standalone products and DOES NOT render capsules!
+  const baseWaTitle = product.whatsappCatalogueTitle || baseProductName;
 
   const effectiveShopifyTitle = product.shopifyTitle
     ? appendSizeToTitle(product.shopifyTitle, sizeToAppend)
@@ -236,10 +241,12 @@ export function formatProductPayload(product: any, variantSize?: string): Record
       barcodes: vCodes.join(', '),
       stock_code: sData.stockCode || vBarcode || masterStockCode,
       stock_codes: vCodes.join(', '),
-      title: vName,
+      title: baseProductName,
+      catalog_title: baseProductName,
       name: vName,
       productName: vName,
       product_name: vName,
+      variant_title: vName,
       size: sz,
       Size: sz,
       size_name: sz,
@@ -308,10 +315,16 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     stock_codes: (variantStockCodes.length > 0 ? variantStockCodes : allBarcodes).join(', '),
 
     // 2. Core Details & Variant Name
-    title: effectiveProductName,
-    name: effectiveProductName,
-    productName: effectiveProductName,
-    product_name: effectiveProductName,
+    // CRITICAL: `title` and `catalog_title` MUST be the uniform base title for Meta WhatsApp Catalog variant grouping
+    title: baseProductName,
+    catalog_title: baseProductName,
+    base_product_name: baseProductName,
+    // Picky Assist Internal / CRM Product Name (includes size so agents and lists can identify each variant)
+    name: productNameWithSize,
+    productName: productNameWithSize,
+    product_name: productNameWithSize,
+    variant_title: productNameWithSize,
+    variant_name: String(effectiveSize).trim(),
     description: description,
     productDescription: description,
     color: String(product.color || '').trim(),
@@ -409,7 +422,7 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     image_5: image5,
 
     // 8. WhatsApp Catalog & Broadcast Helpers
-    whatsapp_catalogue_title: effectiveWaTitle,
+    whatsapp_catalogue_title: baseWaTitle,
     whatsapp_retail: product.whatsappRetail || description,
     whatsapp_wholesale: product.whatsappWholesale || '',
     instagram_caption: product.instagramCaption || '',
