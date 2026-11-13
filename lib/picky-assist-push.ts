@@ -7,7 +7,6 @@ export interface PickyAssistProductPayload {
   stock_code: string;
   code1?: string;
   productName?: string;
-  product_name?: string;
   title?: string;
   productDescription?: string;
   description?: string;
@@ -43,24 +42,6 @@ export interface PickyAssistProductPayload {
  * 2. generatedImages (sorted by order)
  * 3. referenceImages (uploaded swatches)
  */
-/**
- * Appends the garment size to the product title/name if not already present.
- * e.g. ("Floral Georgette Kurti", "XL") => "Floral Georgette Kurti XL"
- * e.g. ("Floral Georgette Kurti XL", "XL") => "Floral Georgette Kurti XL"
- */
-export function appendSizeToTitle(baseTitle: string, size?: string | null): string {
-  const cleanTitle = String(baseTitle || '').trim();
-  const cleanSize = String(size || '').trim();
-  if (!cleanTitle) return cleanSize;
-  if (!cleanSize) return cleanTitle;
-  const escaped = cleanSize.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const sizeRegex = new RegExp('(?:^|[\\s\\-_/\\(\\[\\u2013\\u2014])' + escaped + '(?:[\\s\\-_/\\)\\]\\u2013\\u2014]|$)', 'i');
-  if (sizeRegex.test(cleanTitle)) {
-    return cleanTitle;
-  }
-  return cleanTitle + ' ' + cleanSize;
-}
-
 export function extractProductImages(product: any): string[] {
   const images: string[] = [];
 
@@ -191,41 +172,14 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     const singleData = normalizedSizes[availableSizes[0]];
     variantStockCodes = singleData?.stockCodes || (singleData?.stockCode ? [singleData.stockCode] : []);
     variantSpecificBarcode = variantStockCodes[0] || singleData?.stockCode || variantCode;
-    effectiveSize = availableSizes[0];
   }
-
-  // Append size to product name if a size variant/specification exists and isn't already in the name
-  const sizeToAppend = String(
-    variantSize ||
-    (availableSizes.length === 1 && availableSizes[0].toUpperCase() !== 'FREE' ? availableSizes[0] : '') ||
-    product.length_Size ||
-    product.size ||
-    ''
-  ).trim();
-
-  let productNameWithSize = baseProductName;
-  if (sizeToAppend) {
-    productNameWithSize = appendSizeToTitle(baseProductName, sizeToAppend);
-  }
-
-  // Base title for WhatsApp / Meta Catalog
-  // CRITICAL: Meta Commerce Manager variant grouping REQUIRES all variants of the same item_group_id
-  // to share the EXACT same base catalog title (e.g. "SHORT KURTIS").
-  // When variants share the base title, WhatsApp groups them together and renders the variant capsules ([3XL] [4XL] [5X] [XL] [XXL]).
-  // In WhatsApp's UI, when the user clicks a capsule (e.g. [5X]), WhatsApp automatically displays "[Base Title] [Selected Option]" -> "SHORT KURTIS 5X".
-  // If the size is hardcoded into `title` or `whatsapp_catalogue_title`, Meta treats them as different standalone products and DOES NOT render capsules!
-  const baseWaTitle = product.whatsappCatalogueTitle || baseProductName;
-
-  const effectiveShopifyTitle = product.shopifyTitle
-    ? appendSizeToTitle(product.shopifyTitle, sizeToAppend)
-    : '';
 
   // Build nested variants array for Picky Assist catalog / CRM connectors that support batch variant objects
   const variantsList = Object.entries(normalizedSizes).map(([sz, sData]) => {
     const vCode = `${itemGroupId}-${sz.toLowerCase()}`;
     const vCodes = sData.stockCodes && sData.stockCodes.length > 0 ? sData.stockCodes : (sData.stockCode ? [sData.stockCode] : []);
     const vBarcode = vCodes[0] || sData.stockCode || vCode;
-    const vName = appendSizeToTitle(baseProductName, sz);
+
     return {
       id: vCode,
       product_id: vCode,
@@ -240,26 +194,12 @@ export function formatProductPayload(product: any, variantSize?: string): Record
       barcode: vBarcode,
       barcodes: vCodes.join(', '),
       stock_code: sData.stockCode || vBarcode || masterStockCode,
-      stock_codes: vCodes.join(', '),
-      title: baseProductName,
-      catalog_title: baseProductName,
-      name: vName,
-      productName: vName,
-      product_name: vName,
-      variant_title: vName,
+      stock_codes: vCodes,
+      title: `${effectiveProductName} - ${sz}`,
+      name: `${effectiveProductName} - ${sz}`,
       size: sz,
-      Size: sz,
-      size_name: sz,
-      Size_name: sz,
-      size_title: sz,
       variant: sz,
-      Variant: sz,
       variant_name: sz,
-      variantName: sz,
-      variant_size: sz,
-      variantSize: sz,
-      size_inventory: sz,
-      sizeInventory: sz,
       color: String(product.color || '').trim(),
       category: category,
       product_type: category.toLowerCase(),
@@ -312,19 +252,12 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     code1: code1 || masterStockCode,
     barcode: variantSpecificBarcode || (allBarcodes[0] ?? variantCode),
     barcodes: allBarcodes.join(', '),
-    stock_codes: (variantStockCodes.length > 0 ? variantStockCodes : allBarcodes).join(', '),
+    stock_codes: variantStockCodes.length > 0 ? variantStockCodes : allBarcodes,
 
     // 2. Core Details & Variant Name
-    // CRITICAL: `title` and `catalog_title` MUST be the uniform base title for Meta WhatsApp Catalog variant grouping
-    title: baseProductName,
-    catalog_title: baseProductName,
-    base_product_name: baseProductName,
-    // Picky Assist Internal / CRM Product Name (includes size so agents and lists can identify each variant)
-    name: productNameWithSize,
-    productName: productNameWithSize,
-    product_name: productNameWithSize,
-    variant_title: productNameWithSize,
-    variant_name: String(effectiveSize).trim(),
+    title: effectiveProductName,
+    name: effectiveProductName,
+    productName: effectiveProductName,
     description: description,
     productDescription: description,
     color: String(product.color || '').trim(),
@@ -382,30 +315,17 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     qty: effectiveQuantity,
     stock: effectiveQuantity,
     size: String(effectiveSize).trim(),
-    Size: String(effectiveSize).trim(),
-    size_name: String(effectiveSize).trim(),
-    Size_name: String(effectiveSize).trim(),
-    size_title: String(effectiveSize).trim(),
     variant: String(effectiveSize).trim(),
-    Variant: String(effectiveSize).trim(),
     variant_name: String(effectiveSize).trim(),
     variantName: String(effectiveSize).trim(),
-    variant_size: String(effectiveSize).trim(),
-    variantSize: String(effectiveSize).trim(),
     option_name: 'Size',
     option_value: String(effectiveSize).trim(),
     option1_name: 'Size',
     option1_value: String(effectiveSize).trim(),
-    // Clean string for size_inventory: never pass a raw object here because PHP stringifies arrays/objects to "Array"!
-    size_inventory: variantSize
-      ? String(effectiveSize).trim()
-      : (availableSizes.length > 0 ? availableSizes.join(', ') : String(effectiveSize).trim()),
-    sizeInventory: variantSize
-      ? String(effectiveSize).trim()
-      : (availableSizes.length > 0 ? availableSizes.join(', ') : String(effectiveSize).trim()),
+    size_inventory: normalizedSizes,
 
-    // 6. Nested Variants List (Omit when pushing individual variant to prevent PHP array-to-string issues)
-    variants: variantSize ? undefined : (variantsList.length > 0 ? variantsList : undefined),
+    // 6. Nested Variants List (For connectors supporting structured variant arrays)
+    variants: variantsList.length > 0 ? variantsList : undefined,
 
     // 7. Product Images (Direct public JPEG URLs < 5MB)
     image_link: image1,
@@ -422,12 +342,12 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     image_5: image5,
 
     // 8. WhatsApp Catalog & Broadcast Helpers
-    whatsapp_catalogue_title: baseWaTitle,
+    whatsapp_catalogue_title: product.whatsappCatalogueTitle || effectiveProductName,
     whatsapp_retail: product.whatsappRetail || description,
     whatsapp_wholesale: product.whatsappWholesale || '',
     instagram_caption: product.instagramCaption || '',
     facebook_caption: product.facebookCaption || '',
-    shopify_title: effectiveShopifyTitle,
+    shopify_title: product.shopifyTitle || '',
   };
 }
 
@@ -676,13 +596,9 @@ export async function updatePickyProduct(
                 'variant_sku', 'variant_id', 'variant_code', 'variantCode',
                 'item_group_id', 'itemGroupId', 'code1',
                 'quantity', 'qty', 'stock',
-                'size', 'Size', 'size_name', 'Size_name', 'size_title',
-                'variant', 'Variant', 'variant_name', 'variantName', 'variant_size', 'variantSize',
-                'option_name', 'option_value', 'option1_name', 'option1_value',
-                'size_inventory', 'sizeInventory', 'variants',
-                'barcode', 'barcodes', 'stock_codes',
-                'title', 'name', 'productName', 'product_name',
-                'whatsapp_catalogue_title', 'whatsappCatalogueTitle'
+                'size', 'variant', 'variant_name', 'variantName',
+                'option_value', 'option1_value',
+                'barcode', 'barcodes', 'stock_codes'
               ];
               if (!protectedKeys.includes(k)) {
                 payload[k] = v;
@@ -845,7 +761,7 @@ export async function syncPickyProductWithDiff(localProduct: any): Promise<{
     { key: 'coverImageUrl', localVal: localFormatted.coverImageUrl, remoteVal: remote.coverImageUrl ?? remote.cover_image_url ?? remote.image_link },
     { key: 'description', localVal: localFormatted.description, remoteVal: remote.description ?? remote.productDescription },
     { key: 'size', localVal: localFormatted.size, remoteVal: remote.size ?? remote.length_Size },
-    { key: 'size_inventory', localVal: String(localFormatted.size_inventory || ''), remoteVal: remote.size_inventory ? String(remote.size_inventory) : undefined },
+    { key: 'size_inventory', localVal: JSON.stringify(localFormatted.size_inventory), remoteVal: remote.size_inventory ? JSON.stringify(remote.size_inventory) : undefined },
     { key: 'kurta_length', localVal: localFormatted.kurta_length, remoteVal: remote.kurta_length ?? remote.kurtaLength },
     { key: 'pant_style', localVal: localFormatted.pant_style, remoteVal: remote.pant_style ?? remote.pantStyle },
     { key: 'embroidery_type', localVal: localFormatted.embroidery_type, remoteVal: remote.embroidery_type ?? remote.embroideryType },
@@ -861,7 +777,7 @@ export async function syncPickyProductWithDiff(localProduct: any): Promise<{
 
       if (loc !== rem) {
         diff[f.key] = { local: f.localVal, remote: f.remoteVal };
-        changedFields[f.key] = f.localVal;
+        changedFields[f.key] = f.key === 'size_inventory' ? localFormatted.size_inventory : f.localVal;
       }
     }
   }
