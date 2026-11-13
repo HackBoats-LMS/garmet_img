@@ -424,8 +424,11 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
   }
 
   if (blouseData) {
-    const role = 'blouse fabric';
-    const placement = 'Tailored fitted blouse matching this fabric.';
+    const role = 'blouse fabric (EXCLUSIVE & MANDATORY REFERENCE FOR THE MODEL\'S BLOUSE)';
+    const placement =
+      `MANDATORY BLOUSE SPECIFICATION: The model across EVERY photoshoot pose MUST wear a tailored blouse stitched 100% from this exact fabric swatch (Image ${currentNum}). ` +
+      `Replicate the exact base color, weave texture, and micro-patterns from this swatch across the front bodice, back, and both tailored elbow-length sleeves (~10 inches). Modest round neckline. ` +
+      `Under NO circumstances should the model wear a sleeveless top, plain off-white/cream blouse, gold brocade top, or any clothing from the pose preview image. The blouse MUST match this swatch exclusively.`;
     manifest.push({
       slotId: 'blouse',
       imageNumber: currentNum++,
@@ -451,10 +454,16 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
 
   if (input.posePreviewUrl && input.posePreviewUrl.trim()) {
     const isMirror = isMirrorPose || input.posePreviewUrl.toLowerCase().includes('mirror');
-    const role = isMirror ? 'pose & composition reference (camera angle & mirror framing only)' : 'pose reference (for body posture only)';
+    const role = isMirror
+      ? 'pose & composition reference (CAMERA ANGLE & MIRROR FRAMING ONLY - STRICTLY IGNORE CLOTHING)'
+      : 'pose reference (BODY POSTURE ONLY - STRICTLY IGNORE CLOTHING)';
     const placement = isMirror
-      ? 'MANDATORY COMPOSITION GUIDE: Replicate this over-the-shoulder camera angle and dressing mirror reflection framing. Drape the reference saree fabrics on the model.'
-      : 'Use for body posture only.';
+      ? 'STRICT COMPOSITION GUIDE ONLY: Replicate this over-the-shoulder camera angle and dressing mirror reflection framing. ' +
+        'COMPLETELY DISREGARD AND DO NOT COPY any clothing, tops, blouses, sarees, or colors worn by the person in this preview photo. ' +
+        'The model MUST wear ONLY the reference blouse fabric and reference saree swatches.'
+      : 'STRICT BODY POSTURE GUIDE ONLY: Replicate ONLY the body posture, standing stance, and camera perspective of this reference. ' +
+        'COMPLETELY DISREGARD AND DO NOT COPY any clothing, tops, blouses, sarees, fabrics, colors, or jewelry from this preview image. ' +
+        'The model MUST wear the tailored blouse matching the blouse swatch and reference saree fabrics.';
     manifest.push({
       slotId: 'pose_preview',
       imageNumber: currentNum++,
@@ -476,6 +485,10 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
   const motifSourceNum = macroMotifEntry ? macroMotifEntry.imageNumber : 1;
   const faceImg = manifest.find(m => m.slotId === 'model_face');
   const faceNum = faceImg ? faceImg.imageNumber : null;
+  const blouseImg = manifest.find(m => m.slotId === 'blouse');
+  const blouseNum = blouseImg ? blouseImg.imageNumber : null;
+  const palluImg = manifest.find(m => m.slotId === 'pallu');
+  const palluNum = palluImg ? palluImg.imageNumber : 2;
 
   // Build Dynamic Fidelity Rule (No hardcoded diamond/rhombus/foliage)
   let motifSection = '';
@@ -619,12 +632,12 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     `${continuityDirective}` +
     `${uniformScaleDirective}` +
     `5. LOWER SKIRT & PALLU BORDER FIDELITY: The horizontal border along the feet at the bottom hem of the saree, as well as along the outer vertical drape of the cascading pallu, must replicate the EXACT colors, motifs, width, framing bands, and embroidery directly from the reference swatches (Image ${hemNum} and Image 2). Replicate the authentic border faithfully 1:1 without altering colors or adding unreferenced elements.\n` +
-    `6. PALLU ANGLE & GRAVITATIONAL ORIENTATION: The pallu from Image 2 is anchored securely at the left shoulder and falls straight down behind the left arm/shoulder in a clean vertical cascade to lower calf level, exactly matching the vertical orientation of Image 2. The authentic reference border runs vertically along the outer hanging edge from the shoulder down to the hem. ${palluEndHemDesc}\n` +
+    `6. CONTINUOUS NATURAL PALLU DRAPING MECHANICS: The saree is a single continuous unbroken 6-yard garment. The diagonal chest drape wraps smoothly from the right waist across the bust to the left shoulder, gathers into graceful shoulder pleats resting naturally on the shoulder, and continues seamlessly over the crest of the left shoulder where the decorative pallu end (anchal) flows down the back to lower calf level. The pallu is NOT a separate detached piece of cloth and does NOT start abruptly at the shoulder seam; it flows organically as the continuous extension of the chest drape over the shoulder matching professional fashion catalogue standards. ${palluEndHemDesc}\n` +
     `7. UNIFORM SAREE LENGTH & HEMLINE CONSISTENCY: Across all full-length standing and walking poses, the saree skirt hemline must consistently skim floor level at the feet (skimming naturally over footwear, touching the floor without high-water ankles or excessive floor puddling). Front waist pleats fall straight down to the floor. The pallu hangs to lower calf / upper ankle level (~6 to 8 inches above the floor), preserving identical placement, drape width, and motif scale across every pose.\n` +
-    `8. UNIFORM BLOUSE CUT & STYLING CONSISTENCY: The blouse maintains a clean tailored silhouette across all photoshoot poses: modest round front and back neckline, tailored elbow-length sleeves (~10 inches), seamless solid back closure, and flawless finish replicating the blouse fabric reference (Image ${manifest.find(m => m.slotId === 'blouse')?.imageNumber || 4}).\n` +
+    `8. MANDATORY BLOUSE FIDELITY & UNIFORM SILHOUETTE (IMAGE ${blouseNum || 'BLOUSE'}): Across ALL photoshoot poses (The Classic Front Stand, The Confident Walk-In, The Verandah Hostess, The Glance, The Mirror Moment, and The Pallu Cascade), the model MUST wear the IDENTICAL tailored blouse stitched 100% from the blouse reference swatch (Image ${blouseNum || 4}). It must replicate the exact base color, texture, and pattern from Image ${blouseNum || 4} across the front bodice, back, and tailored elbow-length sleeves (~10 inches) with a modest round neckline. Do NOT alter sleeve length, do NOT make the blouse sleeveless, do NOT generate plain off-white/cream tops, and do NOT copy any tops from the pose preview image.\n` +
     `9. STRICT POSE-TO-POSE DRAPING CONTINUITY (ANCHORED TO THE CLASSIC FRONT STAND & THE PALLU CASCADE):\n` +
-    `- FRONT DRAPE BENCHMARK (THE CLASSIC FRONT STAND STANDARD): Across ALL poses showing the front torso (including The Classic Front Stand, The Confident Walk-In, The Verandah Hostess, The Glance close-up, AND the mirror reflection in The Mirror Moment), the front chest drape, waist pleats, and motif density must strictly match the drape geometry of The Classic Front Stand. When single lower border or borderless mode is active, the diagonal chest drape across the bust, torso, and collarbone is 100% clean body fabric extending right to the neckline fold with identical miniature motif/grid scale. Under NO circumstances should any green border band, pallu border, or hem border appear across the chest drape in any pose or mirror reflection.\n` +
-    `- REAR PALLU BENCHMARK (THE PALLU CASCADE STANDARD): Across ALL poses showing the pallu (including The Pallu Cascade, The Classic Front Stand side drape, The Confident Walk-In, and the foreground drape in The Mirror Moment), the pallu must strictly replicate the visual architecture of The Pallu Cascade: crisp decorative panels, peacock figures, floral framing bands, and outer vertical border matching the Pallu reference swatch (Image 2) 1:1.\n` +
+    `- FRONT DRAPE BENCHMARK (THE CLASSIC FRONT STAND STANDARD): Across ALL poses showing the front torso (including The Classic Front Stand, The Confident Walk-In, The Verandah Hostess, The Glance close-up, AND the mirror reflection in The Mirror Moment), the front chest drape, waist pleats, and motif density must strictly match the drape geometry of The Classic Front Stand. When single lower border or borderless mode is active, the diagonal chest drape across the bust, torso, and collarbone is 100% clean body fabric extending right to the neckline fold with identical miniature motif/grid scale. Strictly NO pallu border, NO hem border, and NO contrasting border band across the chest drape in any pose or mirror reflection.\n` +
+    `- REAR PALLU BENCHMARK (THE PALLU CASCADE STANDARD): Across ALL poses showing the pallu (including The Pallu Cascade, The Classic Front Stand side drape, The Confident Walk-In, and the foreground drape in The Mirror Moment), the pallu must strictly replicate the visual architecture of The Pallu Cascade: crisp decorative panels, motifs, framing border bands, and outer vertical border matching the Pallu reference swatch (Image ${palluNum}) 1:1.\n` +
     `- UNIFORM MOTIF SIZING & RESOLUTION: Motif scale, grid cell dimensions, and butti density are physically locked relative to body proportions across all camera angles and framings. Motifs on the chest in a mirror reflection or close-up portrait must NEVER be enlarged or distorted relative to the pleats.\n` +
     `- FLOOR-SKIMMING LENGTH: Across all standing and walking poses, the saree hemline consistently skims floor level at the feet (skimming naturally over footwear, touching the floor without high-water ankles or cropped hems).\n` +
     `- TAILORED BLOUSE UNIFORMITY: Every pose features the identical tailored blouse: modest round neckline, tailored elbow-length sleeves (~10 inches), seamless solid back closure, and no back ties or strings.\n` +
@@ -739,19 +752,18 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
   if (isMirror) {
     // 1. The Mirror Moment (Over-the-shoulder medium shot reflection)
     const mirrorChest = getChestText('mirror');
-    const blouseNum = manifest.find(m => m.slotId === 'blouse')?.imageNumber || 4;
 
     poseSnippet =
-      `MANDATORY OVER-THE-SHOULDER MIRROR ANGLE (ANCHORED TO THE CLASSIC FRONT STAND & THE PALLU CASCADE): ` +
+      `MANDATORY OVER-THE-SHOULDER MIRROR ANGLE (CONTINUOUS SAREE DRAPE & UNIFORM BLOUSE): ` +
       `Medium shot framed over the model's left shoulder from behind, looking past her into a vintage warm teakwood dressing mirror. ` +
       `The model is positioned with her back and shoulder towards the camera in the foreground, facing into the mirror. ` +
-      `The model wears the identical tailored blouse seen in all poses: modest round neckline, tailored elbow-length sleeves, and clean seamless back matching the blouse swatch (Image ${blouseNum}). ` +
-      `In the foreground closest to the camera, the cascading pallu hanging behind her left shoulder is an EXACT 1:1 MATCH TO THE PALLU CASCADE: displaying the crisp authentic decorative artwork, peacock panels on green ground, and outer vertical border directly from the Pallu swatch (Image 2). ` +
+      `MANDATORY BLOUSE: The model wears the identical tailored blouse seen in all poses: modest round neckline, tailored elbow-length sleeves (~10 inches), and clean seamless back stitched 100% from the blouse reference swatch (Image ${blouseNum || 4}) matching its exact color, pattern, and weave. ` +
+      `CONTINUOUS AUTHENTIC SAREE DRAPE: The saree is a single continuous garment draped seamlessly from front to back. In the mirror reflection, the front diagonal chest wrap across the bust is an EXACT 1:1 MATCH TO THE CLASSIC FRONT STAND (${mirrorChest}). ` +
+      `This diagonal chest drape gathers into neat shoulder pleats resting naturally over her left shoulder, where her hand is gracefully resting. ` +
+      `From these shoulder pleats, the fabric continues seamlessly over the crest of her shoulder, where the decorative pallu cascades gracefully down behind her left shoulder in the foreground. ` +
+      `In the foreground closest to the camera, this cascading pallu displays the authentic decorative artwork, panels, and borders directly from the Pallu swatch (Image ${palluNum}), flowing naturally as part of the continuous saree (NOT a detached scarf, NOT starting abruptly at the shoulder seam). ` +
       `Her serene face looks directly into her own eyes in the glass with a quiet confident half-smile. ` +
-      `IN THE MIRROR REFLECTION, THE FRONT CHEST DRAPE IS AN EXACT 1:1 MATCH TO THE CLASSIC FRONT STAND: ` +
-      `${mirrorChest} ` +
-      `The reflection shows her hand gracefully adjusting the drape at her shoulder, gold bangles, and the diagonal chest drape displaying the authentic saree body motifs at identical miniature scale matching Image 1. ` +
-      `Strictly NO green border band, NO lower border, and NO pallu border on the chest drape in the mirror reflection. ` +
+      `Strictly NO pallu border and NO hem border on the front chest drape in the mirror reflection. ` +
       `The lower body and feet are outside the frame (medium shot framing).`;
   } else if (isCloseUp) {
     // 5. The Glance (Close-up chest-up portrait)
@@ -767,6 +779,7 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     poseSnippet =
       `CLOSE-UP CHEST-UP PORTRAIT (ANCHORED TO THE CLASSIC FRONT STAND): ` +
       `Soft gaze looking just past the camera, creating a warm human connection. One hand lightly raised near the collarbone or touching a delicate earring. Intimate focus on natural skin texture and authentic saree fabric. ` +
+      `MANDATORY BLOUSE: The model wears the tailored blouse matching the blouse reference swatch (Image ${blouseNum || 4}) with modest round neckline and tailored sleeves. ` +
       `FRONT DRAPE: ${closeUpBorderText} ` +
       `The diagonal chest wrap is an exact 1:1 match to The Classic Front Stand: identical miniature motif/grid scale without enlargement, clean folded neckline edge meeting the tailored blouse neckline, and smooth fabric weave.`;
   } else if (isRear) {
@@ -774,10 +787,10 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     poseSnippet =
       `FULL-LENGTH THREE-QUARTER REAR CATALOG VIEW FROM HEAD TO FLOOR (THE BENCHMARK STANDARD FOR PALLU & BACK): ` +
       `The model is standing poised, gently turning her head to look back towards the camera over her shoulder. ` +
+      `MANDATORY BLOUSE: The model wears the tailored blouse matching the blouse reference swatch (Image ${blouseNum || 4}) with tailored elbow-length sleeves (~10 inches), clean seamless back, and modest round back neckline (strictly NO back strings, NO doris, NO back ties). ` +
       `The saree skirt falls uninterrupted in crisp vertical pleats to the floor at the feet with the authentic lower hem border cleanly skimming the floor. ` +
-      `The pallu cascades gracefully down her entire back from the left shoulder to lower calf level, ` +
-      `framed by the continuous, unbroken lengthwise border along the outer drape and displaying the complete authentic decorative artwork, peacock panels, and border bands from the Pallu reference swatch ${bottomPalluEndDesc} ` +
-      `The tailored blouse features a clean seamless back with modest round back neckline matching the blouse reference swatch (strictly NO back strings, NO doris, NO back ties). ` +
+      `The pallu flows seamlessly over her left shoulder from the front drape and cascades gracefully down her entire back to lower calf level, ` +
+      `framed by the continuous, unbroken lengthwise border along the outer drape and displaying the complete authentic decorative artwork, panels, and border bands directly from the Pallu reference swatch (Image ${palluNum}) ${bottomPalluEndDesc} ` +
       (isDenseJaal
         ? 'The authentic all-over interlocking jaal pattern and framed motifs continue across the visible back body fabric at uniform miniature scale matching the reference swatch 1:1.'
         : 'Delicate repeating buttis continue across the visible back body fabric at uniform miniature scale with wide, airy negative spacing.');
@@ -788,11 +801,12 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     poseSnippet =
       `MEDIUM SHOT SEATED PORTRAIT (ANCHORED TO THE CLASSIC FRONT STAND): ` +
       `Seated gracefully on a classic teak armchair in a sunlit living room or verandah, holding a porcelain tea cup or resting hand on armrest with delicate gold bangles, looking slightly off-camera with a warm, welcoming smile. ` +
+      `MANDATORY BLOUSE: The model wears the tailored blouse matching the blouse reference swatch (Image ${blouseNum || 4}) with tailored elbow-length sleeves (~10 inches) and modest round neckline. ` +
       `FRONT DRAPE: ${seatedChestText} ` +
       (isDenseJaal
         ? `The authentic all-over jaal lattice and framed motifs extend uniformly across every fanned pleat, the lap, and thighs without plain blank patches, matching The Classic Front Stand scale 1:1. `
         : `The delicate repeating motifs extend uniformly across every fanned pleat, the lap, and thighs with wide airy negative spacing without plain blank patches, matching The Classic Front Stand scale 1:1. `) +
-      `The lower hem border cleanly finishes the outer edge of the fanned skirt pleats. Blouse styling matches all poses with modest round neckline and tailored elbow sleeves.`;
+      `The lower hem border cleanly finishes the outer edge of the fanned skirt pleats.`;
   } else if (isWalk) {
     // 3. The Confident Walk-In (Mid-step walking stride)
     const walkChestText = getChestText('walk');
@@ -800,10 +814,11 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     poseSnippet =
       `FULL-LENGTH CANDID EDITORIAL STRIDE (ANCHORED TO THE CLASSIC FRONT STAND & THE PALLU CASCADE): ` +
       `The model is mid-step walking forward along a sunlit corridor or veranda at eye-level, head held high with a grounded capable expression. ` +
+      `MANDATORY BLOUSE: The model wears the tailored blouse matching the blouse reference swatch (Image ${blouseNum || 4}) with tailored elbow-length sleeves (~10 inches) and modest round neckline. ` +
       `SAREE LENGTH & HEMLINE: The saree skirt hemline consistently skims floor level at the feet as she strides (natural floor-skimming fall matching The Classic Front Stand, strictly NO high-water ankles, NO cropped hem). ` +
       `FRONT DRAPE: ${walkChestText} ` +
       `The front waist pleats and diagonal chest wrap maintain identical 1:1 motif sizing and border layout as The Classic Front Stand. ` +
-      `PALLU CASCADE: The pallu cascades straight down from the left shoulder behind her left arm in a clean vertical fall to lower calf level matching The Pallu Cascade, showing the authentic outer decorative border ${bottomPalluEndDesc} ` +
+      `PALLU CASCADE: The pallu flows naturally over the left shoulder from the chest wrap and cascades straight down behind her left arm in a clean vertical fall to lower calf level matching The Pallu Cascade, showing the authentic outer decorative border ${bottomPalluEndDesc} ` +
       `The lower hemline border is cleanly visible along the bottom edge of the skirt and pleats at floor level as she strides. ` +
       (isDenseJaal
         ? `The continuous all-over jaal pattern and motifs across the chest wrap, waist, and walking pleats maintain uniform authentic miniature scale matching The Classic Front Stand.`
@@ -815,8 +830,9 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     poseSnippet =
       `FULL-LENGTH FRONT STANDING CATALOG PORTRAIT (THE BENCHMARK STANDARD): ` +
       `Front standing portrait at eye-level, subtle 15-degree body turn towards soft natural light. Poised, dignified expression of a modern Indian woman. Right hand rests gracefully by her side. ` +
+      `MANDATORY BLOUSE: The model wears the tailored blouse matching the blouse reference swatch (Image ${blouseNum || 4}) with tailored elbow-length sleeves (~10 inches) and modest round neckline. ` +
       `FRONT DRAPE: ${frontChestText} ` +
-      `The pallu is anchored at the left shoulder and hangs straight downward behind the left arm in a clean vertical fall to lower calf level, showing the authentic outer vertical border ${bottomPalluEndDesc} ` +
+      `The pallu wraps continuously across the bust, drapes over the left shoulder, and hangs straight downward behind the left arm in a clean vertical fall to lower calf level, showing the authentic outer vertical border ${bottomPalluEndDesc} ` +
       `The front waist pleats fall straight to the floor, where the lower skirt hemline features the authentic horizontal border cleanly skimming the ground at the feet. ` +
       (isDenseJaal
         ? `Strict 1:1 uniform pattern scale: the authentic continuous jaal (lattice grid) with framed repeating motifs extends uniformly across the chest drape, bust, waist pleats, and skirt matching the reference swatch.`
@@ -831,9 +847,9 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     ? `USER CORRECTIONS & SWATCH DIRECTION:\n${input.promptSuggestions.trim()}\nFollow these corrections precisely.`
     : '';
 
-  const blouseStyleRule = !blouseData
-    ? 'The model wears an elegantly tailored blouse with modest round neckline and elbow-length tailored sleeves (fully covered shoulders and arms, tailored sleeves; strictly NOT sleeveless, NO bare shoulders).'
-    : 'The model wears a tailored blouse matching the reference swatch.';
+  const blouseStyleRule = blouseNum
+    ? `MANDATORY BLOUSE (IMAGE ${blouseNum}): The model MUST wear the identical tailored blouse stitched 100% from the blouse reference swatch (Image ${blouseNum}), replicating its exact color, fabric texture, and pattern across both tailored elbow-length sleeves (~10 inches), front bodice, and back. Modest round neckline. Strictly NOT sleeveless, NO bare shoulders, NO off-white top, NO cream blouse, NO gold brocade.`
+    : 'The model wears an elegantly tailored blouse with modest round neckline and tailored elbow-length sleeves (~10 inches) fully covering shoulders and upper arms. Strictly NOT sleeveless, NO bare shoulders.';
 
   const modelAnchorText = faceNum
     ? `${modelAnchor}. Replicate the exact facial features, eye shape, and skin tone from Image ${faceNum} (strict identity lock)`
@@ -889,14 +905,14 @@ export function buildSareePrompt(input: BuildSareePromptInput): BuildSareePrompt
     'short saree, ankle crop, cropped hem, high-water saree, dragging puddling hem, unequal sleeve length, mismatched blouse, sleeveless blouse, altered blouse cut, jacket collar, back ties, dori strings'
   );
 
-  // Blouse styling: strictly modest sleeves for all poses unless explicit blouse swatch indicates otherwise
+  // Blouse styling: strictly modest sleeves for all poses matching blouse swatch exclusively
   priorityNegatives.push(
-    'sleeveless, sleeveless blouse, bare shoulders, strapless blouse, spaghetti straps, thin strap blouse, halter top, exposed shoulders, bare arms, cutaway shoulders, low armhole, sleeveless top, bare clavicle, backless dress, backless blouse'
+    'sleeveless, sleeveless blouse, bare shoulders, strapless blouse, spaghetti straps, thin strap blouse, halter top, exposed shoulders, bare arms, cutaway shoulders, low armhole, sleeveless top, bare clavicle, backless dress, backless blouse, off-white blouse, cream blouse, white blouse, gold brocade blouse, metallic blouse, mismatched blouse, different blouse across poses, changing blouse, altering blouse color, tank top, crop top, deep scoop back, open back, detached pallu, pallu starting from shoulder seam, scarf hanging from shoulder, cape pallu, disconnected pallu'
   );
 
   if (isMirrorPose) {
     priorityNegatives.push(
-      'backless blouse, open back, deep scoop back, bare back, exposed back, low back cut, back cutout, bare spine, front-facing standing pose without mirror, direct camera stare without mirror, missing mirror, no reflection, empty mirror, green border on chest in mirror, border across bust in reflection, pallu border on chest reflection, thick border in mirror reflection, mismatched chest in mirror, giant motifs in mirror, distorted pallu in foreground, missing peacock panel on pallu'
+      'backless blouse, open back, deep scoop back, bare back, exposed back, low back cut, back cutout, bare spine, front-facing standing pose without mirror, direct camera stare without mirror, missing mirror, no reflection, empty mirror, contrasting border on chest in mirror, border across bust in reflection, pallu border on chest reflection, thick border in mirror reflection, mismatched chest in mirror, giant motifs in mirror, distorted pallu in foreground, detached pallu, cape pallu, scarf on shoulder, disconnected drape'
     );
   }
 

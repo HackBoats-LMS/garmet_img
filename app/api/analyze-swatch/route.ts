@@ -389,7 +389,7 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
           (borderBulletLines.length > 0 ? `4. FRAMING BORDERS:\n${borderBulletLines.join("\n")}\n` : "") +
           `5. REPLICATION INSTRUCTION:\n` +
           `- The pallu cascades straight down from the left shoulder to lower calf level behind the left arm.\n` +
-          `- Replicate the authentic decorative panels, peacock figures, and framing borders directly from this swatch.\n` +
+          `- Replicate the authentic decorative panels, motifs, and framing borders directly from this swatch.\n` +
           `- Bottom end hemline must be ${hasTassels ? "finished with authentic tied tassels" : "a crisp flat tailored hem with zero tassels and zero dangling strings"}.`;
       } else if (isDenseJaal) {
         detailedDirective =
