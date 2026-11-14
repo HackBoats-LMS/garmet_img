@@ -76,17 +76,95 @@ export function extractProductImages(product: any): string[] {
   return images.slice(0, 5);
 }
 
+/**
+ * Intelligently separates a compound "WhatsApp Catalogue Title & Description" string
+ * into a clean product title and a clean product description.
+ *
+ * e.g. "Lavender Geometric Kurti Set | ₹1900. A breathable, everyday weave featuring traditional detailing..."
+ * => Title: "Lavender Geometric Kurti Set"
+ * => Description: "A breathable, everyday weave featuring traditional detailing..."
+ */
+export function parseCatalogueTitleAndDescription(rawText: any, fallbackTitle: string = ''): { title: string; description: string } {
+  const text = String(rawText || '').trim();
+  if (!text) {
+    return { title: fallbackTitle, description: '' };
+  }
+
+  // Check pipe separator: "Title | [optional specs |] [₹Price]. Description"
+  if (text.includes('|')) {
+    const parts = text.split('|').map(p => p.trim()).filter(Boolean);
+    const candidateTitle = parts[0];
+    const remaining = parts.slice(1).join(' | ');
+
+    // Match price pattern followed by description: e.g. "₹1900. A breathable..." or "1900 INR - A breathable..."
+    const priceWithDescMatch = remaining.match(/(?:(?:₹|Rs\.?|INR)\s*[\d,]+(?:\.\d+)?|[\d,]+\s*(?:INR|Rs\.?))[\s.\-–—:]+(.*)$/i);
+    if (priceWithDescMatch && priceWithDescMatch[1] && priceWithDescMatch[1].trim()) {
+      return {
+        title: candidateTitle,
+        description: priceWithDescMatch[1].trim()
+      };
+    }
+
+    // If remaining starts with a price without delimiter
+    const priceStripped = remaining.replace(/^(?:(?:₹|Rs\.?|INR)\s*[\d,]+(?:\.\d+)?|[\d,]+\s*(?:INR|Rs\.?))\s*[–—\-.:|]*\s*/i, '').trim();
+    if (priceStripped) {
+      return {
+        title: candidateTitle,
+        description: priceStripped
+      };
+    }
+
+    return {
+      title: candidateTitle,
+      description: remaining || text
+    };
+  }
+
+  // Pattern 2: Title — Description (separated by dash e.g. "Coral Bloom — White & Coral Floral Saree")
+  const dashMatch = text.match(/^(.+?)\s+[—–-]\s+(.+)$/);
+  if (dashMatch && dashMatch[1].length <= 80) {
+    const candidateTitle = dashMatch[1].trim();
+    const rightSide = dashMatch[2].trim();
+    const priceMatch = rightSide.match(/(?:(?:₹|Rs\.?|INR)\s*[\d,]+(?:\.\d+)?|[\d,]+\s*(?:INR|Rs\.?))[\s.\-–—:]+(.*)$/i);
+    return {
+      title: candidateTitle,
+      description: (priceMatch && priceMatch[1] && priceMatch[1].trim()) ? priceMatch[1].trim() : rightSide
+    };
+  }
+
+  return {
+    title: fallbackTitle || text,
+    description: text
+  };
+}
+
 export function formatProductPayload(product: any, variantSize?: string): Record<string, any> {
   const masterStockCode = String(product.stockCode || product.stock_code || '').trim();
   const code1 = product.code1 || product.friendlyCode || product.friendly_code;
-  // Product title: use productName as at the top of the product details
-  const baseProductName = String(product.productName || product.title || '').trim() || masterStockCode;
-  // Product description: use WhatsApp Catalogue Title & Description (never fallback to WhatsApp Retail caption)
+  const fallbackTitle = String(product.productName || product.title || masterStockCode).trim();
+
+  // Raw catalogue copy from WhatsApp Catalogue Title & Description
+  const rawCatalogueCopy = String(product.whatsappCatalogueTitle || product.whatsapp_catalogue_title || '').trim();
+  const parsedCatalogue = parseCatalogueTitleAndDescription(rawCatalogueCopy, fallbackTitle);
+
+  // 1. Resolve product title:
+  // If parsed title from catalogue exists and is not just the whole raw text, use it;
+  // otherwise use productName as at the top of the form, or fallback to masterStockCode
+  let baseProductName = '';
+  if (parsedCatalogue.title && parsedCatalogue.title !== rawCatalogueCopy) {
+    baseProductName = parsedCatalogue.title;
+  } else {
+    baseProductName = fallbackTitle || parsedCatalogue.title || masterStockCode;
+  }
+
+  // 2. Resolve description:
+  // Priority: parsed description from WhatsApp Catalogue Title & Description -> productDescription -> description
+  // NEVER fallback to WhatsApp Retail caption (whatsappRetail).
   const description = String(
-    product.whatsappCatalogueTitle ||
-    product.whatsapp_catalogue_title ||
+    parsedCatalogue.description ||
     product.productDescription ||
     product.description ||
+    rawCatalogueCopy ||
     ''
   ).trim();
   const price = product.retailPrice ?? product.unitPrice ?? product.price ?? 0;
@@ -266,8 +344,10 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     title: effectiveProductName,
     name: effectiveProductName,
     productName: effectiveProductName,
+    product_name: effectiveProductName,
     description: description,
     productDescription: description,
+    product_description: description,
     color: String(product.color || '').trim(),
     cloth_type: String(product.clothType || product.cloth_type || 'Silk').trim(),
     material: String(product.clothType || product.cloth_type || 'Silk').trim(),
@@ -350,7 +430,8 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     image_5: image5,
 
     // 8. WhatsApp Catalog & Broadcast Helpers
-    whatsapp_catalogue_title: product.whatsappCatalogueTitle || description || effectiveProductName,
+    whatsapp_catalogue_title: baseProductName,
+    whatsapp_catalogue_raw: rawCatalogueCopy,
     whatsapp_retail: product.whatsappRetail || '',
     whatsapp_wholesale: product.whatsappWholesale || '',
     instagram_caption: product.instagramCaption || '',

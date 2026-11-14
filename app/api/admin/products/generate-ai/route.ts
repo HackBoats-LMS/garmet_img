@@ -203,7 +203,17 @@ Catalogue: <Name> — <main colour + accent> <Saree/Kurti Set>   (searchable, e.
     // ─── 2. PLATFORM CAPTIONS GENERATION ────────────────────────────────────
     if (mode === 'captions' || mode === 'both') {
       const activeName = result.productName || productName || 'RGJ Dass Signature Piece';
-      const activeCatalogue = result.catalogueTitle || `${activeName} — ${color || 'Fine'} ${category || 'Saree'}`;
+      const catLower = String(category || '').toLowerCase();
+      const categoryDescriptor = (catLower.includes('kurti') || catLower.includes('kurta') || catLower.includes('kpd') || catLower.includes('suit'))
+        ? 'Kurti Set'
+        : (catLower.includes('saree') || catLower.includes('sari'))
+          ? 'Saree'
+          : (category || 'Set');
+
+      const fullProductTitle = activeName.toLowerCase().includes(categoryDescriptor.toLowerCase())
+        ? activeName
+        : `${activeName} ${categoryDescriptor}`;
+      const activeCatalogue = result.catalogueTitle || `${fullProductTitle} | ${finalRetailPrice ? `₹${finalRetailPrice}. ` : ''}`;
 
       const captionsPrompt = `You are the lead brand copywriter for R.G.J.Dass — a 75-year-old textile family house in Sindhi Colony, Secunderabad, Hyderabad, creating everyday sarees & kurti sets for modern women.
 
@@ -217,8 +227,8 @@ BRAND SOUL & STRATEGY CONTEXT:
 - Brand voice: Warm, grounded, quiet, real, quietly impressive, confident, never loud.
 
 PRODUCT DETAILS GIVEN:
-- Design Name: ${activeName}
-- Catalogue Title: ${activeCatalogue}
+- Design Name (Product Name): ${activeName}
+- Target Catalogue Title: ${fullProductTitle}
 - Category: ${category || 'Saree'}
 - Dominant Colour: ${color || 'As shown in garment'}
 - Fabric / Cloth Type: ${clothType || 'Breathable daily weave'}
@@ -236,14 +246,14 @@ ${keywordsStr ? `- REQUIRED KEYWORDS TO FEATURE: "${keywordsStr}". (You MUST nat
 PRICING RULES FOR EACH CAPTION (VERY IMPORTANT):
 1. "whatsappRetail": MUST use the Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : 'Price on request'}). NEVER mention wholesale or dealer price here under any circumstances.
 2. "whatsappWholesale": MUST use the Dealer/Wholesale Price (${finalWholesalePrice ? `₹${finalWholesalePrice}` : 'Price on inquiry'}). If retail price is also mentioned, clearly distinguish: e.g. "Wholesale: ₹${finalWholesalePrice} | Suggested Retail/MRP: ₹${finalRetailPrice}".
-3. "whatsappCatalogueTitle": MUST start with the Design Name "${activeName}" as the product title (e.g. "${activeName} — ${color ? `${color} ` : ''}${category || 'Set'} | ${finalRetailPrice ? `₹${finalRetailPrice}` : ''}. <2-3 sentence searchable description highlighting weave, craft, drape and everyday wearability>"). Mention Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : ''}).
+3. "whatsappCatalogueTitle": MUST follow the exact format: "${fullProductTitle} | ${finalRetailPrice ? `₹${finalRetailPrice}. ` : ''}<2-3 sentence searchable description highlighting weave, craft, detailing and everyday wearability>". The product title must be "${fullProductTitle}", followed by " | " and the price, then the description.
 4. "instagramCaption", "facebookCaption", "shopifyTitle": Use Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : ''}) if including price, NEVER wholesale price.
 
 ${targetPlatform ? `TASK: Generate ONLY the caption for the platform: "${targetPlatform}". Return a JSON object with this single key.` : `TASK: Generate all platform captions and a polished product description. Return your answer ONLY as a valid JSON object with the following exact keys:`}
 {
   "whatsappRetail": "WhatsApp broadcast message for retail customers (warm, personal, boutique feel, 2-3 emojis, details product & retail price (₹${finalRetailPrice || 'on request'}), naturally incorporates requested keywords '${keywordsStr || ''}', ends with 'The best 4 minutes of your day. R.G.J.Dass · Sindhi Colony, Secunderabad')",
   "whatsappWholesale": "WhatsApp message for B2B wholesale buyers/store owners (professional, design code, fabric/print, 4-colour pack, dealer price (₹${finalWholesalePrice || 'on inquiry'}), margin info, direct dispatch from Secunderabad warehouse)",
-  "whatsappCatalogueTitle": "WhatsApp Catalogue Title & Description. MUST start with the Design Name '${activeName}' as the leading product title (format: '${activeName} — ${color ? `${color} ` : ''}${category || 'Set'} | ${finalRetailPrice ? `₹${finalRetailPrice}` : ''}. <2-3 sentence searchable description highlighting weave, craft, drape and everyday wearability>')",
+  "whatsappCatalogueTitle": "WhatsApp Catalogue Title & Description. Format: '${fullProductTitle} | ${finalRetailPrice ? `₹${finalRetailPrice}. ` : ''}<2-3 sentence searchable description highlighting weave, craft, detailing and everyday wearability>' (e.g. '${fullProductTitle} | ₹${finalRetailPrice || '1900'}. A breathable, everyday weave featuring traditional detailing. Perfect for your morning routine, designed for consistent, reliable comfort.')",
   "instagramCaption": "Engaging Instagram caption with a stop-scroll hook for our ICPs, quiet confident storytelling featuring keywords '${keywordsStr || ''}', 3-4 tasteful emojis, and 15-20 curated hashtags",
   "facebookCaption": "Community-focused Facebook post highlighting 75 years of textile craft in Secunderabad, everyday wearability, requested keywords, engaging question, and store visit/order info",
   "shopifyTitle": "SEO-optimised Shopify title and 3-paragraph product description (The Morning Drape, Fabric & Motifs, Occasion Styling & Specs)",

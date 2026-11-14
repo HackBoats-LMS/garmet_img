@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { parseCatalogueTitleAndDescription } from '@/lib/picky-assist-push';
 
 // In-memory store for rate limiting
 const rateLimitMap = new Map<string, { count: number; lastReset: number }>();
@@ -128,10 +129,14 @@ export async function GET(request: Request) {
 
       const sizeDisplay = availableSizes.length > 0 ? availableSizes.join(', ') : (product.length_Size || 'Free Size');
 
+      const parsedCat = parseCatalogueTitleAndDescription(product.whatsappCatalogueTitle, product.productName || product.title);
+      const cleanProductName = parsedCat.title || product.productName || product.title || 'Untitled Garment';
+      const cleanDescription = parsedCat.description || product.productDescription || product.description || 'Premium Garment';
+
       return {
         id: stableId,
-        productName: product.productName || product.title || product.whatsappCatalogueTitle || 'Untitled Garment',
-        description: `${product.whatsappCatalogueTitle || product.productDescription || product.description || 'Premium Garment'}${sizeDisplay ? ` | Sizes: ${sizeDisplay}` : ''}`,
+        productName: cleanProductName,
+        description: `${cleanDescription}${sizeDisplay ? ` | Sizes: ${sizeDisplay}` : ''}`,
         availability: product.quantity > 0 ? 'in stock' : 'out of stock',
         condition: 'new',
         unitPrice: `${product.unitPrice || 0} INR`,
