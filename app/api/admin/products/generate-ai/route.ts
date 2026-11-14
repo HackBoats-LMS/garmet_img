@@ -236,14 +236,14 @@ ${keywordsStr ? `- REQUIRED KEYWORDS TO FEATURE: "${keywordsStr}". (You MUST nat
 PRICING RULES FOR EACH CAPTION (VERY IMPORTANT):
 1. "whatsappRetail": MUST use the Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : 'Price on request'}). NEVER mention wholesale or dealer price here under any circumstances.
 2. "whatsappWholesale": MUST use the Dealer/Wholesale Price (${finalWholesalePrice ? `₹${finalWholesalePrice}` : 'Price on inquiry'}). If retail price is also mentioned, clearly distinguish: e.g. "Wholesale: ₹${finalWholesalePrice} | Suggested Retail/MRP: ₹${finalRetailPrice}".
-3. "whatsappCatalogueTitle": Mention Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : ''}) if including price.
+3. "whatsappCatalogueTitle": MUST start with the Design Name "${activeName}" as the product title (e.g. "${activeName} — ${color ? `${color} ` : ''}${category || 'Set'} | ${finalRetailPrice ? `₹${finalRetailPrice}` : ''}. <2-3 sentence searchable description highlighting weave, craft, drape and everyday wearability>"). Mention Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : ''}).
 4. "instagramCaption", "facebookCaption", "shopifyTitle": Use Retail Price (${finalRetailPrice ? `₹${finalRetailPrice}` : ''}) if including price, NEVER wholesale price.
 
 ${targetPlatform ? `TASK: Generate ONLY the caption for the platform: "${targetPlatform}". Return a JSON object with this single key.` : `TASK: Generate all platform captions and a polished product description. Return your answer ONLY as a valid JSON object with the following exact keys:`}
 {
   "whatsappRetail": "WhatsApp broadcast message for retail customers (warm, personal, boutique feel, 2-3 emojis, details product & retail price (₹${finalRetailPrice || 'on request'}), naturally incorporates requested keywords '${keywordsStr || ''}', ends with 'The best 4 minutes of your day. R.G.J.Dass · Sindhi Colony, Secunderabad')",
   "whatsappWholesale": "WhatsApp message for B2B wholesale buyers/store owners (professional, design code, fabric/print, 4-colour pack, dealer price (₹${finalWholesalePrice || 'on inquiry'}), margin info, direct dispatch from Secunderabad warehouse)",
-  "whatsappCatalogueTitle": "Short catalogue listing title + 2-3 line searchable description with retail price and keywords",
+  "whatsappCatalogueTitle": "WhatsApp Catalogue Title & Description. MUST start with the Design Name '${activeName}' as the leading product title (format: '${activeName} — ${color ? `${color} ` : ''}${category || 'Set'} | ${finalRetailPrice ? `₹${finalRetailPrice}` : ''}. <2-3 sentence searchable description highlighting weave, craft, drape and everyday wearability>')",
   "instagramCaption": "Engaging Instagram caption with a stop-scroll hook for our ICPs, quiet confident storytelling featuring keywords '${keywordsStr || ''}', 3-4 tasteful emojis, and 15-20 curated hashtags",
   "facebookCaption": "Community-focused Facebook post highlighting 75 years of textile craft in Secunderabad, everyday wearability, requested keywords, engaging question, and store visit/order info",
   "shopifyTitle": "SEO-optimised Shopify title and 3-paragraph product description (The Morning Drape, Fabric & Motifs, Occasion Styling & Specs)",

@@ -79,8 +79,16 @@ export function extractProductImages(product: any): string[] {
 export function formatProductPayload(product: any, variantSize?: string): Record<string, any> {
   const masterStockCode = String(product.stockCode || product.stock_code || '').trim();
   const code1 = product.code1 || product.friendlyCode || product.friendly_code;
-  const baseProductName = product.productName || product.title || product.whatsappCatalogueTitle || masterStockCode;
-  const description = product.productDescription || product.description || product.whatsappRetail || '';
+  // Product title: use productName as at the top of the product details
+  const baseProductName = String(product.productName || product.title || '').trim() || masterStockCode;
+  // Product description: use WhatsApp Catalogue Title & Description (never fallback to WhatsApp Retail caption)
+  const description = String(
+    product.whatsappCatalogueTitle ||
+    product.whatsapp_catalogue_title ||
+    product.productDescription ||
+    product.description ||
+    ''
+  ).trim();
   const price = product.retailPrice ?? product.unitPrice ?? product.price ?? 0;
   const mrp = product.retailPrice ?? product.mrp ?? price;
   const baseQuantity = typeof product.quantity === 'number' ? product.quantity : parseInt(product.quantity, 10) || 0;
@@ -342,8 +350,8 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     image_5: image5,
 
     // 8. WhatsApp Catalog & Broadcast Helpers
-    whatsapp_catalogue_title: product.whatsappCatalogueTitle || effectiveProductName,
-    whatsapp_retail: product.whatsappRetail || description,
+    whatsapp_catalogue_title: product.whatsappCatalogueTitle || description || effectiveProductName,
+    whatsapp_retail: product.whatsappRetail || '',
     whatsapp_wholesale: product.whatsappWholesale || '',
     instagram_caption: product.instagramCaption || '',
     facebook_caption: product.facebookCaption || '',

@@ -130,8 +130,8 @@ export async function GET(request: Request) {
 
       return {
         id: stableId,
-        productName: product.whatsappCatalogueTitle || product.productName || 'Untitled Garment',
-        description: `${product.whatsappRetail || 'Premium Garment'}${sizeDisplay ? ` | Sizes: ${sizeDisplay}` : ''}`,
+        productName: product.productName || product.title || product.whatsappCatalogueTitle || 'Untitled Garment',
+        description: `${product.whatsappCatalogueTitle || product.productDescription || product.description || 'Premium Garment'}${sizeDisplay ? ` | Sizes: ${sizeDisplay}` : ''}`,
         availability: product.quantity > 0 ? 'in stock' : 'out of stock',
         condition: 'new',
         unitPrice: `${product.unitPrice || 0} INR`,
