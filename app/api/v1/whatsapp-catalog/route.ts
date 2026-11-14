@@ -66,6 +66,7 @@ export async function GET(request: Request) {
           productCode: true,
           whatsappCatalogueTitle: true,
           productName: true,
+          productDescription: true,
           whatsappRetail: true,
           unitPrice: true,
           quantity: true,
@@ -87,6 +88,7 @@ export async function GET(request: Request) {
           productCode: true,
           whatsappCatalogueTitle: true,
           productName: true,
+          productDescription: true,
           whatsappRetail: true,
           unitPrice: true,
           quantity: true,
@@ -129,9 +131,9 @@ export async function GET(request: Request) {
 
       const sizeDisplay = availableSizes.length > 0 ? availableSizes.join(', ') : (product.length_Size || 'Free Size');
 
-      const parsedCat = parseCatalogueTitleAndDescription(product.whatsappCatalogueTitle, product.productName || product.title);
-      const cleanProductName = parsedCat.title || product.productName || product.title || 'Untitled Garment';
-      const cleanDescription = parsedCat.description || product.productDescription || product.description || 'Premium Garment';
+      const parsedCat = parseCatalogueTitleAndDescription(product.whatsappCatalogueTitle, product.productName);
+      const cleanProductName = parsedCat.title || product.productName || 'Untitled Garment';
+      const cleanDescription = parsedCat.description || product.productDescription || 'Premium Garment';
 
       return {
         id: stableId,
