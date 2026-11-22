@@ -75,6 +75,7 @@ export const GenerationModal: React.FC<GenerationModalProps> = ({
       link.href = result.imageUrl;
       link.download = `couture-ai-${result.garmentCategory}-${Date.now()}.jpg`;
       link.target = '_blank';
+      link.rel = 'noopener noreferrer';
       link.click();
     }
   };

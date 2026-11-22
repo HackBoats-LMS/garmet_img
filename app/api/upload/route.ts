@@ -22,6 +22,9 @@ export async function POST(req: NextRequest) {
     }
 
     const session = await auth().catch(() => null);
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized: Authentication required' }, { status: 401 });
+    }
     const body = await req.json();
     const { file, type, templateSlug, assetName, modelName, orderId, slotId, poseId, customFolder } = body;
 
@@ -93,6 +96,9 @@ export async function DELETE(req: NextRequest) {
     }
 
     const session = await auth().catch(() => null);
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized: Authentication required' }, { status: 401 });
+    }
     const body = await req.json();
     const { url, key, bucket } = body || {};
 

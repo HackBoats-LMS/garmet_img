@@ -258,7 +258,7 @@ export function ProductCaptionGenerator({
                 {/* Share on WhatsApp if applicable */}
                 {activePlatform === 'whatsapp' && captions.whatsapp && activePlatformConfig.shareUrl && (
                   <button
-                    onClick={() => window.open(activePlatformConfig.shareUrl!(captions.whatsapp), '_blank')}
+                    onClick={() => window.open(activePlatformConfig.shareUrl!(captions.whatsapp), '_blank', 'noopener,noreferrer')}
                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors cursor-pointer"
                   >
                     <Send className="w-3 h-3" />

@@ -31,7 +31,14 @@ export async function POST(req: NextRequest) {
       }
 
       const arrayBuffer = await file.arrayBuffer();
-      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+      // Security: Disable formula execution and raw HTML to prevent SheetJS prototype pollution & formula injection
+      const workbook = XLSX.read(arrayBuffer, {
+        type: 'array',
+        cellFormula: false,
+        cellHTML: false,
+        cellNF: false,
+        cellText: true,
+      });
       
       let chosenSheet: XLSX.WorkSheet | null = null;
       for (const sheetName of workbook.SheetNames) {

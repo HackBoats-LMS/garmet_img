@@ -8,6 +8,14 @@ const inMemoryStockStore: Record<string, StockItemData> = {};
 
 export async function GET(req: NextRequest) {
   try {
+    const session = await auth().catch(() => null);
+    const apiKey = req.headers.get('x-api-key') || req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
+    const hasInternalKey = Boolean(process.env.SYNC_API_KEY && apiKey && apiKey === process.env.SYNC_API_KEY);
+
+    if (!session?.user && !hasInternalKey) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const search = searchParams.get('search') || '';
     const status = searchParams.get('status') || '';

@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { safeTimingCompare } from '@/lib/security';
 
 // Auth: header-based API key check (x-api-key or Authorization Bearer)
 function checkApiKey(req: NextRequest): boolean {
   const key = req.headers.get('x-api-key') || req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  return Boolean(key && process.env.SYNC_API_KEY && key === process.env.SYNC_API_KEY);
+  return Boolean(key && process.env.SYNC_API_KEY && safeTimingCompare(key, process.env.SYNC_API_KEY));
 }
 
 /**

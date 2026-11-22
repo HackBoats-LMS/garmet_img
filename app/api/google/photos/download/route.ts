@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
+import { isSafeGooglePhotosUrl } from '@/lib/security';
 
 // POST /api/google/photos/download
 // Downloads an individual photo from Google Photos using baseUrl with optimized dimensions,
@@ -12,8 +13,12 @@ export async function POST(req: NextRequest) {
     const baseUrl = body.baseUrl;
     const maxDimension = body.maxDimension || 2048;
 
-    if (!baseUrl) {
-      return NextResponse.json({ error: 'baseUrl is required' }, { status: 400 });
+    if (!session?.user && !token) {
+      return NextResponse.json({ error: 'Unauthorized: Authentication required' }, { status: 401 });
+    }
+
+    if (!baseUrl || !isSafeGooglePhotosUrl(baseUrl)) {
+      return NextResponse.json({ error: 'Valid Google Photos baseUrl is required' }, { status: 400 });
     }
 
     // Resilient fetch helper: tries with Bearer token, then falls back to direct fetch
@@ -62,19 +67,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
+    if (!contentType.toLowerCase().startsWith('image/') && !contentType.toLowerCase().includes('octet-stream')) {
+      return NextResponse.json({ error: 'Downloaded file is not a valid image' }, { status: 415 });
+    }
+
     const arrayBuffer = await imgRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const mime = imgRes.headers.get('content-type') || body.mimeType || 'image/jpeg';
-    const base64 = `data:${mime};base64,${buffer.toString('base64')}`;
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    const dataUrl = `data:${contentType};base64,${base64}`;
 
     return NextResponse.json({
       success: true,
       filename: body.filename || `google_photo_${Date.now()}.jpg`,
-      mimeType: mime,
-      base64,
+      mimeType: contentType,
+      base64: dataUrl,
+      url: dataUrl,
+      contentType,
+      size: arrayBuffer.byteLength,
     });
   } catch (error: any) {
-    console.error('[Google Photos Download Error]:', error);
-    return NextResponse.json({ error: error.message || 'Internal error' }, { status: 500 });
+    console.error('[Google Photos Download Exception]:', error);
+    return NextResponse.json(
+      { error: error?.message || 'Failed to download image' },
+      { status: 500 }
+    );
   }
 }

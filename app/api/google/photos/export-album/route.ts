@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import { uploadToStorage, isStorageConfigured, R2_GENERATED_BUCKET } from '@/lib/storage';
+import { isSafeExternalUrl } from '@/lib/security';
 
 const PHOTOS_LIBRARY_BASE = 'https://photoslibrary.googleapis.com/v1';
 
@@ -100,6 +101,10 @@ export async function POST(req: NextRequest) {
             continue;
           }
         } else {
+          if (!isSafeExternalUrl(img.imageUrl)) {
+            console.warn('[Export Album] Skipping unsafe remote image URL:', img.imageUrl);
+            continue;
+          }
           const fetched = await fetch(img.imageUrl);
           if (!fetched.ok) continue;
           const ab = await fetched.arrayBuffer();

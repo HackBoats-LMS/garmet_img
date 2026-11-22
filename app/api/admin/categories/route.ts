@@ -5,6 +5,11 @@ import { auth } from '@/lib/auth';
 // GET /api/admin/categories — full category tree
 export async function GET() {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const categories = await prisma.category.findMany({
       include: {
         subCategories: { orderBy: { sortOrder: 'asc' } },

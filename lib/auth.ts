@@ -65,7 +65,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             if (fsModule.existsSync(envFilePath)) {
               let envContent = fsModule.readFileSync(envFilePath, 'utf8');
               if (envContent.includes('GOOGLE_REFRESH_TOKEN=')) {
-                envContent = envContent.replace(/GOOGLE_REFRESH_TOKEN=.*/, `GOOGLE_REFRESH_TOKEN=${account.refresh_token}`);
+                // Use a function replacer to prevent special dollar-sign ($) character expansion
+                envContent = envContent.replace(/GOOGLE_REFRESH_TOKEN=.*/, () => `GOOGLE_REFRESH_TOKEN=${account.refresh_token}`);
               } else {
                 envContent += `\nGOOGLE_REFRESH_TOKEN=${account.refresh_token}\n`;
               }

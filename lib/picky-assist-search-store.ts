@@ -58,7 +58,9 @@ export function parseSearchCallbackPayload(payload: any): {
   if (typeof payload.result === 'string' && payload.result.trim().startsWith('{')) {
     try {
       unwrapped = JSON.parse(payload.result);
-    } catch {}
+    } catch {
+      // payload.result was not valid JSON, keep as raw string
+    }
   } else if (payload.data && typeof payload.data === 'object') {
     unwrapped = payload.data;
   } else if (payload.product && typeof payload.product === 'object') {
@@ -145,11 +147,14 @@ export function saveSearchResponse(payload: any): RecordedSearchResponse {
     inMemorySearchStore = inMemorySearchStore.slice(0, 30);
   }
 
-  try {
-    fs.writeFileSync(SEARCH_RESPONSES_FILE, JSON.stringify(inMemorySearchStore, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('[Search Store] Failed to persist search responses to disk:', err);
-  }
+  // Non-blocking asynchronous file persistence to prevent event loop freeze
+  const dataToFlush = JSON.stringify(inMemorySearchStore, null, 2);
+  const dir = path.dirname(SEARCH_RESPONSES_FILE);
+  fs.promises.mkdir(dir, { recursive: true })
+    .then(() => fs.promises.writeFile(SEARCH_RESPONSES_FILE, dataToFlush, 'utf-8'))
+    .catch((err) => {
+      console.warn('[Search Store] Async file persist note:', err?.message || err);
+    });
 
   // Emit event for any asynchronous awaiter
   if (query) {
@@ -169,7 +174,9 @@ export function getLatestSearchResponses(): RecordedSearchResponse[] {
       const data = fs.readFileSync(SEARCH_RESPONSES_FILE, 'utf-8');
       inMemorySearchStore = JSON.parse(data);
     }
-  } catch {}
+  } catch (readErr) {
+    console.warn('[Search Store] Could not parse search response file from disk:', readErr);
+  }
   return inMemorySearchStore;
 }
 

@@ -530,7 +530,9 @@ export function CollageCreator({
       if (typeof window !== 'undefined') {
         try {
           localStorage.setItem('couture_collage_slot_tags', JSON.stringify(updated));
-        } catch {}
+        } catch {
+          // localStorage disabled or storage quota exceeded
+        }
       }
       return updated;
     });
@@ -549,7 +551,9 @@ export function CollageCreator({
       if (typeof window !== 'undefined') {
         try {
           localStorage.setItem('couture_collage_slot_tags', JSON.stringify(merged));
-        } catch {}
+        } catch {
+          // localStorage disabled or storage quota exceeded
+        }
       }
       return merged;
     });

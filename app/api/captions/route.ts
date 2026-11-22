@@ -46,6 +46,9 @@ Rules:
 export async function POST(req: NextRequest) {
   try {
     const session = await auth();
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized: Session required' }, { status: 401 });
+    }
     const body = await req.json();
 
     const {

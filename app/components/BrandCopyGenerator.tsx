@@ -55,7 +55,7 @@ export function BrandCopyGenerator({ stockItem, onUpdateCopies }: Props) {
 
   const handleShareWhatsApp = () => {
     const text = encodeURIComponent(copies.whatsapp);
-    window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
+    window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank', 'noopener,noreferrer');
   };
 
   const handleAIGenerate = async () => {

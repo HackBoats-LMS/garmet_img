@@ -156,6 +156,8 @@ model Product {
   @@index([status, categoryId])
   @@index([status, subCategoryId])
   @@index([status, updatedAt])
+  @@index([status, createdAt])
+  @@index([createdAt])
   @@index([categoryId, updatedAt])
   @@index([subCategoryId, updatedAt])
 }

@@ -590,7 +590,11 @@ export async function addPickyProduct(
           });
           const text = await response.text();
           let data: any = text;
-          try { data = JSON.parse(text); } catch { }
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = text;
+          }
 
           if (variantsCount === 0) {
             firstStatus = response.status;
@@ -620,7 +624,11 @@ export async function addPickyProduct(
 
     const text = await response.text();
     let data: any = text;
-    try { data = JSON.parse(text); } catch { }
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
 
     if (!response.ok) {
       console.error(`[Picky Assist] Add failed for ${mainPayload.stock_code}. Status: ${response.status}`, data);
@@ -703,7 +711,11 @@ export async function updatePickyProduct(
 
           const text = await response.text();
           let data: any = text;
-          try { data = JSON.parse(text); } catch { }
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = text;
+          }
 
           results.push({
             size: sz,
@@ -760,7 +772,11 @@ export async function updatePickyProduct(
 
     const text = await response.text();
     let data: any = text;
-    try { data = JSON.parse(text); } catch { }
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
 
     if (!response.ok) {
       console.error(`[Picky Assist] Update failed for ${payload.stock_code}. Status: ${response.status}`, data);

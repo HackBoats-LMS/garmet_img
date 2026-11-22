@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { parseCatalogueTitleAndDescription } from '@/lib/picky-assist-push';
+import { safeTimingCompare } from '@/lib/security';
 
 // In-memory store for rate limiting
 const rateLimitMap = new Map<string, { count: number; lastReset: number }>();
@@ -38,7 +39,8 @@ export async function GET(request: Request) {
     // We expect "Bearer <TOKEN>"
     const token = authHeader?.split(' ')[1];
     
-    if (!token || token !== (process.env.WHATSAPP_API_TOKEN || 'test-token')) {
+    const expectedCatalogToken = process.env.WHATSAPP_API_TOKEN || 'test-token';
+    if (!token || !safeTimingCompare(token, expectedCatalogToken)) {
        // Log unauthorized attempts for security auditing
        console.warn(`[Security] Unauthorized catalog access attempt from IP: ${ip}`);
        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

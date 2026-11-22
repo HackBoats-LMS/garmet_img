@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "node scripts/test-runner.js",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -19,7 +20,7 @@
     "bcryptjs": "^3.0.3",
     "canvas-confetti": "^1.9.4",
     "lucide-react": "^1.32.0",
-    "next": "16.3.1",
+    "next": "16.4.6",
     "next-auth": "^5.0.0-beta.32",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -34,10 +35,11 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.3.1",
+    "eslint-config-next": "16.4.6",
     "prisma": "^6.4.1",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "vitest": "^3.0.0"
   }
 }
