@@ -44,7 +44,8 @@ export interface SwatchAnalysisResult {
  * Uses high-speed local computer vision via Sharp (zero external API calls).
  */
 export async function analyzeSwatchBuffer(imageBuffer: Buffer): Promise<SwatchAnalysisResult> {
-  const img = getSharpInstance(imageBuffer);
+  // Security & Stability: Remove alpha and normalize to 3-channel sRGB to prevent buffer indexing mismatch
+  const img = getSharpInstance(imageBuffer).removeAlpha().toColourspace('srgb');
   const { data, info } = await img.raw().toBuffer({ resolveWithObject: true });
   const w = info.width;
   const h = info.height;

@@ -43,7 +43,9 @@ export function useGooglePhotosPicker({
     if (popupRef.current && !popupRef.current.closed) {
       try {
         popupRef.current.close();
-      } catch (e) {}
+      } catch {
+        // Popup window was already closed or access restricted
+      }
     }
     cleanup();
   }, [cleanup]);
@@ -83,7 +85,9 @@ export function useGooglePhotosPicker({
         if (cached && exp && Date.now() < Number(exp)) {
           return cached;
         }
-      } catch (e) {}
+      } catch {
+        // sessionStorage disabled or restricted
+      }
     }
 
     return null;
@@ -125,7 +129,9 @@ export function useGooglePhotosPicker({
           targetPopup.location.href = pickerUrl;
           try {
             targetPopup.focus();
-          } catch (e) {}
+          } catch {
+            // Popup window cross-origin focus restriction
+          }
         } else {
           const newWin = window.open(
             pickerUrl,
@@ -316,7 +322,9 @@ export function useGooglePhotosPicker({
         try {
           sessionStorage.setItem('gphotos_token', accessToken);
           sessionStorage.setItem('gphotos_token_exp', String(Date.now() + 50 * 60 * 1000));
-        } catch (e) {}
+        } catch {
+          // sessionStorage quota exceeded or storage disabled
+        }
 
         // Since user just interacted with the GIS popup, show the direct Open button
         // so the subsequent window.open is a fresh, unblockable user gesture!

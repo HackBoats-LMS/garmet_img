@@ -50,33 +50,38 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Product not found' }, { status: 404 });
     }
 
-    // Check stock
-    const available = product.quantity - product.reservedQty;
-    if (available < qtySold) {
-      return NextResponse.json(
-        {
-          error: 'Insufficient stock',
-          available,
-          requested: qtySold,
+    // Atomically check and deduct stock inside transaction
+    const updateResult = await prisma.$transaction(async (tx) => {
+      const p = await tx.product.findUnique({ where: { id: product.id } });
+      if (!p) throw new Error('PRODUCT_NOT_FOUND');
+
+      const available = p.quantity - p.reservedQty;
+      if (available < qtySold) {
+        return { error: 'Insufficient stock', available, requested: qtySold };
+      }
+
+      const newQty = Math.max(0, p.quantity - qtySold);
+      const newSold = p.soldQty + qtySold;
+      const autoStatus = newQty === 0 ? 'OUT_OF_STOCK' : p.status;
+
+      const updated = await tx.product.update({
+        where: { id: p.id },
+        data: {
+          quantity: newQty,
+          soldQty: newSold,
+          status: autoStatus,
+          syncedAt: new Date(),
         },
-        { status: 409 }
-      );
+      });
+
+      return { success: true, updated, newQty, newSold, quantityBefore: p.quantity };
+    });
+
+    if ('error' in updateResult) {
+      return NextResponse.json(updateResult, { status: 409 });
     }
 
-    const newQty = Math.max(0, product.quantity - qtySold);
-    const newSold = product.soldQty + qtySold;
-    const autoStatus = newQty === 0 ? 'OUT_OF_STOCK' : product.status;
-
-    // Update product
-    const updated = await prisma.product.update({
-      where: { id: product.id },
-      data: {
-        quantity: newQty,
-        soldQty: newSold,
-        status: autoStatus,
-        syncedAt: new Date(),
-      },
-    });
+    const { updated, newQty, newSold, quantityBefore } = updateResult;
 
     // Log the sale
     await prisma.inventoryLog.create({

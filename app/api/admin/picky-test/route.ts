@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import {
   addPickyProduct,
@@ -10,6 +11,11 @@ import {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
+    }
+
     const body = await req.json();
     const { action, payload, identifier, productId, changedFields } = body;
 

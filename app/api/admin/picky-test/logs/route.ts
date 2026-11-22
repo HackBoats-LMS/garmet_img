@@ -1,16 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
 import { getRecordedRequests, clearRecordedRequests, saveRequest, updateRecordedRequest, RecordedRequest } from '../logStore';
 import { processPickyAssistOrder } from '@/lib/picky-assist-orders';
 import prisma from '@/lib/prisma';
 
 // GET: Return all recorded test webhook requests
 export async function GET() {
+  const session = await auth();
+  if ((session?.user as any)?.role !== 'admin') {
+    return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
+  }
+
   const requests = getRecordedRequests();
   return NextResponse.json({ success: true, count: requests.length, requests });
 }
 
 // DELETE: Clear all recorded test webhook requests
 export async function DELETE() {
+  const session = await auth();
+  if ((session?.user as any)?.role !== 'admin') {
+    return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
+  }
+
   clearRecordedRequests();
   return NextResponse.json({ success: true, message: 'All logs cleared' });
 }
@@ -18,6 +29,11 @@ export async function DELETE() {
 // POST: Actions for testing, replaying, or simulating incoming orders
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
+    }
+
     const body = await req.json().catch(() => ({}));
     const action = body.action || 'generate_sample';
 

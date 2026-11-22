@@ -15,10 +15,19 @@ function resolveImageToDataUrl(imgStr: string): string | null {
 
   if (imgStr.startsWith('/')) {
     try {
-      const publicPath = path.join(process.cwd(), 'public', imgStr.replace(/^\//, ''));
-      if (fs.existsSync(publicPath)) {
-        const fileBuf = fs.readFileSync(publicPath);
-        const ext = path.extname(publicPath).replace('.', '').toLowerCase();
+      const publicRoot = path.resolve(process.cwd(), 'public');
+      const safeRelative = imgStr.replace(/^\/+/, '');
+      const localPath = path.resolve(publicRoot, safeRelative);
+
+      // Security: Prevent directory traversal outside of public/
+      if (!localPath.startsWith(publicRoot + path.sep) && localPath !== publicRoot) {
+        console.warn('[API /generate-garment-ref] Blocked directory traversal attempt:', imgStr);
+        return null;
+      }
+
+      if (fs.existsSync(localPath)) {
+        const fileBuf = fs.readFileSync(localPath);
+        const ext = path.extname(localPath).replace('.', '').toLowerCase();
         const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
         return `data:${mime};base64,${fileBuf.toString('base64')}`;
       }
@@ -31,6 +40,11 @@ function resolveImageToDataUrl(imgStr: string): string | null {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized: Session required' }, { status: 401 });
+    }
+
     const ip = getClientIp(req);
     const rateCheck = checkRateLimit('api:generate-garment-ref', ip, { windowMs: 60 * 1000, max: 20 });
     if (!rateCheck.allowed) {
@@ -40,7 +54,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const session = await auth();
     const body = await req.json();
 
     const {

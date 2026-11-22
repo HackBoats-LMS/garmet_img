@@ -15,10 +15,24 @@ import { Badge } from '@/app/components/ui/Badge';
 import { StepIndicator } from '@/app/components/ui/StepIndicator';
 import useDrivePicker from 'react-google-drive-picker';
 import { useGooglePhotosPicker } from '@/app/hooks/useGooglePhotosPicker';
-import { CollageCreator, CollageInputImage } from '@/app/components/CollageCreator';
-import { PointCropperModal } from '@/app/components/PointCropperModal';
-import { SwatchAnalysisModal } from '@/app/components/SwatchAnalysisModal';
+import dynamic from 'next/dynamic';
+import type { CollageInputImage } from '@/app/components/CollageCreator';
 import { compressImageOnClient } from '@/lib/client-compress';
+
+const PointCropperModal = dynamic(
+  () => import('@/app/components/PointCropperModal').then((mod) => mod.PointCropperModal),
+  { ssr: false }
+);
+
+const SwatchAnalysisModal = dynamic(
+  () => import('@/app/components/SwatchAnalysisModal').then((mod) => mod.SwatchAnalysisModal),
+  { ssr: false }
+);
+
+const CollageCreator = dynamic(
+  () => import('@/app/components/CollageCreator').then((mod) => mod.CollageCreator),
+  { ssr: false }
+);
 
 interface TemplateData {
   id: string;
@@ -1444,7 +1458,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
       a.click();
       URL.revokeObjectURL(a.href);
     } catch {
-      window.open(url, '_blank');
+      window.open(url, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -3279,7 +3293,7 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
                   <a
                     href={googlePhotosSuccess.albumUrl}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                     className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-bold text-xs hover:bg-emerald-700 transition-colors whitespace-nowrap"
                   >
                     View Album ↗

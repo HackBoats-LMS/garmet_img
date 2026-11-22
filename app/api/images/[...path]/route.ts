@@ -89,9 +89,10 @@ export async function GET(
     const normalizedKey = path.normalize(key).replace(/^(\.\.(\/|\\|$))+/, '');
     const publicRoot = path.resolve(process.cwd(), 'public');
     const localPath = path.resolve(publicRoot, normalizedKey);
+    const safePrefix = publicRoot.endsWith(path.sep) ? publicRoot : publicRoot + path.sep;
 
-    // Security: Ensure resolved path stays within the public/ directory
-    if (!localPath.startsWith(publicRoot)) {
+    // Security: Ensure resolved path stays strictly within the public/ directory
+    if (localPath !== publicRoot && !localPath.startsWith(safePrefix)) {
       return NextResponse.json({ error: 'Invalid path' }, { status: 400 });
     }
 

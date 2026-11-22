@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
 import prisma from '@/lib/prisma';
 import { addPickyProduct, updatePickyProduct, syncPickyProductWithDiff, searchPickyProduct } from '@/lib/picky-assist-push';
 
@@ -88,6 +89,11 @@ async function handleSync(productId?: string | null, stockCode?: string | null, 
 
 export async function GET(req: NextRequest) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const action = searchParams.get('action');
     const productId = searchParams.get('productId');
@@ -132,6 +138,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
+    }
+
     const body = await req.json().catch(() => ({}));
     const { productId, stockCode, action, syncAll, productIds } = body;
 

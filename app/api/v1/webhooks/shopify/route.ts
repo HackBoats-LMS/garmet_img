@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 import prisma from '@/lib/prisma';
 import { syncOrderToPactERP } from '@/lib/pact-sync';
+import { safeTimingCompare } from '@/lib/security';
 
 export async function POST(request: Request) {
   try {
@@ -16,8 +17,8 @@ export async function POST(request: Request) {
         .update(rawBody, 'utf8')
         .digest('base64');
 
-      // Prevent Timing Attacks
-      if (!crypto.timingSafeEqual(Buffer.from(generatedHash), Buffer.from(hmacHeader))) {
+      // Prevent Timing Attacks and Byte Length Mismatch Exceptions
+      if (!safeTimingCompare(generatedHash, hmacHeader)) {
         console.warn('[Shopify Webhook] Invalid HMAC Signature');
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       }

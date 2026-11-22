@@ -11,7 +11,7 @@ export async function POST(
   { params }: { params: Promise<{ orderId: string }> }
 ) {
   try {
-    const session = await auth();
+    const session = await auth().catch(() => null);
     const { orderId } = await params;
     const body = await req.json();
     const { poseId, promptSuggestions, suggestion, customPromptOverride } = body;
@@ -37,6 +37,12 @@ export async function POST(
 
     if (!order) {
       return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+    }
+
+    const currentUserId = (session?.user as any)?.id;
+    const isAdmin = (session?.user as any)?.role === 'admin' || !order.userId;
+    if (!isAdmin && order.userId && currentUserId && order.userId !== currentUserId) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
     const pose = order.template?.poses.find((p) => p.id === poseId);

@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 import { syncOrderToPactERP } from '@/lib/pact-sync';
 import { deductSizeStock, findSizeByStockCode } from '@/lib/size-inventory';
+import { safeTimingCompare } from '@/lib/security';
 
 // In-memory store for rate limiting (For production, use Redis/Upstash)
 const rateLimitMap = new Map<string, { count: number; lastReset: number }>();
@@ -60,13 +61,14 @@ export async function POST(request: Request) {
     let isAuthorized = false;
 
     // Method A (Easier): Static API Key via Bearer Token
-    if (authHeader === `Bearer ${staticApiToken}`) {
+    const incomingToken = authHeader?.replace(/^Bearer\s+/i, '');
+    if (incomingToken && safeTimingCompare(incomingToken, staticApiToken)) {
       isAuthorized = true;
     } 
     // Method B (Meta Standard): HMAC SHA-256 Signature
     else if (appSecret && signature) {
       const expectedSignature = `sha256=${crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex')}`;
-      if (crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+      if (safeTimingCompare(signature, expectedSignature)) {
         isAuthorized = true;
       }
     }
