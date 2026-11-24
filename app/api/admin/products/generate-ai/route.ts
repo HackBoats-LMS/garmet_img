@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { GoogleGenAI } from '@google/genai';
+import { getSetting } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // Allow sufficient time for AI generation & image fetch
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = await getSetting('GEMINI_API_KEY', process.env.GEMINI_API_KEY);
     if (!apiKey) {
       return NextResponse.json({ error: 'GEMINI_API_KEY is not configured in .env' }, { status: 500 });
     }

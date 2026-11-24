@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
+import { getSetting } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,7 +66,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'productName is required' }, { status: 400 });
     }
 
-    const geminiKey = process.env.GEMINI_API_KEY;
+    const geminiKey = await getSetting('GEMINI_API_KEY', process.env.GEMINI_API_KEY);
     if (!geminiKey) {
       return NextResponse.json({ error: 'GEMINI_API_KEY is not configured' }, { status: 500 });
     }

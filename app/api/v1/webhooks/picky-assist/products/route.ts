@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import * as crypto from 'crypto';
 import prisma from '@/lib/prisma';
 import { safeTimingCompare } from '@/lib/security';
+import { getSetting } from '@/lib/settings';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/webhooks/picky-assist/products
@@ -49,10 +50,10 @@ function checkRateLimit(ip: string): boolean {
 }
 
 // ── Auth helper ──────────────────────────────────────────────────────────────
-function isAuthorized(request: Request, rawBody: string): boolean {
-  const secret = process.env.PICKY_ASSIST_WEBHOOK_SECRET;
+async function isAuthorized(request: Request, rawBody: string): Promise<boolean> {
+  const secret = await getSetting('PICKY_ASSIST_WEBHOOK_SECRET', process.env.PICKY_ASSIST_WEBHOOK_SECRET);
   const authHeader = request.headers.get('authorization') || '';
-  const staticToken = process.env.PICKY_ASSIST_API_TOKEN;
+  const staticToken = await getSetting('PICKY_ASSIST_API_TOKEN', process.env.PICKY_ASSIST_API_TOKEN);
 
   // Method A: Static Bearer token (simplest — Picky Assist sends this header)
   if (staticToken && safeTimingCompare(authHeader, `Bearer ${staticToken}`)) return true;
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
   const rawBody = await request.text();
 
   // 3. Auth
-  if (!isAuthorized(request, rawBody)) {
+  if (!(await isAuthorized(request, rawBody))) {
     console.warn(`[Picky Assist] Unauthorized product webhook from IP: ${ip}`);
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }

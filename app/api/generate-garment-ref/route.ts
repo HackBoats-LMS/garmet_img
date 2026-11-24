@@ -4,6 +4,7 @@ import fs from 'fs';
 import { auth } from '@/lib/auth';
 import { uploadGeneratedAsset, uploadToStorage, isStorageConfigured } from '@/lib/storage';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
+import { getSetting } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -80,7 +81,8 @@ export async function POST(req: NextRequest) {
 
     const userId = reqUserId || (session?.user as any)?.id || 'anonymous_user';
 
-    const rawKieKey = (process.env.KIE_API_KEY || process.env.PIAPI_API_KEY || '').trim();
+    const dynamicKieKey = await getSetting('KIE_API_KEY', process.env.KIE_API_KEY);
+    const rawKieKey = (dynamicKieKey || process.env.PIAPI_API_KEY || '').trim();
     const kieApiKeyBearer = rawKieKey.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();
 
     if (!kieApiKeyBearer) {

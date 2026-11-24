@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { analyzeSwatchBuffer } from '@/lib/swatchAnalyzer';
+import { getSetting } from '@/lib/settings';
 import { auth } from '@/lib/auth';
 import { isSafeExternalUrl } from '@/lib/security';
 
@@ -61,10 +62,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'No valid image data provided' }, { status: 400 });
     }
 
-    const rawKieKey = (process.env.KIE_API_KEY || process.env.PIAPI_API_KEY || '').trim();
+    const dynamicKieKey = await getSetting('KIE_API_KEY', process.env.KIE_API_KEY);
+    const rawKieKey = (dynamicKieKey || process.env.PIAPI_API_KEY || '').trim();
     const kieApiKey = rawKieKey.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();
 
-    const rawGoogleKey = process.env.GEMINI_API_KEY || '';
+    const rawGoogleKey = (await getSetting('GEMINI_API_KEY', process.env.GEMINI_API_KEY)) || '';
     const googleGeminiKey = rawGoogleKey.trim().replace(/^["']|["']$/g, '');
 
     const palluVisionPrompt = `You are a world-class Indian textile, handloom, and saree expert AI analyzer.

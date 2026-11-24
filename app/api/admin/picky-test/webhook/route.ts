@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth';
 import { safeTimingCompare } from '@/lib/security';
 import { parsePickyAssistWebhookBody, processPickyAssistOrder } from '@/lib/picky-assist-orders';
 import { saveRequest, RecordedRequest } from '../logStore';
+import { getSetting } from '@/lib/settings';
 
 export async function POST(req: NextRequest) {
   return handleIncoming(req);
@@ -25,7 +26,7 @@ async function handleIncoming(req: NextRequest) {
     const session = await auth().catch(() => null);
     const isAdmin = Boolean((session?.user as any)?.role === 'admin');
 
-    const expectedToken = process.env.PICKY_ASSIST_API_TOKEN;
+    const expectedToken = await getSetting('PICKY_ASSIST_API_TOKEN', process.env.PICKY_ASSIST_API_TOKEN);
     const authHeader = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || '';
     const tokenParam = req.nextUrl.searchParams.get('token') || '';
 
