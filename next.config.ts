@@ -29,6 +29,10 @@ const nextConfig: NextConfig = {
         destination: '/api/webhooks/picky-assist/search-response',
       },
       {
+        source: '/api/webhooks/picky-assist/delete-response/',
+        destination: '/api/webhooks/picky-assist/delete-response',
+      },
+      {
         source: '/api/webhooks/picky-assist/',
         destination: '/api/webhooks/picky-assist',
       },

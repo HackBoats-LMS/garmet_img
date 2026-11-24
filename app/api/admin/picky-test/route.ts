@@ -5,6 +5,7 @@ import { getSetting } from '@/lib/settings';
 import {
   addPickyProduct,
   updatePickyProduct,
+  deletePickyProduct,
   searchPickyProduct,
   syncPickyProductWithDiff,
   formatProductPayload,
@@ -74,8 +75,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    if (!action || !['search', 'add', 'update', 'sync'].includes(action)) {
-      return NextResponse.json({ error: 'Valid action (search, add, update, sync, preview_payload) is required.' }, { status: 400 });
+    if (!action || !['search', 'add', 'update', 'sync', 'delete'].includes(action)) {
+      return NextResponse.json({ error: 'Valid action (search, add, update, sync, delete, preview_payload) is required.' }, { status: 400 });
     }
 
     // 2. Search Action
@@ -166,6 +167,26 @@ export async function POST(req: NextRequest) {
         webhookUrlUsed: envUrls.updateUrl,
         response: updateRes,
         variantsUpdated: updateRes.variantsUpdated,
+      });
+    }
+
+    // 6. Delete Action
+    if (action === 'delete') {
+      const deleteTarget =
+        effectiveTarget ||
+        identifier ||
+        (dbProduct && (dbProduct.stockCode || dbProduct.code1 || dbProduct.id));
+
+      const deleteRes = await deletePickyProduct(deleteTarget);
+      return NextResponse.json({
+        success: deleteRes.success,
+        action: 'delete',
+        identifier: typeof deleteTarget === 'string' ? deleteTarget : (deleteTarget?.stockCode || deleteTarget?.id),
+        webhookUrlUsed: envUrls.deleteUrl,
+        response: deleteRes,
+        message: deleteRes.message,
+        error: deleteRes.error,
+        callbackReceived: deleteRes.callbackReceived,
       });
     }
 

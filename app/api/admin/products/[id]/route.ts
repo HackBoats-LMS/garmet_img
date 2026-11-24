@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
-import { updatePickyProduct } from '@/lib/picky-assist-push';
+import { updatePickyProduct, deletePickyProduct } from '@/lib/picky-assist-push';
 
 // GET /api/admin/products/[id]
 export async function GET(
@@ -195,6 +195,8 @@ export async function DELETE(
     
     if (existing) {
       await prisma.product.delete({ where: { id } });
+      // Asynchronously trigger delete in Picky Assist if configured
+      deletePickyProduct(existing).catch(err => console.warn('[Picky Assist] Async delete on product deletion error:', err));
     }
     
     return NextResponse.json({ success: true });

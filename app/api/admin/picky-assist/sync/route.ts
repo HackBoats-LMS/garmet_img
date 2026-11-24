@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import prisma from '@/lib/prisma';
-import { addPickyProduct, updatePickyProduct, syncPickyProductWithDiff, searchPickyProduct } from '@/lib/picky-assist-push';
+import { addPickyProduct, updatePickyProduct, deletePickyProduct, syncPickyProductWithDiff, searchPickyProduct } from '@/lib/picky-assist-push';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,6 +67,24 @@ async function handleSync(productId?: string | null, stockCode?: string | null, 
       raw: res.raw,
       message: res.exists ? `Product ${identifier} exists in Picky Assist` : `Product ${identifier} not found in Picky Assist`
     });
+  }
+
+  if (effectiveAction === 'delete') {
+    const res = await deletePickyProduct(product);
+    if (res.success && product.id) {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { syncedAt: null },
+      }).catch(err => console.warn('Failed to clear syncedAt:', err));
+    }
+    return NextResponse.json({
+      success: res.success,
+      actionTaken: 'deleted',
+      message: res.success
+        ? (res.message || `Deleted product ${product.stockCode} from Picky Assist`)
+        : (res.error || 'Failed to delete product from Picky Assist'),
+      details: res,
+    }, { status: res.success ? 200 : 502 });
   }
 
   // Default: 'sync' -> Search -> if not exists: Add -> if exists: Diff and Update
