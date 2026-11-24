@@ -1,11 +1,24 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  skipTrailingSlashRedirect: true,
   experimental: {
     serverActions: {
       bodySizeLimit: '50mb',
     },
     middlewareClientMaxBodySize: '50mb',
+  },
+  async rewrites() {
+    return [
+      {
+        source: '/api/webhooks/picky-assist/search-response/',
+        destination: '/api/webhooks/picky-assist/search-response',
+      },
+      {
+        source: '/api/webhooks/picky-assist/',
+        destination: '/api/webhooks/picky-assist',
+      },
+    ];
   },
   async headers() {
     return [

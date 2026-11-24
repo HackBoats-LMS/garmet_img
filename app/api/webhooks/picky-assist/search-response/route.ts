@@ -37,7 +37,8 @@ async function handleSearchCallback(req: NextRequest) {
     query[key] = val;
   });
 
-  const effectivePayload = method === 'GET' ? { ...query, ...parsedBody } : parsedBody;
+  // Merge query parameters and body so callback query params (e.g. ?identifier=XYZ) are preserved
+  const effectivePayload = { ...query, ...parsedBody };
 
   // Save to search response store
   const savedSearch = saveSearchResponse(effectivePayload);
