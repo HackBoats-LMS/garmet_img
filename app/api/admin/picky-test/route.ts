@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import {
   addPickyProduct,
   updatePickyProduct,
+  deletePickyProduct,
   searchPickyProduct,
   syncPickyProductWithDiff,
   formatProductPayload,
@@ -17,7 +18,9 @@ export async function POST(req: NextRequest) {
       searchUrl: process.env.PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL || null,
       addUrl: process.env.PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL || null,
       updateUrl: process.env.PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL || null,
+      deleteUrl: process.env.PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL || null,
       searchCallbackUrl: process.env.PICKY_ASSIST_SEARCH_CALLBACK_URL || null,
+      deleteCallbackUrl: process.env.PICKY_ASSIST_DELETE_CALLBACK_URL || null,
     };
 
     if (action === 'get_env') {
@@ -67,8 +70,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    if (!action || !['search', 'add', 'update', 'sync'].includes(action)) {
-      return NextResponse.json({ error: 'Valid action (search, add, update, sync, preview_payload) is required.' }, { status: 400 });
+    if (!action || !['search', 'add', 'update', 'sync', 'delete'].includes(action)) {
+      return NextResponse.json({ error: 'Valid action (search, add, update, sync, delete, preview_payload) is required.' }, { status: 400 });
     }
 
     // 2. Search Action
@@ -159,6 +162,26 @@ export async function POST(req: NextRequest) {
         webhookUrlUsed: envUrls.updateUrl,
         response: updateRes,
         variantsUpdated: updateRes.variantsUpdated,
+      });
+    }
+
+    // 6. Delete Action
+    if (action === 'delete') {
+      const deleteTarget =
+        effectiveTarget ||
+        identifier ||
+        (dbProduct && (dbProduct.stockCode || dbProduct.code1 || dbProduct.id));
+
+      const deleteRes = await deletePickyProduct(deleteTarget);
+      return NextResponse.json({
+        success: deleteRes.success,
+        action: 'delete',
+        identifier: typeof deleteTarget === 'string' ? deleteTarget : (deleteTarget?.stockCode || deleteTarget?.id),
+        webhookUrlUsed: envUrls.deleteUrl,
+        response: deleteRes,
+        message: deleteRes.message,
+        error: deleteRes.error,
+        callbackReceived: deleteRes.callbackReceived,
       });
     }
 

@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 import { Card } from '@/app/components/ui/Card';
 
-type MainTab = 'inbound_listener' | 'search' | 'update';
+type MainTab = 'inbound_listener' | 'search' | 'update' | 'delete';
 
 export default function PickyTestPage() {
   // Navigation tabs requested by user: 'inbound_listener', 'search', 'update'
@@ -107,6 +107,14 @@ export default function PickyTestPage() {
   const liveWebhookUrl = `${originUrl}/api/webhooks/picky-assist`;
   const v1OrdersWebhookUrl = `${originUrl}/api/v1/webhooks/picky-assist/orders`;
   const searchCallbackUrl = `${originUrl}/api/webhooks/picky-assist/search-response`;
+  const deleteCallbackUrl = `${originUrl}/api/webhooks/picky-assist/delete-response`;
+
+  // Delete tab state
+  const [selectedDeleteProductId, setSelectedDeleteProductId] = useState<string>('');
+  const [customDeleteQuery, setCustomDeleteQuery] = useState('');
+  const [deleteMode, setDeleteMode] = useState<'product' | 'custom'>('product');
+  const [deletingProduct, setDeletingProduct] = useState(false);
+  const [deleteResult, setDeleteResult] = useState<any>(null);
 
   // 1. Fetch DB Products
   const loadProducts = () => {
@@ -119,6 +127,7 @@ export default function PickyTestPage() {
           if (data.products.length > 0) {
             if (!simProductId) setSimProductId(data.products[0].id);
             if (!selectedUpdateProductId) setSelectedUpdateProductId(data.products[0].id);
+            if (!selectedDeleteProductId) setSelectedDeleteProductId(data.products[0].id);
           }
         }
       })
@@ -373,6 +382,50 @@ export default function PickyTestPage() {
     }
   };
 
+  // ── DELETE HANDLER ──
+  const handleDeleteSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const targetProduct = products.find((p) => p.id === selectedDeleteProductId);
+    const targetIdentifier =
+      deleteMode === 'product'
+        ? targetProduct?.stockCode || targetProduct?.code1 || selectedDeleteProductId
+        : customDeleteQuery.trim();
+
+    if (!targetIdentifier) {
+      alert('Please enter or select a product to delete.');
+      return;
+    }
+
+    if (
+      !confirm(
+        `Are you sure you want to delete "${targetProduct?.productName || targetIdentifier}" from Picky Assist?\n(This sends a delete request to Picky Assist catalog/CRM without removing it from your local database)`
+      )
+    ) {
+      return;
+    }
+
+    setDeletingProduct(true);
+    setDeleteResult(null);
+    try {
+      const res = await fetch('/api/admin/picky-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'delete',
+          productId: deleteMode === 'product' ? selectedDeleteProductId : undefined,
+          identifier: targetIdentifier,
+        }),
+      });
+      const data = await res.json();
+      setDeleteResult(data);
+      fetchLogs();
+    } catch (err: any) {
+      setDeleteResult({ success: false, error: err.message });
+    } finally {
+      setDeletingProduct(false);
+    }
+  };
+
   // Helper: Sample cURL for testing incoming order
   const sampleCurl = `curl -X POST "${liveWebhookUrl}" \\
   -H "Content-Type: application/json" \\
@@ -465,6 +518,20 @@ export default function PickyTestPage() {
             >
               <Edit3 className="w-4 h-4" />
               <span>Update & Push Rules</span>
+            </button>
+
+            {/* Tab 4: Delete Product */}
+            <button
+              type="button"
+              onClick={() => setActiveTab('delete')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === 'delete'
+                  ? 'bg-rose-600 text-white shadow-xs'
+                  : 'text-charcoal hover:text-rose-600 hover:bg-white/60'
+              }`}
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Delete Product</span>
             </button>
           </div>
         </div>
@@ -581,6 +648,33 @@ export default function PickyTestPage() {
                 </div>
                 <p className="text-[11px] text-charcoal-muted">
                   Used by Picky Assist CRM to post search results back when verifying product presence before order processing.
+                </p>
+              </div>
+
+              {/* Alternative Route & Delete Callback */}
+              <div className="p-3.5 rounded-xl bg-white border border-cream-border shadow-2xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-600 text-white">
+                      DELETE CALLBACK
+                    </span>
+                    <span className="text-xs font-bold text-charcoal">Async Delete Response URL</span>
+                  </div>
+                  <span className="text-[10px] text-blue-700 font-mono font-bold">POST</span>
+                </div>
+                <div className="flex items-center gap-2 bg-slate-900 text-rose-300 p-2.5 rounded-lg font-mono text-xs overflow-x-auto">
+                  <code className="flex-1 truncate">{deleteCallbackUrl}</code>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(deleteCallbackUrl, 'delete_callback')}
+                    className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer shrink-0"
+                    title="Copy Delete Callback URL"
+                  >
+                    {copiedKey === 'delete_callback' ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[11px] text-charcoal-muted">
+                  Used by Picky Assist CRM to post deletion confirmation back when a product is removed from the catalog.
                 </p>
               </div>
             </div>
@@ -1510,6 +1604,191 @@ export default function PickyTestPage() {
                   </div>
                 )}
               </Card>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────────────── */}
+      {/* TAB 4: DELETE PRODUCT FROM PICKY ASSIST                                      */}
+      {/* ─────────────────────────────────────────────────────────────────────────── */}
+      {activeTab === 'delete' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* Left 5 Cols: Product Selector, Delete Action & Webhook Details */}
+            <div className="lg:col-span-5 space-y-4">
+              <Card className="p-5 space-y-4">
+                <div>
+                  <h2 className="text-sm font-bold text-charcoal flex items-center gap-2">
+                    <Trash2 className="w-4 h-4 text-rose-600" /> Delete Product from Picky Assist
+                  </h2>
+                  <p className="text-xs text-charcoal-muted mt-1">
+                    Triggers your configured Picky Assist delete connector webhook. The deletion confirmation callback will be sent back to your inbound delete endpoint and logged below.
+                  </p>
+                </div>
+
+                {/* Mode Selector */}
+                <div className="flex items-center bg-cream-light p-1 rounded-xl border border-cream-border text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteMode('product')}
+                    className={`flex-1 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                      deleteMode === 'product'
+                        ? 'bg-white text-charcoal shadow-xs'
+                        : 'text-charcoal-muted hover:text-charcoal'
+                    }`}
+                  >
+                    Select DB Product
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeleteMode('custom')}
+                    className={`flex-1 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                      deleteMode === 'custom'
+                        ? 'bg-white text-charcoal shadow-xs'
+                        : 'text-charcoal-muted hover:text-charcoal'
+                    }`}
+                  >
+                    Custom Code / Barcode
+                  </button>
+                </div>
+
+                {/* Form */}
+                <form onSubmit={handleDeleteSubmit} className="space-y-4">
+                  {deleteMode === 'product' ? (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-charcoal block">Choose Product to Delete</label>
+                      <select
+                        value={selectedDeleteProductId}
+                        onChange={(e) => setSelectedDeleteProductId(e.target.value)}
+                        className="w-full p-2.5 bg-white border border-cream-border rounded-xl text-xs font-medium text-charcoal focus:outline-none focus:border-rose-500"
+                      >
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.productName || p.title || p.stockCode} ({p.stockCode || p.code1 || p.id}) - Qty: {p.quantity}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-charcoal block">Product Barcode, Stock Code or Variant ID</label>
+                      <input
+                        type="text"
+                        value={customDeleteQuery}
+                        onChange={(e) => setCustomDeleteQuery(e.target.value)}
+                        placeholder="e.g. 5270000094 or K-1-AQUA-XL"
+                        className="w-full p-2.5 bg-white border border-cream-border rounded-xl text-xs font-medium text-charcoal focus:outline-none focus:border-rose-500 font-mono"
+                      />
+                    </div>
+                  )}
+
+                  <div className="p-3 rounded-xl bg-rose-50/70 border border-rose-200 text-xs text-rose-900 space-y-1">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      <span>Note on Deletion:</span>
+                    </div>
+                    <p className="text-[11px] text-rose-800">
+                      This action sends a delete request to Picky Assist catalog/CRM. It does NOT delete the item from your local store database.
+                    </p>
+                  </div>
+
+                  {/* Configured Endpoints Info */}
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] font-mono text-slate-700 space-y-1">
+                    <div>
+                      <span className="font-bold text-slate-900">Outbound Webhook URL:</span>{' '}
+                      <span className="text-rose-600 break-all">{envInfo?.deleteUrl || 'Configured via PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL'}</span>
+                    </div>
+                    <div>
+                      <span className="font-bold text-slate-900">Inbound Callback URL:</span>{' '}
+                      <span className="text-slate-600 break-all">{deleteCallbackUrl}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={deletingProduct}
+                    className="w-full py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {deletingProduct ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Sending Delete Request...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Trigger Delete in Picky Assist</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              </Card>
+            </div>
+
+            {/* Right 7 Cols: Delete Result & Live Inspection */}
+            <div className="lg:col-span-7 space-y-4">
+              {deleteResult ? (
+                <Card className="p-5 space-y-4 animate-fade-in">
+                  <div className="flex items-center justify-between pb-3 border-b border-cream-border">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
+                          deleteResult.success ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                        }`}
+                      >
+                        {deleteResult.success ? '✓ Delete Request Succeeded' : '✕ Delete Request Failed'}
+                      </span>
+                      <span className="text-xs text-charcoal-muted font-mono">Target: {deleteResult.identifier}</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-cream-light/60 border border-cream-border text-xs space-y-1">
+                    <p className="font-semibold text-charcoal">
+                      {deleteResult.message || (deleteResult.success ? 'Product successfully queued for deletion in Picky Assist' : deleteResult.error)}
+                    </p>
+                    {deleteResult.callbackReceived && (
+                      <p className="text-[11px] text-emerald-700 font-semibold flex items-center gap-1">
+                        <Check className="w-3.5 h-3.5" /> Inbound confirmation callback arrived and verified
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <span className="text-xs font-bold text-charcoal block">Response from Picky Assist:</span>
+                    <pre className="p-3 bg-slate-900 text-emerald-300 rounded-xl text-xs font-mono overflow-x-auto max-h-72">
+                      <code>{JSON.stringify(deleteResult.response || deleteResult, null, 2)}</code>
+                    </pre>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-cream-border text-xs">
+                    <span className="text-charcoal-muted">Check live callback stream:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('inbound_listener');
+                        fetchLogs();
+                      }}
+                      className="text-accent font-bold hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>View Captured Webhook Logs</span>
+                    </button>
+                  </div>
+                </Card>
+              ) : (
+                <Card className="p-8 text-center text-xs text-charcoal-muted space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+                    <Trash2 className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-charcoal text-sm">Delete Product Verification</h3>
+                    <p className="text-charcoal-muted max-w-md mx-auto mt-1">
+                      Select a product on the left and click &quot;Trigger Delete in Picky Assist&quot;. We will send a delete request to Picky Assist and display the immediate server response and inbound confirmation callback right here.
+                    </p>
+                  </div>
+                </Card>
+              )}
             </div>
           </div>
         </div>

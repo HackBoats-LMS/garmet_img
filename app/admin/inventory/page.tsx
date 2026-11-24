@@ -6,7 +6,7 @@ import {
   Plus, Search, Filter, Package, RefreshCw, Archive, Camera,
   ChevronUp, ChevronDown, AlertCircle, CheckCircle2,
   XCircle, Layers, Edit2, MoreHorizontal, Tag,
-  Upload, FileSpreadsheet, Play, Pause, Square, Sparkles, Check, X, Globe, ShoppingBag
+  Upload, FileSpreadsheet, Play, Pause, Square, Sparkles, Check, X, Globe, ShoppingBag, Trash
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
@@ -402,6 +402,43 @@ export default function AdminInventoryPage() {
         id: product.id,
         success: false,
         message: err.message || 'Failed to sync with Picky Assist',
+      });
+    } finally {
+      setSyncingId(null);
+      setTimeout(() => {
+        setSyncNotice((prev) => (prev?.id === product.id ? null : prev));
+      }, 7000);
+    }
+  };
+
+  const handleDeleteFromPicky = async (product: any) => {
+    if (!confirm(`Are you sure you want to delete "${product.productName || product.stockCode}" from Picky Assist?\n(This removes the catalog entry from Picky Assist without deleting it from your local database)`)) {
+      return;
+    }
+    setSyncingId(product.id);
+    setSyncNotice(null);
+    try {
+      const res = await fetch('/api/admin/picky-assist/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: product.id, action: 'delete' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      }
+      setSyncNotice({
+        id: product.id,
+        success: data.success,
+        actionTaken: 'deleted',
+        message: data.message || `Deleted ${product.stockCode} from Picky Assist`,
+      });
+    } catch (err: any) {
+      console.error('Picky delete error:', err);
+      setSyncNotice({
+        id: product.id,
+        success: false,
+        message: err.message || 'Failed to delete from Picky Assist',
       });
     } finally {
       setSyncingId(null);
@@ -993,7 +1030,7 @@ export default function AdminInventoryPage() {
                             className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer shadow-xs ${
                               syncingId === product.id
                                 ? 'bg-amber-50 text-amber-700 border-amber-300'
-                                : syncNotice?.id === product.id && syncNotice.success
+                                : syncNotice?.id === product.id && syncNotice.success && syncNotice.actionTaken !== 'deleted'
                                 ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
                                 : syncNotice?.id === product.id && !syncNotice.success
                                 ? 'bg-red-50 text-red-700 border-red-300'
@@ -1002,6 +1039,17 @@ export default function AdminInventoryPage() {
                           >
                             <RefreshCw className={`w-3 h-3 ${syncingId === product.id ? 'animate-spin text-amber-600' : 'text-emerald-600'}`} />
                             <span>{syncingId === product.id ? 'Syncing...' : 'Sync'}</span>
+                          </button>
+
+                          {/* Delete from Picky Assist Button */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteFromPicky(product)}
+                            disabled={syncingId === product.id}
+                            title="Delete this product from Picky Assist catalog"
+                            className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold text-charcoal border border-cream-border hover:border-red-400 hover:text-red-600 transition-all cursor-pointer bg-white"
+                          >
+                            <Trash className="w-3 h-3 text-red-500" />
                           </button>
 
                           <Link href={`/admin/generate?productId=${product.id}`}>
@@ -1027,9 +1075,13 @@ export default function AdminInventoryPage() {
                             <div className="min-w-0">
                               {syncNotice.actionTaken && (
                                 <span className={`inline-block text-[9px] font-bold px-1.5 py-0.2 rounded uppercase mr-1 ${
-                                  syncNotice.actionTaken === 'updated' ? 'bg-emerald-600 text-white' : 'bg-blue-600 text-white'
+                                  syncNotice.actionTaken === 'updated'
+                                    ? 'bg-emerald-600 text-white'
+                                    : syncNotice.actionTaken === 'deleted'
+                                    ? 'bg-red-600 text-white'
+                                    : 'bg-blue-600 text-white'
                                 }`}>
-                                  {syncNotice.actionTaken === 'updated' ? 'Updated Existing' : 'Added New'}
+                                  {syncNotice.actionTaken === 'updated' ? 'Updated Existing' : syncNotice.actionTaken === 'deleted' ? 'Deleted Picky' : 'Added New'}
                                 </span>
                               )}
                               <span className="truncate block" title={syncNotice.message}>{syncNotice.message}</span>

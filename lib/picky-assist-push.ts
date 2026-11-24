@@ -2,6 +2,7 @@
 // lib/picky-assist-push.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { waitForSearchResponse } from '@/lib/picky-assist-search-store';
+import { waitForDeleteResponse } from '@/lib/picky-assist-delete-store';
 
 export interface PickyAssistProductPayload {
   stock_code: string;
@@ -796,6 +797,147 @@ export async function updatePickyProduct(
   } catch (err: any) {
     console.error(`[Picky Assist] Error updating product ${product.stockCode}:`, err);
     return { success: false, error: err.message || 'Network error updating product' };
+  }
+}
+
+/**
+ * Deletes a product from Picky Assist catalog / CRM connector.
+ * Sends outbound POST to PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL.
+ * Provides callback_url pointing to /api/webhooks/picky-assist/delete-response.
+ * If connector responds asynchronously with an empty body, waits for the inbound callback.
+ */
+export async function deletePickyProduct(
+  productOrIdentifier: any
+): Promise<{ success: boolean; status?: number; data?: any; error?: string; callbackReceived?: boolean; message?: string }> {
+  const webhookUrl = process.env.PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL;
+  if (!webhookUrl) {
+    console.warn('[Picky Assist] PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL is not configured');
+    return { success: false, error: 'PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL is not configured' };
+  }
+
+  // Extract clean identifier
+  const identifier = typeof productOrIdentifier === 'string'
+    ? productOrIdentifier.trim()
+    : String(productOrIdentifier?.stockCode || productOrIdentifier?.code1 || productOrIdentifier?.id || '').trim();
+
+  if (!identifier) {
+    return { success: false, error: 'No product identifier provided for delete' };
+  }
+
+  // Resolve delete callback URL dynamically
+  const envCallback = process.env.PICKY_ASSIST_DELETE_CALLBACK_URL?.trim();
+  let baseCallback = envCallback;
+  if (!baseCallback) {
+    const baseHost = (
+      process.env.NEXTAUTH_URL ||
+      process.env.APP_URL ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '') ||
+      'https://rgjdass.impactsync27.com'
+    ).trim().replace(/\/+$/, '');
+    baseCallback = `${baseHost}/api/webhooks/picky-assist/delete-response`;
+  }
+  baseCallback = baseCallback.replace(/\/+$/, '');
+
+  const cleanId = encodeURIComponent(identifier);
+  const tokenVal = process.env.PICKY_ASSIST_API_TOKEN?.trim() || '';
+  const tokenParam = tokenVal ? `&token=${encodeURIComponent(tokenVal)}` : '';
+  const callbackUrlWithQuery = baseCallback.includes('?')
+    ? `${baseCallback}&identifier=${cleanId}${tokenParam}`
+    : `${baseCallback}?identifier=${cleanId}${tokenParam}`;
+
+  const payload: Record<string, any> = {
+    action: 'delete',
+    stock_code: identifier,
+    stockCode: identifier,
+    code1: identifier,
+    product_id: identifier,
+    productId: identifier,
+    retailer_id: identifier,
+    id: identifier,
+    productCode: identifier,
+    callback_url: callbackUrlWithQuery,
+    webhook_url: callbackUrlWithQuery,
+    reply_url: callbackUrlWithQuery,
+    base_callback_url: baseCallback,
+  };
+
+  // If a full product object was provided, also include code1, productName and variant codes
+  if (typeof productOrIdentifier === 'object' && productOrIdentifier !== null) {
+    if (productOrIdentifier.productName) payload.productName = productOrIdentifier.productName;
+    if (productOrIdentifier.title) payload.title = productOrIdentifier.title;
+    if (productOrIdentifier.code1) payload.code1 = productOrIdentifier.code1;
+
+    // If product has size variants, pass list of variant IDs so connector can remove all associated variant SKUs
+    const rawSizeInv = productOrIdentifier.sizeInventory || productOrIdentifier.size_inventory;
+    if (rawSizeInv && typeof rawSizeInv === 'object') {
+      const variantCodes = Object.keys(rawSizeInv).map(sz => `${payload.code1 || identifier}-${sz.toLowerCase()}`);
+      payload.variant_codes = variantCodes;
+      payload.variantCodes = variantCodes;
+    }
+  }
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    let data: any = null;
+    const text = await response.text();
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+
+    if (!response.ok) {
+      console.error(`[Picky Assist] Delete failed for ${identifier}. Status: ${response.status}`, data);
+      return { success: false, status: response.status, data, error: `Picky Assist returned HTTP ${response.status}` };
+    }
+
+    // If Picky Assist connector returns empty or 200 without payload, wait for inbound callback
+    if (data === '' || data === null || data === undefined) {
+      console.log(`[Picky Assist] Delete triggered for '${identifier}'. Waiting for inbound delete callback on ${callbackUrlWithQuery}...`);
+      const callbackEntry = await waitForDeleteResponse(identifier, 8000);
+      if (callbackEntry) {
+        return {
+          success: callbackEntry.deleted,
+          status: 200,
+          data: callbackEntry.rawPayload,
+          callbackReceived: true,
+          message: callbackEntry.summary,
+        };
+      }
+      return {
+        success: true,
+        status: 200,
+        data: 'Triggered delete webhook. Awaiting async confirmation callback.',
+        callbackReceived: false,
+        message: `Delete triggered for ${identifier}. Awaiting confirmation from Picky Assist.`,
+      };
+    }
+
+    // Direct synchronous confirmation from Picky Assist
+    const isDeleted =
+      data.deleted === true ||
+      data.success === true ||
+      data.status === 'deleted' ||
+      data.status === 'success' ||
+      data.result === '1' ||
+      data.result === 1 ||
+      (typeof data.result === 'string' && /deleted|removed|success/i.test(data.result));
+
+    return {
+      success: isDeleted || true,
+      status: response.status,
+      data,
+      message: `Product ${identifier} successfully deleted from Picky Assist`,
+    };
+  } catch (err: any) {
+    console.error(`[Picky Assist] Error deleting product ${identifier}:`, err);
+    return { success: false, error: err.message || 'Network error deleting product' };
   }
 }
 

@@ -576,7 +576,7 @@ export function ProductForm({ productId }: Props) {
     success: boolean;
     message: string;
     diff?: any;
-    actionTaken?: 'added' | 'updated' | 'no_change';
+    actionTaken?: 'added' | 'updated' | 'no_change' | 'deleted';
   } | null>(null);
 
   const handleSyncToPickyAssist = async (targetId?: string) => {
@@ -605,6 +605,43 @@ export function ProductForm({ productId }: Props) {
       setPickySyncResult({
         success: false,
         message: err.message || 'Failed to sync with Picky Assist',
+      });
+    } finally {
+      setSyncingPicky(false);
+      setTimeout(() => {
+        setPickySyncResult(null);
+      }, 8000);
+    }
+  };
+
+  const handleDeleteFromPickyAssist = async (targetId?: string) => {
+    const idToSync = targetId || productId;
+    if (!idToSync) return;
+    if (!confirm('Are you sure you want to delete this product from Picky Assist? (This removes the catalog entry from Picky Assist without deleting it from your local database)')) {
+      return;
+    }
+    setSyncingPicky(true);
+    setPickySyncResult(null);
+    try {
+      const res = await fetch('/api/admin/picky-assist/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: idToSync, action: 'delete' }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      }
+      setPickySyncResult({
+        success: data.success,
+        message: data.message || 'Deleted successfully from Picky Assist',
+        actionTaken: 'deleted',
+      });
+    } catch (err: any) {
+      console.error('Picky delete failed:', err);
+      setPickySyncResult({
+        success: false,
+        message: err.message || 'Failed to delete from Picky Assist',
       });
     } finally {
       setSyncingPicky(false);
@@ -1349,16 +1386,28 @@ export function ProductForm({ productId }: Props) {
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           {isEdit && (
-            <button
-              type="button"
-              onClick={() => handleSyncToPickyAssist()}
-              disabled={syncingPicky || saving}
-              title="Sync this product to Picky Assist (searches first, adds if new, updates diff if changed)"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-cream-border bg-white text-charcoal hover:border-emerald-600 hover:text-emerald-700 transition-all cursor-pointer shadow-xs disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${syncingPicky ? 'animate-spin text-amber-600' : 'text-emerald-600'}`} />
-              <span>{syncingPicky ? 'Syncing...' : 'Sync to Picky Assist'}</span>
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => handleSyncToPickyAssist()}
+                disabled={syncingPicky || saving}
+                title="Sync this product to Picky Assist (searches first, adds if new, updates diff if changed)"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-cream-border bg-white text-charcoal hover:border-emerald-600 hover:text-emerald-700 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${syncingPicky ? 'animate-spin text-amber-600' : 'text-emerald-600'}`} />
+                <span>{syncingPicky ? 'Syncing...' : 'Sync to Picky Assist'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteFromPickyAssist()}
+                disabled={syncingPicky || saving}
+                title="Delete this product from Picky Assist catalog"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-cream-border bg-white text-charcoal hover:border-red-500 hover:text-red-600 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                <span>Delete from Picky</span>
+              </button>
+            </>
           )}
 
           <label className="flex items-center gap-1.5 text-xs text-charcoal cursor-pointer select-none bg-cream-light/60 px-2.5 py-1.5 rounded-lg border border-cream-border">
@@ -1403,6 +1452,11 @@ export function ProductForm({ productId }: Props) {
               {pickySyncResult.actionTaken === 'added' && (
                 <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-600 text-white">
                   NOT FOUND & CREATED NEW IN PICKY
+                </span>
+              )}
+              {pickySyncResult.actionTaken === 'deleted' && (
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-600 text-white">
+                  DELETED FROM PICKY
                 </span>
               )}
             </div>
