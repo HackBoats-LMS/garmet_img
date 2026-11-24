@@ -46,10 +46,9 @@ function mergeAndDeduplicateImages(
 export async function GET(req: NextRequest) {
   try {
     const session = await auth();
-    let userId = req.nextUrl.searchParams.get('userId');
-    if (!userId && session?.user) {
-      userId = (session.user as any).id;
-    }
+    const requestedUserId = req.nextUrl.searchParams.get('userId');
+    const currentUserId = (session?.user as any)?.id;
+    const userId = requestedUserId || currentUserId;
 
     if (!userId) {
       return NextResponse.json({ error: 'User is not authenticated' }, { status: 401 });
@@ -80,6 +79,10 @@ export async function GET(req: NextRequest) {
 // POST /api/customer/orders — Save/update a customer order
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth().catch(() => null);
+    const currentUserId = (session?.user as any)?.id;
+    const isAdmin = (session?.user as any)?.role === 'admin';
+
     const body = await req.json();
     const {
       id,
@@ -98,7 +101,9 @@ export async function POST(req: NextRequest) {
       status,
     } = body;
 
-    if (!userId || !templateId) {
+    const effectiveUserId = (isAdmin && userId) ? userId : (userId || currentUserId);
+
+    if (!effectiveUserId || !templateId) {
       return NextResponse.json(
         { error: 'userId and templateId are required' },
         { status: 400 }
@@ -107,6 +112,14 @@ export async function POST(req: NextRequest) {
 
     // Upsert: update if id provided, create otherwise
     if (id) {
+      const existingOrder = await prisma.customerOrder.findUnique({ where: { id } });
+      if (!existingOrder) {
+        return NextResponse.json({ error: 'Order not found' }, { status: 404 });
+      }
+      if (!isAdmin && existingOrder.userId && currentUserId && existingOrder.userId !== currentUserId) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+
       const deduplicatedOrderImages = generatedImages
         ? mergeAndDeduplicateImages({}, generatedImages as Record<string, any>)
         : undefined;
@@ -160,7 +173,7 @@ export async function POST(req: NextRequest) {
 
     const order = await prisma.customerOrder.create({
       data: {
-        userId,
+        userId: effectiveUserId,
         templateId,
         productName: productName || null,
         stockCode: stockCode || null,

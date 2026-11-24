@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 import { uploadToStorage, isStorageConfigured } from '@/lib/storage';
+import { isSafeExternalUrl } from '@/lib/security';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -32,6 +33,9 @@ export async function POST(req: NextRequest) {
     }
 
     if (file.startsWith('http://') || file.startsWith('https://')) {
+      if (!isSafeExternalUrl(file)) {
+        return NextResponse.json({ error: 'Unsafe external URL provided' }, { status: 400 });
+      }
       return NextResponse.json({ url: file });
     }
 
@@ -44,7 +48,6 @@ export async function POST(req: NextRequest) {
     const rawKieKey = (
       process.env.KIE_API_KEY ||
       process.env.PIAPI_API_KEY ||
-      process.env.NEXT_PUBLIC_KIE_API_KEY ||
       ''
     ).trim();
     const kieApiKey = rawKieKey.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();

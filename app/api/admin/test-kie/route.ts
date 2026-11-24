@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
+import { getSetting } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
-    const rawKieKey = (process.env.KIE_API_KEY || process.env.PIAPI_API_KEY || '').trim();
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
+    }
+
+    const dynamicKieKey = await getSetting('KIE_API_KEY', process.env.KIE_API_KEY);
+    const rawKieKey = (dynamicKieKey || process.env.PIAPI_API_KEY || '').trim();
     const cleanKey = rawKieKey.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();
 
     if (!cleanKey) {

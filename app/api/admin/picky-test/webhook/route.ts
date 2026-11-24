@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
+import { safeTimingCompare } from '@/lib/security';
 import { parsePickyAssistWebhookBody, processPickyAssistOrder } from '@/lib/picky-assist-orders';
 import { saveRequest, RecordedRequest } from '../logStore';
+import { getSetting } from '@/lib/settings';
 
 export async function POST(req: NextRequest) {
   return handleIncoming(req);
@@ -20,6 +23,22 @@ export async function PATCH(req: NextRequest) {
 
 async function handleIncoming(req: NextRequest) {
   try {
+    const session = await auth().catch(() => null);
+    const isAdmin = Boolean((session?.user as any)?.role === 'admin');
+
+    const expectedToken = await getSetting('PICKY_ASSIST_API_TOKEN', process.env.PICKY_ASSIST_API_TOKEN);
+    const authHeader = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') || '';
+    const tokenParam = req.nextUrl.searchParams.get('token') || '';
+
+    const hasValidToken = expectedToken && (
+      safeTimingCompare(authHeader, expectedToken) ||
+      safeTimingCompare(tokenParam, expectedToken)
+    );
+
+    if (!isAdmin && !hasValidToken) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const timestamp = new Date().toISOString();
     const id = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const method = req.method;

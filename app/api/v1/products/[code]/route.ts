@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
+import { safeTimingCompare } from '@/lib/security';
+import { getSetting } from '@/lib/settings';
 
 // Auth: header-based API key check (x-api-key or Authorization Bearer)
-function checkApiKey(req: NextRequest): boolean {
+async function checkApiKey(req: NextRequest): Promise<boolean> {
+  const syncApiKey = await getSetting('SYNC_API_KEY', process.env.SYNC_API_KEY);
   const key = req.headers.get('x-api-key') || req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  return Boolean(key && process.env.SYNC_API_KEY && key === process.env.SYNC_API_KEY);
+  return Boolean(key && syncApiKey && safeTimingCompare(key, syncApiKey));
 }
 
 /**
@@ -16,7 +19,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ code: string }> }
 ) {
-  if (!checkApiKey(req)) {
+  if (!(await checkApiKey(req))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -119,25 +122,26 @@ export async function PATCH(
       product.status === 'OUT_OF_STOCK' ? 'ACTIVE' :
       product.status;
 
-    const updated = await prisma.product.update({
-      where: { id: product.id },
-      data: {
-        quantity: newQty,
-        status: autoStatus,
-        syncedAt: new Date(),
-      },
-    });
-
-    await prisma.inventoryLog.create({
-      data: {
-        productId: product.id,
-        action: qtyChange < 0 ? 'sale' : 'restock',
-        qtyChange,
-        qtyAfter: newQty,
-        note: note || 'Website stock update',
-        source: 'website',
-      },
-    });
+    const [updated] = await prisma.$transaction([
+      prisma.product.update({
+        where: { id: product.id },
+        data: {
+          quantity: newQty,
+          status: autoStatus,
+          syncedAt: new Date(),
+        },
+      }),
+      prisma.inventoryLog.create({
+        data: {
+          productId: product.id,
+          action: qtyChange < 0 ? 'sale' : 'restock',
+          qtyChange,
+          qtyAfter: newQty,
+          note: note || 'Website stock update',
+          source: 'website',
+        },
+      }),
+    ]);
 
     return NextResponse.json({ data: { id: updated.id, quantity: updated.quantity, status: updated.status } });
   } catch (error: any) {

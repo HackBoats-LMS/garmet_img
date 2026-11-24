@@ -156,6 +156,8 @@ model Product {
   @@index([status, categoryId])
   @@index([status, subCategoryId])
   @@index([status, updatedAt])
+  @@index([status, createdAt])
+  @@index([createdAt])
   @@index([categoryId, updatedAt])
   @@index([subCategoryId, updatedAt])
 }
@@ -409,3 +411,13 @@ enum EventType {
   FAMILY_FUNCTION
   OTHER
 }
+
+model SystemSetting {
+  key         String   @id
+  value       String
+  isSecret    Boolean  @default(true)
+  category    String   @default("general")
+  description String?
+  updatedAt   DateTime @updatedAt
+}
+

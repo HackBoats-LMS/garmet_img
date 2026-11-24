@@ -7,7 +7,11 @@ import prisma from '@/lib/prisma';
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma) as any,
-  session: { strategy: 'jwt' },
+  session: {
+    strategy: 'jwt',
+    maxAge: 30 * 24 * 60 * 60, // 30 days - keeps user logged in
+    updateAge: 24 * 60 * 60,   // Refresh session cookie daily
+  },
   pages: {
     signIn: '/login',
     error: '/login',
@@ -21,7 +25,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           prompt: "consent",
           access_type: "offline",
           response_type: "code",
-          scope: "openid email profile https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/photospicker.mediaitems.readonly https://www.googleapis.com/auth/photoslibrary.appendonly https://www.googleapis.com/auth/photoslibrary"
+          scope: "openid email profile https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/photospicker.mediaitems.readonly https://www.googleapis.com/auth/photoslibrary.appendonly"
         }
       },
       allowDangerousEmailAccountLinking: true,
@@ -65,7 +69,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             if (fsModule.existsSync(envFilePath)) {
               let envContent = fsModule.readFileSync(envFilePath, 'utf8');
               if (envContent.includes('GOOGLE_REFRESH_TOKEN=')) {
-                envContent = envContent.replace(/GOOGLE_REFRESH_TOKEN=.*/, `GOOGLE_REFRESH_TOKEN=${account.refresh_token}`);
+                // Use a function replacer to prevent special dollar-sign ($) character expansion
+                envContent = envContent.replace(/GOOGLE_REFRESH_TOKEN=.*/, () => `GOOGLE_REFRESH_TOKEN=${account.refresh_token}`);
               } else {
                 envContent += `\nGOOGLE_REFRESH_TOKEN=${account.refresh_token}\n`;
               }
@@ -84,8 +89,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.id = user.id;
       }
 
-      // Check if access token is expired and refresh if possible
-      if (token.expiresAt && Date.now() >= (token.expiresAt as number) * 1000 && token.refreshToken) {
+      // Check if access token is expired (or expiring in <5 minutes) and refresh proactively
+      const isExpiringSoon = token.expiresAt && Date.now() >= ((token.expiresAt as number) * 1000 - 5 * 60 * 1000);
+      if (isExpiringSoon && token.refreshToken) {
         try {
           const res = await fetch('https://oauth2.googleapis.com/token', {
             method: 'POST',
@@ -117,6 +123,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         (session.user as any).role = token.role;
         (session.user as any).id = token.id;
         (session.user as any).accessToken = token.accessToken;
+        (session.user as any).expiresAt = token.expiresAt;
         (session.user as any).scope = token.scope;
       }
       return session;

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@/lib/auth';
 import prisma from '@/lib/prisma';
+import { getSetting } from '@/lib/settings';
 import {
   addPickyProduct,
   updatePickyProduct,
@@ -11,16 +13,19 @@ import {
 
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth();
+    if ((session?.user as any)?.role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
+    }
+
     const body = await req.json();
     const { action, payload, identifier, productId, changedFields } = body;
 
     const envUrls = {
-      searchUrl: process.env.PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL || null,
-      addUrl: process.env.PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL || null,
-      updateUrl: process.env.PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL || null,
-      deleteUrl: process.env.PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL || null,
-      searchCallbackUrl: process.env.PICKY_ASSIST_SEARCH_CALLBACK_URL || null,
-      deleteCallbackUrl: process.env.PICKY_ASSIST_DELETE_CALLBACK_URL || null,
+      searchUrl: (await getSetting('PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL)) || null,
+      addUrl: (await getSetting('PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL)) || null,
+      updateUrl: (await getSetting('PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL)) || null,
+      searchCallbackUrl: (await getSetting('PICKY_ASSIST_SEARCH_CALLBACK_URL', process.env.PICKY_ASSIST_SEARCH_CALLBACK_URL)) || null,
     };
 
     if (action === 'get_env') {

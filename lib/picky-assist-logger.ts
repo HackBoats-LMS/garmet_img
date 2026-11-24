@@ -62,15 +62,16 @@ export function saveRequest(req: RecordedRequest) {
   if (inMemoryStore.length > 50) {
     inMemoryStore = inMemoryStore.slice(0, 50);
   }
-  try {
-    const dir = path.dirname(LOG_FILE);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(LOG_FILE, JSON.stringify(inMemoryStore, null, 2), 'utf-8');
-  } catch (err) {
-    // Silently continue with in-memory store in read-only environments
-  }
+
+  // Non-blocking asynchronous file persistence to prevent event loop freeze on webhooks
+  const dataToFlush = JSON.stringify(inMemoryStore, null, 2);
+  const dir = path.dirname(LOG_FILE);
+  fs.promises.mkdir(dir, { recursive: true })
+    .then(() => fs.promises.writeFile(LOG_FILE, dataToFlush, 'utf-8'))
+    .catch((err) => {
+      // In-memory store continues safely in read-only or restricted environments
+      console.warn('[Picky Assist Logger] Async disk log note:', err?.message || err);
+    });
 }
 
 export function updateRecordedRequest(id: string, updates: Partial<RecordedRequest>) {

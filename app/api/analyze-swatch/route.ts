@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { analyzeSwatchBuffer } from '@/lib/swatchAnalyzer';
+import { getSetting } from '@/lib/settings';
+import { auth } from '@/lib/auth';
+import { isSafeExternalUrl } from '@/lib/security';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -12,6 +15,11 @@ export const runtime = 'nodejs';
  */
 export async function POST(req: NextRequest) {
   try {
+    const session = await auth().catch(() => null);
+    if (!session?.user) {
+      return NextResponse.json({ success: false, error: 'Unauthorized: Session required' }, { status: 401 });
+    }
+
     const body = await req.json();
     const { imageBase64, imageUrl, provider = 'kie', allowLocalFallback = false, slotType = 'body' } = body;
     const isPalluSlot = slotType === 'pallu' || slotType === 'anchal';
@@ -39,6 +47,9 @@ export async function POST(req: NextRequest) {
           buffer = Buffer.from(base64String, 'base64');
         }
       } else if (imageUrl.startsWith('http')) {
+        if (!isSafeExternalUrl(imageUrl)) {
+          return NextResponse.json({ success: false, error: 'Disallowed image URL destination' }, { status: 400 });
+        }
         const imgRes = await fetch(imageUrl);
         const arrayBuf = await imgRes.arrayBuffer();
         buffer = Buffer.from(arrayBuf);
@@ -51,10 +62,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'No valid image data provided' }, { status: 400 });
     }
 
-    const rawKieKey = (process.env.KIE_API_KEY || process.env.PIAPI_API_KEY || '').trim();
+    const dynamicKieKey = await getSetting('KIE_API_KEY', process.env.KIE_API_KEY);
+    const rawKieKey = (dynamicKieKey || process.env.PIAPI_API_KEY || '').trim();
     const kieApiKey = rawKieKey.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();
 
-    const rawGoogleKey = process.env.GEMINI_API_KEY || '';
+    const rawGoogleKey = (await getSetting('GEMINI_API_KEY', process.env.GEMINI_API_KEY)) || '';
     const googleGeminiKey = rawGoogleKey.trim().replace(/^["']|["']$/g, '');
 
     const palluVisionPrompt = `You are a world-class Indian textile, handloom, and saree expert AI analyzer.
@@ -214,7 +226,9 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
         if (direct?.body_motifs || direct?.detected_buttis || direct?.fabric_background || direct?.motifs) {
           return direct;
         }
-      } catch (e) {}
+      } catch {
+        // Direct JSON parse failed, proceed to SSE stream parsing
+      }
 
       // Try SSE stream parsing (lines starting with 'data:')
       let sseCombined = '';
@@ -228,7 +242,9 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
               const chunkObj = JSON.parse(chunkStr);
               const partText = chunkObj?.candidates?.[0]?.content?.parts?.[0]?.text;
               if (partText) sseCombined += partText;
-            } catch (e) {}
+            } catch {
+              // Ignore malformed intermediate chunk in SSE stream
+            }
           }
         }
       }
@@ -248,7 +264,9 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
       if (match) {
         try {
           return JSON.parse(match[0]);
-        } catch (e) {}
+        } catch (parseErr) {
+          console.warn('[analyze-swatch] Fallback regex JSON parse failed:', parseErr);
+        }
       }
       return null;
     };
@@ -648,7 +666,9 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
           let directObj: any = null;
           try {
             directObj = JSON.parse(resText);
-          } catch (e) {}
+          } catch {
+            // Non-JSON response from Kie.ai (e.g. gateway HTML error)
+          }
 
           // Handle Kie.ai internal error code wrapper (e.g. code: 500 Server exception)
           if (directObj && typeof directObj.code === 'number' && directObj.code !== 200) {
@@ -760,7 +780,9 @@ Return ONLY a raw JSON object (no markdown, no conversational text) matching thi
       let geminiData: any = null;
       try {
         geminiData = JSON.parse(resText);
-      } catch (e) {}
+      } catch {
+        // Response is non-JSON text or stream
+      }
 
       if (!geminiRes.ok) {
         const errMsg = geminiData?.error?.message || `HTTP ${geminiRes.status} ${geminiRes.statusText}`;

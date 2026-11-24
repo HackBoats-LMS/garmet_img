@@ -112,7 +112,7 @@ export function MultiPoseAlbumGrid({
                       <a
                         href={currentImg}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         className="p-2 rounded-xl bg-white hover:bg-slate-100 text-slate-800 shadow-md transition-transform hover:scale-105"
                         title="View Full Size Image"
                       >

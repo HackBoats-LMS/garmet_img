@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parsePickyAssistWebhookBody, processPickyAssistOrder } from '@/lib/picky-assist-orders';
 import { saveRequest, RecordedRequest } from '@/lib/picky-assist-logger';
+import { safeTimingCompare } from '@/lib/security';
+import { getSetting } from '@/lib/settings';
 
 export async function POST(req: NextRequest) {
   return handleWebhook(req);
@@ -21,17 +23,17 @@ async function handleWebhook(req: NextRequest) {
   const url = req.nextUrl.pathname + req.nextUrl.search;
   const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1';
 
-  // Security: Verify token only if configured in environment
-  const expectedToken = process.env.PICKY_ASSIST_API_TOKEN;
+  // Security: Verify token only if configured in environment or database
+  const expectedToken = await getSetting('PICKY_ASSIST_API_TOKEN', process.env.PICKY_ASSIST_API_TOKEN);
   if (expectedToken) {
     const authHeader = req.headers.get('authorization') || '';
     const apiKeyHeader = req.headers.get('x-api-key') || '';
     const tokenParam = req.nextUrl.searchParams.get('token') || '';
     const isValid =
-      authHeader === `Bearer ${expectedToken}` ||
-      authHeader === expectedToken ||
-      apiKeyHeader === expectedToken ||
-      tokenParam === expectedToken;
+      safeTimingCompare(authHeader, `Bearer ${expectedToken}`) ||
+      safeTimingCompare(authHeader, expectedToken) ||
+      safeTimingCompare(apiKeyHeader, expectedToken) ||
+      safeTimingCompare(tokenParam, expectedToken);
 
     if (!isValid) {
       console.warn(`[Picky Assist Webhook] Unauthorized attempt from IP: ${ip}`);

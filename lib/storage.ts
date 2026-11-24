@@ -1,4 +1,5 @@
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { isSafeExternalUrl } from '@/lib/security';
 
 // 1. Bucket for Generated AI Photoshoots & Customer Uploads
 export const R2_GENERATED_BUCKET = process.env.R2_GENERATED_BUCKET || process.env.R2_BUCKET_NAME || 'generatedimages';
@@ -89,6 +90,9 @@ async function getImageBuffer(fileInput: string): Promise<{ buffer: Buffer; mime
 
   // If it's an HTTP URL, fetch it with retry and validation
   if (fileInput.startsWith('http')) {
+    if (!isSafeExternalUrl(fileInput)) {
+      throw new Error('Invalid or disallowed image URL destination (SSRF protection)');
+    }
     let lastError: Error | null = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {

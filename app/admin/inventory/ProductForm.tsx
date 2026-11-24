@@ -15,9 +15,15 @@ import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
 import { Input } from '@/app/components/ui/Input';
 import { Textarea } from '@/app/components/ui/Input';
+import dynamic from 'next/dynamic';
 import { useGooglePhotosPicker } from '@/app/hooks/useGooglePhotosPicker';
-import { CollageCreator, CollageInputImage } from '@/app/components/CollageCreator';
+import type { CollageInputImage } from '@/app/components/CollageCreator';
 import { normalizeSizeInventory, SizeInventoryItem, sumSizeInventory } from '@/lib/size-inventory';
+
+const CollageCreator = dynamic(
+  () => import('@/app/components/CollageCreator').then((mod) => mod.CollageCreator),
+  { ssr: false }
+);
 
 // ─── CONSTANTS ───
 
@@ -1986,7 +1992,7 @@ export function ProductForm({ productId }: Props) {
                                     {entry.status.replace('_', ' ')}
                                   </span>
                                   {entry.id !== productId && (
-                                    <a href={`/admin/inventory/${entry.id}`} className="text-accent hover:underline" target="_blank">Edit →</a>
+                                    <a href={`/admin/inventory/${entry.id}`} className="text-accent hover:underline" target="_blank" rel="noopener noreferrer">Edit →</a>
                                   )}
                                 </div>
                               </div>
@@ -2335,7 +2341,7 @@ export function ProductForm({ productId }: Props) {
                       <a
                         href={`/admin/generate?productId=${productId}`}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold shrink-0 transition-colors inline-flex items-center gap-1.5 shadow-2xs"
                       >
                         <ImageIcon className="w-3.5 h-3.5" />
@@ -3469,7 +3475,7 @@ export function ProductForm({ productId }: Props) {
                   )}
                   <a href={`/admin/generate?productId=${productId}`}
                     className="text-[10px] px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold hover:bg-accent/90 transition-all flex items-center gap-1 whitespace-nowrap"
-                    target="_blank" rel="noreferrer">
+                    target="_blank" rel="noopener noreferrer">
                     <ImageIcon className="w-3 h-3 shrink-0" /> Generate Photos
                   </a>
                 </div>
@@ -3489,7 +3495,7 @@ export function ProductForm({ productId }: Props) {
                   <a
                     href={googlePhotosSuccess.albumUrl}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                     className="px-2 py-1 rounded bg-emerald-600 text-white font-bold text-[10px] hover:bg-emerald-700 transition-colors whitespace-nowrap flex items-center gap-1"
                   >
                     <span>Open Album</span>
@@ -3769,7 +3775,7 @@ export function ProductForm({ productId }: Props) {
                 href={cataloguePhotosList[lightboxIndex].imageUrl}
                 download={`catalogue_photo_${lightboxIndex + 1}.jpg`}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
                 title="Download original photo"
               >
@@ -3780,7 +3786,7 @@ export function ProductForm({ productId }: Props) {
               <a
                 href={cataloguePhotosList[lightboxIndex].imageUrl}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
                 title="Open photo URL in new tab"
               >

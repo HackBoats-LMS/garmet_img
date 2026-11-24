@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
+import { isSafeGooglePhotosUrl } from '@/lib/security';
 
 const PICKER_API_BASE = 'https://photospicker.googleapis.com/v1';
 
@@ -7,8 +8,9 @@ const PICKER_API_BASE = 'https://photospicker.googleapis.com/v1';
 export async function POST(req: NextRequest) {
   try {
     const session = await auth().catch(() => null);
-    const body = await req.json();
-    const token = body.token || (session?.user as any)?.accessToken;
+    const body = await req.json().catch(() => ({}));
+    const authHeaderToken = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
+    const token = authHeaderToken || body.token || (session?.user as any)?.accessToken;
 
     if (!token) {
       return NextResponse.json({ error: 'Google OAuth access token is required' }, { status: 400 });
@@ -56,7 +58,8 @@ export async function GET(req: NextRequest) {
     const session = await auth().catch(() => null);
     const { searchParams } = req.nextUrl;
     const sessionId = searchParams.get('sessionId');
-    const token = searchParams.get('token') || (session?.user as any)?.accessToken;
+    const authHeaderToken = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
+    const token = authHeaderToken || (session?.user as any)?.accessToken || searchParams.get('token');
 
     if (!sessionId || !token) {
       return NextResponse.json({ error: 'sessionId and token are required' }, { status: 400 });
@@ -135,6 +138,10 @@ export async function GET(req: NextRequest) {
 
       // Helper to fetch with Bearer token, falling back to direct fetch if rejected
       const fetchBuffer = async (url: string) => {
+        if (!isSafeGooglePhotosUrl(url)) {
+          console.warn('[Google Photos] Blocked non-Google or unsafe URL:', url);
+          return null;
+        }
         try {
           let res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
           if (res.ok) return res;

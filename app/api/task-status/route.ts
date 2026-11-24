@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { uploadGeneratedAsset, isStorageConfigured } from '@/lib/storage';
+import { auth } from '@/lib/auth';
+import { safeTimingCompare } from '@/lib/security';
+import { getSetting } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -55,6 +58,7 @@ async function syncCompletedImageToProduct(
 
 export async function GET(req: NextRequest) {
   try {
+    const session = await auth().catch(() => null);
     const { searchParams } = new URL(req.url);
     const taskId = searchParams.get('taskId');
     const customKey = searchParams.get('apiKey');
@@ -64,6 +68,14 @@ export async function GET(req: NextRequest) {
     const productId = searchParams.get('productId') || null;
     const poseId = searchParams.get('poseId') || taskId || 'pose';
 
+    const apiKey = req.headers.get('x-api-key') || req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
+    const syncApiKey = await getSetting('SYNC_API_KEY', process.env.SYNC_API_KEY);
+    const hasInternalKey = Boolean(syncApiKey && apiKey && safeTimingCompare(apiKey, syncApiKey));
+
+    if (!session?.user && !hasInternalKey && !customKey) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     if (!taskId) {
       return NextResponse.json({ error: 'taskId is required' }, { status: 400 });
     }
@@ -71,11 +83,12 @@ export async function GET(req: NextRequest) {
     // Determine configured engine from DB
     let configuredEngine = 'Qubico/flux1-schnell';
     try {
-      const rows: any[] = await prisma.$queryRawUnsafe(`
-        SELECT "selectedEngine" FROM "StudioConfig" WHERE "id" = 'global_studio_config' LIMIT 1;
-      `);
-      if (rows?.[0]?.selectedEngine) {
-        configuredEngine = rows[0].selectedEngine;
+      const config = await prisma.studioConfig.findUnique({
+        where: { id: 'global_studio_config' },
+        select: { selectedEngine: true },
+      });
+      if (config?.selectedEngine) {
+        configuredEngine = config.selectedEngine;
       }
     } catch (e) {
       console.warn('[task-status] DB config note:', e);
@@ -90,7 +103,8 @@ export async function GET(req: NextRequest) {
     // Check Kie.ai if explicitly requested
     // ─────────────────────────────────────────────────────────────
     if (explicitProvider === 'kie-ai') {
-      const kieApiKey = (customKey || process.env.KIE_API_KEY || '').trim();
+      const dynamicKie = await getSetting('KIE_API_KEY', process.env.KIE_API_KEY);
+      const kieApiKey = (customKey || dynamicKie || '').trim();
       
       if (!kieApiKey) {
         return NextResponse.json({ error: 'Kie.ai API key not configured' }, { status: 401 });
@@ -147,7 +161,9 @@ export async function GET(req: NextRequest) {
             if (parsedRj?.resultUrls?.[0]) {
               finalImageUrl = parsedRj.resultUrls[0];
             }
-          } catch {}
+          } catch (rjErr) {
+            console.warn('[task-status] Could not parse resultJson payload:', rjErr);
+          }
         }
 
         if (!finalImageUrl) {
@@ -262,7 +278,8 @@ export async function GET(req: NextRequest) {
     // Check Segmind v2 API if Segmind is primary or explicitly requested
     // ─────────────────────────────────────────────────────────────
     if (isSegmindPrimary || explicitProvider === 'segmind') {
-      const rawSegmindKey = (customKey || process.env.SEGMIND_API_KEY || '').trim();
+      const dynamicSegmind = await getSetting('SEGMIND_API_KEY', process.env.SEGMIND_API_KEY);
+      const rawSegmindKey = (customKey || dynamicSegmind || '').trim();
       const segmindApiKey = rawSegmindKey.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();
 
       if (segmindApiKey) {
@@ -372,7 +389,8 @@ export async function GET(req: NextRequest) {
     // ─────────────────────────────────────────────────────────────
     // Check PiAPI if PiAPI is primary or fallback
     // ─────────────────────────────────────────────────────────────
-    const rawPiapi = (customKey || process.env.PIAPI_API_KEY || process.env.PIAPI_KEY || '').trim();
+    const dynamicPiapi = await getSetting('PIAPI_API_KEY', process.env.PIAPI_API_KEY);
+    const rawPiapi = (customKey || dynamicPiapi || process.env.PIAPI_KEY || '').trim();
     const piapiKey = rawPiapi.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();
 
     if (!piapiKey) {

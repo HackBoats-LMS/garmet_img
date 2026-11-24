@@ -1,14 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import prisma from '@/lib/prisma';
+import { checkRateLimit } from '@/lib/security';
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1';
+    const rateCheck = checkRateLimit('api:auth:signup', ip, { windowMs: 15 * 60 * 1000, max: 15 });
+    if (!rateCheck.allowed) {
+      return NextResponse.json({ error: 'Too many signup attempts. Please try again later.' }, { status: 429 });
+    }
+
     const { name, email, phone, password } = await req.json();
 
-    if (!password || password.length < 6) {
+    if (!password || typeof password !== 'string' || password.length < 6) {
       return NextResponse.json(
         { error: 'Password must be at least 6 characters' },
+        { status: 400 }
+      );
+    }
+
+    if (password.length > 128) {
+      return NextResponse.json(
+        { error: 'Password is too long (maximum 128 characters)' },
         { status: 400 }
       );
     }
@@ -20,9 +34,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const cleanEmail = email && typeof email === 'string' ? email.trim().toLowerCase() : undefined;
+    if (cleanEmail) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(cleanEmail)) {
+        return NextResponse.json({ error: 'Invalid email address format' }, { status: 400 });
+      }
+    }
+
+    const cleanPhone = phone && typeof phone === 'string' ? phone.trim() : undefined;
+
     // Check for existing user
-    if (email) {
-      const existing = await prisma.user.findUnique({ where: { email } });
+    if (cleanEmail) {
+      const existing = await prisma.user.findUnique({ where: { email: cleanEmail } });
       if (existing) {
         return NextResponse.json(
           { error: 'An account with this email already exists' },
@@ -31,8 +55,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (phone) {
-      const existing = await prisma.user.findUnique({ where: { phone } });
+    if (cleanPhone) {
+      const existing = await prisma.user.findUnique({ where: { phone: cleanPhone } });
       if (existing) {
         return NextResponse.json(
           { error: 'An account with this phone number already exists' },
@@ -45,9 +69,9 @@ export async function POST(req: NextRequest) {
 
     const user = await prisma.user.create({
       data: {
-        name: name || undefined,
-        email: email || undefined,
-        phone: phone || undefined,
+        name: name ? String(name).trim() : undefined,
+        email: cleanEmail,
+        phone: cleanPhone,
         passwordHash,
         role: 'customer',
       },

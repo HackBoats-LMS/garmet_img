@@ -1,0 +1,27 @@
+# Git
+.git
+.gitignore
+
+# Environment files with secrets
+.env*.local
+.env
+!.env.example
+
+# Dependencies and caches
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Next.js build output and cache
+.next
+out
+
+# Temporary and audit artifacts
+scratch
+tests
+vitest.config.ts
+*.log
+.DS_Store
+Thumbs.db

@@ -43,7 +43,9 @@ export function useGooglePhotosPicker({
     if (popupRef.current && !popupRef.current.closed) {
       try {
         popupRef.current.close();
-      } catch (e) {}
+      } catch {
+        // Popup window was already closed or access restricted
+      }
     }
     cleanup();
   }, [cleanup]);
@@ -68,10 +70,12 @@ export function useGooglePhotosPicker({
 
   // Helper to retrieve an existing, active token
   const getExistingToken = useCallback((): string | null => {
-    // 1. Check if NextAuth session token was granted photospicker scope
+    // 1. Check if NextAuth session token was granted photospicker scope and is still valid
     const sessionScope = ((session?.user as any)?.scope as string) || '';
     const sessionToken = (session?.user as any)?.accessToken as string | undefined;
-    if (sessionToken && sessionScope.includes('photospicker.mediaitems.readonly')) {
+    const expiresAt = (session?.user as any)?.expiresAt as number | undefined;
+    const isTokenValid = sessionToken && (!expiresAt || Date.now() < (expiresAt * 1000 - 60 * 1000));
+    if (isTokenValid && sessionScope.includes('photospicker.mediaitems.readonly')) {
       return sessionToken;
     }
 
@@ -83,7 +87,9 @@ export function useGooglePhotosPicker({
         if (cached && exp && Date.now() < Number(exp)) {
           return cached;
         }
-      } catch (e) {}
+      } catch {
+        // sessionStorage disabled or restricted
+      }
     }
 
     return null;
@@ -125,7 +131,9 @@ export function useGooglePhotosPicker({
           targetPopup.location.href = pickerUrl;
           try {
             targetPopup.focus();
-          } catch (e) {}
+          } catch {
+            // Popup window cross-origin focus restriction
+          }
         } else {
           const newWin = window.open(
             pickerUrl,
@@ -316,7 +324,9 @@ export function useGooglePhotosPicker({
         try {
           sessionStorage.setItem('gphotos_token', accessToken);
           sessionStorage.setItem('gphotos_token_exp', String(Date.now() + 50 * 60 * 1000));
-        } catch (e) {}
+        } catch {
+          // sessionStorage quota exceeded or storage disabled
+        }
 
         // Since user just interacted with the GIS popup, show the direct Open button
         // so the subsequent window.open is a fresh, unblockable user gesture!
