@@ -112,6 +112,33 @@ export const KNOWN_SETTINGS: SettingDefinition[] = [
     isUrl: true,
     placeholder: 'https://pickyassist.com/app/api/v2/push?token=...',
   },
+  {
+    key: 'PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL',
+    label: 'Picky Assist Delete Product Webhook URL',
+    description: 'Outbound webhook URL to delete garments or size variants from Picky Assist catalog.',
+    category: 'picky_assist',
+    isSecret: false,
+    isUrl: true,
+    placeholder: 'https://app.pickyassist.com/url/...',
+  },
+  {
+    key: 'PICKY_ASSIST_SEARCH_CALLBACK_URL',
+    label: 'Picky Assist Search Callback URL',
+    description: 'Inbound webhook endpoint on your domain where Picky Assist posts async search results.',
+    category: 'picky_assist',
+    isSecret: false,
+    isUrl: true,
+    placeholder: 'https://rgjdass.impactsync27.com/api/webhooks/picky-assist/search-response',
+  },
+  {
+    key: 'PICKY_ASSIST_DELETE_CALLBACK_URL',
+    label: 'Picky Assist Delete Callback URL',
+    description: 'Inbound webhook endpoint on your domain where Picky Assist posts async deletion confirmations.',
+    category: 'picky_assist',
+    isSecret: false,
+    isUrl: true,
+    placeholder: 'https://rgjdass.impactsync27.com/api/webhooks/picky-assist/delete-response',
+  },
 
   // ERP & Integrations
   {
