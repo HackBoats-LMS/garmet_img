@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutGrid, Layers, Users, Cpu, LogOut, ChevronRight, Package, Tag, CalendarDays, ShieldCheck, RefreshCw } from 'lucide-react';
+import { LayoutGrid, Layers, Users, Cpu, LogOut, ChevronRight, Package, Tag, CalendarDays, ShieldCheck, RefreshCw, KeyRound } from 'lucide-react';
 import { signOut } from 'next-auth/react';
 
 const NAV_ITEMS = [
@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { href: '/admin/models', label: 'Model Personas', icon: Users },
   { href: '/admin/admins', label: 'Admins', icon: ShieldCheck },
   { href: '/admin/picky-test', label: 'Picky Assist Tester', icon: RefreshCw },
+  { href: '/admin/settings', label: 'API Keys & Secrets', icon: KeyRound },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {

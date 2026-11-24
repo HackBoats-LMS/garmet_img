@@ -2,6 +2,7 @@
 // lib/picky-assist-push.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { waitForSearchResponse } from '@/lib/picky-assist-search-store';
+import { getSetting } from '@/lib/settings';
 
 export interface PickyAssistProductPayload {
   stock_code: string;
@@ -441,7 +442,7 @@ export function formatProductPayload(product: any, variantSize?: string): Record
 }
 
 export async function searchPickyProduct(identifier: string): Promise<{ exists: boolean; product?: any; raw?: any }> {
-  const webhookUrl = process.env.PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL;
+  const webhookUrl = await getSetting('PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL);
   if (!webhookUrl) {
     console.warn('[Picky Assist] PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL is not configured');
     return { exists: false };
@@ -559,7 +560,7 @@ export async function addPickyProduct(
   product: any,
   options?: { pushVariants?: boolean }
 ): Promise<{ success: boolean; status?: number; data?: any; error?: string; variantsPushed?: number }> {
-  const webhookUrl = process.env.PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL;
+  const webhookUrl = await getSetting('PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL);
   if (!webhookUrl) {
     return { success: false, error: 'PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL is not configured' };
   }
@@ -655,7 +656,7 @@ export async function updatePickyProduct(
   variantsUpdated?: number;
   results?: Array<{ size: string; variantCode: string; success: boolean; status: number; data?: any; error?: string }>;
 }> {
-  const webhookUrl = process.env.PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL;
+  const webhookUrl = await getSetting('PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL);
   if (!webhookUrl) {
     return { success: false, error: 'PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL is not configured' };
   }

@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import { uploadGeneratedAsset, isStorageConfigured } from '@/lib/storage';
 import { auth } from '@/lib/auth';
 import { safeTimingCompare } from '@/lib/security';
+import { getSetting } from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -68,7 +69,8 @@ export async function GET(req: NextRequest) {
     const poseId = searchParams.get('poseId') || taskId || 'pose';
 
     const apiKey = req.headers.get('x-api-key') || req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-    const hasInternalKey = Boolean(process.env.SYNC_API_KEY && apiKey && safeTimingCompare(apiKey, process.env.SYNC_API_KEY));
+    const syncApiKey = await getSetting('SYNC_API_KEY', process.env.SYNC_API_KEY);
+    const hasInternalKey = Boolean(syncApiKey && apiKey && safeTimingCompare(apiKey, syncApiKey));
 
     if (!session?.user && !hasInternalKey && !customKey) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -101,7 +103,8 @@ export async function GET(req: NextRequest) {
     // Check Kie.ai if explicitly requested
     // ─────────────────────────────────────────────────────────────
     if (explicitProvider === 'kie-ai') {
-      const kieApiKey = (customKey || process.env.KIE_API_KEY || '').trim();
+      const dynamicKie = await getSetting('KIE_API_KEY', process.env.KIE_API_KEY);
+      const kieApiKey = (customKey || dynamicKie || '').trim();
       
       if (!kieApiKey) {
         return NextResponse.json({ error: 'Kie.ai API key not configured' }, { status: 401 });
@@ -275,7 +278,8 @@ export async function GET(req: NextRequest) {
     // Check Segmind v2 API if Segmind is primary or explicitly requested
     // ─────────────────────────────────────────────────────────────
     if (isSegmindPrimary || explicitProvider === 'segmind') {
-      const rawSegmindKey = (customKey || process.env.SEGMIND_API_KEY || '').trim();
+      const dynamicSegmind = await getSetting('SEGMIND_API_KEY', process.env.SEGMIND_API_KEY);
+      const rawSegmindKey = (customKey || dynamicSegmind || '').trim();
       const segmindApiKey = rawSegmindKey.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();
 
       if (segmindApiKey) {
@@ -385,7 +389,8 @@ export async function GET(req: NextRequest) {
     // ─────────────────────────────────────────────────────────────
     // Check PiAPI if PiAPI is primary or fallback
     // ─────────────────────────────────────────────────────────────
-    const rawPiapi = (customKey || process.env.PIAPI_API_KEY || process.env.PIAPI_KEY || '').trim();
+    const dynamicPiapi = await getSetting('PIAPI_API_KEY', process.env.PIAPI_API_KEY);
+    const rawPiapi = (customKey || dynamicPiapi || process.env.PIAPI_KEY || '').trim();
     const piapiKey = rawPiapi.replace(/^Bearer\s+/i, '').replace(/^["']|["']$/g, '').trim();
 
     if (!piapiKey) {

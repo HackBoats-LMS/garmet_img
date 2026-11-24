@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { safeTimingCompare } from '@/lib/security';
+import { getSetting } from '@/lib/settings';
 
 // Auth: header-based API key check (x-api-key or Authorization Bearer)
-function checkApiKey(req: NextRequest): boolean {
+async function checkApiKey(req: NextRequest): Promise<boolean> {
+  const syncApiKey = await getSetting('SYNC_API_KEY', process.env.SYNC_API_KEY);
   const key = req.headers.get('x-api-key') || req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  return Boolean(key && process.env.SYNC_API_KEY && safeTimingCompare(key, process.env.SYNC_API_KEY));
+  return Boolean(key && syncApiKey && safeTimingCompare(key, syncApiKey));
 }
 
 /**
@@ -17,7 +19,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ code: string }> }
 ) {
-  if (!checkApiKey(req)) {
+  if (!(await checkApiKey(req))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

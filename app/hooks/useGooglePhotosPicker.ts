@@ -70,10 +70,12 @@ export function useGooglePhotosPicker({
 
   // Helper to retrieve an existing, active token
   const getExistingToken = useCallback((): string | null => {
-    // 1. Check if NextAuth session token was granted photospicker scope
+    // 1. Check if NextAuth session token was granted photospicker scope and is still valid
     const sessionScope = ((session?.user as any)?.scope as string) || '';
     const sessionToken = (session?.user as any)?.accessToken as string | undefined;
-    if (sessionToken && sessionScope.includes('photospicker.mediaitems.readonly')) {
+    const expiresAt = (session?.user as any)?.expiresAt as number | undefined;
+    const isTokenValid = sessionToken && (!expiresAt || Date.now() < (expiresAt * 1000 - 60 * 1000));
+    if (isTokenValid && sessionScope.includes('photospicker.mediaitems.readonly')) {
       return sessionToken;
     }
 

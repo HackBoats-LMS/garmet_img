@@ -2,15 +2,16 @@ import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { addOrUpdateSizeStock, deductSizeStock } from '@/lib/size-inventory';
 import { safeTimingCompare } from '@/lib/security';
+import { getSetting } from '@/lib/settings';
 
 export async function POST(request: Request) {
   try {
     // 1. Security Check (Bearer Token that PACT sends to us)
     const authHeader = request.headers.get('authorization');
-    const expectedToken = process.env.PACT_WEBHOOK_SECRET || 'pact-secret-token';
+    const expectedToken = await getSetting('PACT_WEBHOOK_SECRET', process.env.PACT_WEBHOOK_SECRET);
     
     const incomingToken = authHeader?.replace(/^Bearer\s+/i, '');
-    if (!incomingToken || !safeTimingCompare(incomingToken, expectedToken)) {
+    if (!expectedToken || !incomingToken || !safeTimingCompare(incomingToken, expectedToken)) {
       console.warn('[PACT Webhook] Unauthorized attempt.');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }

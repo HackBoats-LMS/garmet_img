@@ -42,9 +42,11 @@ export function useGooglePicker(onFileSelect: (file: File, previewUrl: string) =
       return;
     }
 
-    // 1. Direct use from Google login session
+    // 1. Direct use from Google login session if active and not expired
     const sessionToken = (session?.user as any)?.accessToken;
-    if (sessionToken) {
+    const expiresAt = (session?.user as any)?.expiresAt as number | undefined;
+    const isTokenValid = sessionToken && (!expiresAt || Date.now() < (expiresAt * 1000 - 60 * 1000));
+    if (isTokenValid) {
       createPicker(sessionToken);
       return;
     }
@@ -52,7 +54,7 @@ export function useGooglePicker(onFileSelect: (file: File, previewUrl: string) =
     // 2. Fallback to GIS
     const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
       client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/drive.readonly',
+      scope: 'https://www.googleapis.com/auth/drive.file',
       callback: (response: any) => {
         if (response.error !== undefined) {
           throw response;

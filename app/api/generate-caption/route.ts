@@ -3,8 +3,7 @@ import { GoogleGenAI } from '@google/genai';
 import { StockItemData } from '@/app/types/stock';
 import { auth } from '@/lib/auth';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+import { getSetting } from '@/lib/settings';
 
 export async function POST(req: NextRequest) {
   try {
@@ -19,9 +18,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Too many caption requests. Please slow down.' }, { status: 429 });
     }
 
-    if (!process.env.GEMINI_API_KEY) {
+    const apiKey = await getSetting('GEMINI_API_KEY', process.env.GEMINI_API_KEY);
+    if (!apiKey) {
       return NextResponse.json({ error: 'GEMINI_API_KEY is not configured' }, { status: 500 });
     }
+
+    const ai = new GoogleGenAI({ apiKey });
 
     const { stockItem }: { stockItem: StockItemData } = await req.json();
 

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import { StockItemData, StockPoseData } from '@/app/types/stock';
+import { safeTimingCompare } from '@/lib/security';
+import { getSetting } from '@/lib/settings';
 
 // In-memory cache fallback in case PostgreSQL is initializing
 const inMemoryStockStore: Record<string, StockItemData> = {};
@@ -10,7 +12,8 @@ export async function GET(req: NextRequest) {
   try {
     const session = await auth().catch(() => null);
     const apiKey = req.headers.get('x-api-key') || req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-    const hasInternalKey = Boolean(process.env.SYNC_API_KEY && apiKey && apiKey === process.env.SYNC_API_KEY);
+    const syncApiKey = await getSetting('SYNC_API_KEY', process.env.SYNC_API_KEY);
+    const hasInternalKey = Boolean(syncApiKey && apiKey && safeTimingCompare(apiKey, syncApiKey));
 
     if (!session?.user && !hasInternalKey) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

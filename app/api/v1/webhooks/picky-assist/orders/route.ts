@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma';
 import { syncOrderToPactERP } from '@/lib/pact-sync';
 import { findSizeByStockCode, deductSizeStock } from '@/lib/size-inventory';
 import { safeTimingCompare } from '@/lib/security';
+import { getSetting } from '@/lib/settings';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/v1/webhooks/picky-assist/orders
@@ -60,7 +61,7 @@ export async function POST(request: Request) {
 
   // 2. Auth — Bearer token
   const authHeader = request.headers.get('authorization') || '';
-  const expectedToken = process.env.PICKY_ASSIST_API_TOKEN;
+  const expectedToken = await getSetting('PICKY_ASSIST_API_TOKEN', process.env.PICKY_ASSIST_API_TOKEN);
   if (!expectedToken || !safeTimingCompare(authHeader, `Bearer ${expectedToken}`)) {
     console.warn(`[Picky Assist Orders] Unauthorized attempt from IP: ${ip}`);
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
