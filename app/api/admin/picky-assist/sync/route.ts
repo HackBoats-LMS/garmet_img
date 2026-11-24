@@ -70,6 +70,12 @@ async function handleSync(productId?: string | null, stockCode?: string | null, 
 
   if (effectiveAction === 'delete') {
     const res = await deletePickyProduct(product);
+    if (res.success && product.id) {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { syncedAt: null },
+      }).catch(err => console.warn('Failed to clear syncedAt:', err));
+    }
     return NextResponse.json({
       success: res.success,
       actionTaken: 'deleted',

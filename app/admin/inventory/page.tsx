@@ -6,7 +6,7 @@ import {
   Plus, Search, Filter, Package, RefreshCw, Archive, Camera,
   ChevronUp, ChevronDown, AlertCircle, CheckCircle2,
   XCircle, Layers, Edit2, MoreHorizontal, Tag,
-  Upload, FileSpreadsheet, Play, Pause, Square, Sparkles, Check, X, Globe, ShoppingBag, Trash
+  Upload, FileSpreadsheet, Play, Pause, Square, Sparkles, Check, X, Globe, ShoppingBag, Trash, Trash2
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
@@ -350,6 +350,18 @@ export default function AdminInventoryPage() {
   const abortSyncRef = useRef(false);
   const pausedSyncRef = useRef(false);
 
+  // Picky Assist Bulk Delete All Modal State
+  const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
+  const [deleteFilterMode, setDeleteFilterMode] = useState<'all' | 'syncedOnly'>('all');
+  const [deleteConfirmChecked, setDeleteConfirmChecked] = useState(false);
+  const [deleteQueueActive, setDeleteQueueActive] = useState(false);
+  const [deleteQueuePaused, setDeleteQueuePaused] = useState(false);
+  const [deleteQueueProgress, setDeleteQueueProgress] = useState({ current: 0, total: 0 });
+  const [deleteQueueStats, setDeleteQueueStats] = useState({ deleted: 0, failed: 0 });
+  const [deleteLogs, setDeleteLogs] = useState<Array<{ id: string; time: string; text: string; type: 'deleted' | 'failed' | 'info' }>>([]);
+  const abortDeleteRef = useRef(false);
+  const pausedDeleteRef = useRef(false);
+
   const fetchSyncCandidates = async () => {
     setSyncCandidatesLoading(true);
     try {
@@ -589,6 +601,141 @@ export default function AdminInventoryPage() {
     setSyncQueuePaused(false);
   };
 
+  const openDeleteAllModal = () => {
+    setShowDeleteAllModal(true);
+    setDeleteConfirmChecked(false);
+    fetchSyncCandidates();
+  };
+
+  const startDeleteQueue = async () => {
+    if (!deleteConfirmChecked) {
+      alert('Please check the confirmation box to proceed.');
+      return;
+    }
+
+    let itemsToProcess = [...syncCandidateList];
+    if (deleteFilterMode === 'syncedOnly') {
+      itemsToProcess = syncCandidateList.filter((p) => p.syncedAt);
+    }
+
+    if (itemsToProcess.length === 0) {
+      alert('No products match the selected delete filter.');
+      return;
+    }
+
+    abortDeleteRef.current = false;
+    pausedDeleteRef.current = false;
+    setDeleteQueueActive(true);
+    setDeleteQueuePaused(false);
+    setDeleteQueueProgress({ current: 0, total: itemsToProcess.length });
+    setDeleteQueueStats({ deleted: 0, failed: 0 });
+    setDeleteLogs([
+      {
+        id: `del_log_${Date.now()}`,
+        time: new Date().toLocaleTimeString(),
+        text: `Starting Bulk Delete for ${itemsToProcess.length} products from Picky Assist... (Database products are preserved)`,
+        type: 'info',
+      },
+    ]);
+
+    let deletedCount = 0;
+    let failedCount = 0;
+
+    for (let i = 0; i < itemsToProcess.length; i++) {
+      if (abortDeleteRef.current) {
+        setDeleteLogs((prev) => [
+          {
+            id: `del_log_${Date.now()}_abort`,
+            time: new Date().toLocaleTimeString(),
+            text: '🛑 Bulk delete was stopped by user.',
+            type: 'info',
+          },
+          ...prev,
+        ]);
+        break;
+      }
+
+      while (pausedDeleteRef.current && !abortDeleteRef.current) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      if (abortDeleteRef.current) break;
+
+      const item = itemsToProcess[i];
+      const code = item.code1 || item.stockCode;
+
+      try {
+        const res = await fetch('/api/admin/picky-assist/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ productId: item.id, action: 'delete' }),
+        });
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+          deletedCount++;
+          setDeleteLogs((prev) => [
+            {
+              id: `del_log_${Date.now()}_${i}`,
+              time: new Date().toLocaleTimeString(),
+              text: `🗑️ [DELETED] ${code}: Successfully removed from Picky Assist`,
+              type: 'deleted',
+            },
+            ...prev.slice(0, 99),
+          ]);
+        } else {
+          failedCount++;
+          setDeleteLogs((prev) => [
+            {
+              id: `del_log_${Date.now()}_${i}`,
+              time: new Date().toLocaleTimeString(),
+              text: `⚠️ [FAILED] ${code}: ${data.message || data.error || 'Failed to delete'}`,
+              type: 'failed',
+            },
+            ...prev.slice(0, 99),
+          ]);
+        }
+      } catch (err: any) {
+        failedCount++;
+        setDeleteLogs((prev) => [
+          {
+            id: `del_log_${Date.now()}_${i}`,
+            time: new Date().toLocaleTimeString(),
+            text: `❌ [ERROR] ${code}: ${err.message || 'Network error'}`,
+            type: 'failed',
+          },
+          ...prev.slice(0, 99),
+        ]);
+      }
+
+      setDeleteQueueProgress({ current: i + 1, total: itemsToProcess.length });
+      setDeleteQueueStats({ deleted: deletedCount, failed: failedCount });
+    }
+
+    setDeleteQueueActive(false);
+    fetchProducts();
+    fetchSyncCandidates();
+  };
+
+  const togglePauseDelete = () => {
+    pausedDeleteRef.current = !pausedDeleteRef.current;
+    setDeleteQueuePaused(pausedDeleteRef.current);
+    setDeleteLogs((prev) => [
+      {
+        id: `del_log_${Date.now()}`,
+        time: new Date().toLocaleTimeString(),
+        text: pausedDeleteRef.current ? '⏸️ Delete queue paused.' : '▶️ Delete queue resumed.',
+        type: 'info',
+      },
+      ...prev,
+    ]);
+  };
+
+  const stopDeleteQueue = () => {
+    abortDeleteRef.current = true;
+    pausedDeleteRef.current = false;
+    setDeleteQueuePaused(false);
+  };
+
   const stats = {
     total: total,
     inStock: products.filter(p => p.status === 'ACTIVE').length,
@@ -631,6 +778,16 @@ export default function AdminInventoryPage() {
           >
             <RefreshCw className="w-4 h-4 text-emerald-600" />
             <span>Sync All to Picky</span>
+          </button>
+          {/* Delete All from Picky Assist (Opens Bulk Delete Queue Modal) */}
+          <button
+            type="button"
+            onClick={openDeleteAllModal}
+            title="Delete all products from Picky Assist catalog (does NOT delete products from your database)"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-rose-300 bg-rose-50 text-sm font-semibold text-rose-800 hover:bg-rose-100 hover:border-rose-500 transition-all cursor-pointer shadow-xs"
+          >
+            <Trash2 className="w-4 h-4 text-rose-600" />
+            <span>Delete All in Picky</span>
           </button>
           <Link href="/admin/categories">
             <Button variant="secondary" size="md">
@@ -1339,6 +1496,251 @@ export default function AdminInventoryPage() {
                     >
                       <Square className="w-3.5 h-3.5" />
                       <span>Stop Sync</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── PICKY ASSIST BULK DELETE ALL QUEUE MODAL ── */}
+      {showDeleteAllModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in font-sans">
+          <div className="bg-white rounded-2xl shadow-2xl border border-cream-border max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="px-6 py-4.5 bg-gradient-to-r from-rose-950 via-slate-900 to-charcoal text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-rose-500/20 border border-rose-400/40 flex items-center justify-center">
+                  <Trash2 className={`w-5 h-5 text-rose-400 ${deleteQueueActive && !deleteQueuePaused ? 'animate-bounce' : ''}`} />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-base flex items-center gap-2">
+                    Delete All from Picky Assist
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                      REMOTE CATALOG CLEANUP
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-white/70 mt-0.5">
+                    Deletes products & size variants from Picky Assist. Your local database products remain 100% untouched.
+                  </p>
+                </div>
+              </div>
+              {!deleteQueueActive && (
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteAllModal(false)}
+                  className="p-1.5 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5 overflow-y-auto flex-1">
+              {/* Safety Banner */}
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                <div className="text-xs text-amber-900 space-y-1">
+                  <p className="font-bold">Safe Remote Deletion Notice</p>
+                  <p className="text-amber-800 leading-relaxed">
+                    This queue sends delete commands directly to your Picky Assist connector webhook for each product (and all associated size variants). It will <strong>NOT delete or alter any products in your store database</strong>.
+                  </p>
+                </div>
+              </div>
+
+              {/* Filter Selector (When not running) */}
+              {!deleteQueueActive && (
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-charcoal uppercase tracking-wider">
+                    Select Products to Delete from Picky Assist
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDeleteFilterMode('all')}
+                      className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                        deleteFilterMode === 'all'
+                          ? 'border-rose-500 bg-rose-50/60 ring-2 ring-rose-500/20'
+                          : 'border-cream-border bg-white hover:border-rose-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold text-xs text-charcoal flex items-center gap-1.5">
+                          <Package className="w-4 h-4 text-rose-600" /> All Products
+                        </span>
+                        <span className="text-xs font-mono font-bold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-full">
+                          {syncCandidateStats.total}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-charcoal-muted">
+                        Purge entire catalog. Deletes every product and size variant in Picky Assist.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setDeleteFilterMode('syncedOnly')}
+                      className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                        deleteFilterMode === 'syncedOnly'
+                          ? 'border-rose-500 bg-rose-50/60 ring-2 ring-rose-500/20'
+                          : 'border-cream-border bg-white hover:border-rose-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold text-xs text-charcoal flex items-center gap-1.5">
+                          <Tag className="w-4 h-4 text-rose-600" /> Only Synced Items
+                        </span>
+                        <span className="text-xs font-mono font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">
+                          {Math.max(0, syncCandidateStats.total - syncCandidateStats.unsyncedCount)}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-charcoal-muted">
+                        Only removes products with an active Picky Assist sync history timestamp.
+                      </p>
+                    </button>
+                  </div>
+
+                  {/* Confirmation Checkbox */}
+                  <div className="pt-2">
+                    <label className="flex items-start gap-2.5 p-3 rounded-xl border border-rose-200 bg-rose-50/40 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={deleteConfirmChecked}
+                        onChange={(e) => setDeleteConfirmChecked(e.target.checked)}
+                        className="mt-0.5 w-4 h-4 rounded text-rose-600 focus:ring-rose-500 border-gray-300 cursor-pointer"
+                      />
+                      <span className="text-xs text-rose-950 font-medium leading-relaxed">
+                        I confirm I want to delete products from Picky Assist. I understand my local database products will NOT be deleted.
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {/* Progress Bar & Counters */}
+              {(deleteQueueActive || deleteQueueProgress.current > 0) && (
+                <div className="space-y-3 p-4 rounded-xl bg-slate-50 border border-slate-200">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-charcoal flex items-center gap-1.5">
+                      {deleteQueueActive ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-600" />
+                          <span>Bulk deletion in progress...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-rose-600" />
+                          <span>Bulk deletion complete!</span>
+                        </>
+                      )}
+                    </span>
+                    <span className="font-mono font-bold text-charcoal">
+                      {deleteQueueProgress.current} / {deleteQueueProgress.total} ({deleteQueueProgress.total > 0 ? Math.round((deleteQueueProgress.current / deleteQueueProgress.total) * 100) : 0}%)
+                    </span>
+                  </div>
+
+                  {/* Progress Bar Track */}
+                  <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      className="bg-rose-500 h-full transition-all duration-300 rounded-full"
+                      style={{
+                        width: `${deleteQueueProgress.total > 0 ? (deleteQueueProgress.current / deleteQueueProgress.total) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+
+                  {/* Stat Chips */}
+                  <div className="grid grid-cols-2 gap-2 pt-1 text-center">
+                    <div className="p-2 rounded-lg bg-rose-100/70 border border-rose-300">
+                      <span className="text-[10px] uppercase font-bold text-rose-800 block">Deleted from Picky</span>
+                      <span className="text-sm font-bold text-rose-950 font-mono">{deleteQueueStats.deleted}</span>
+                    </div>
+                    <div className="p-2 rounded-lg bg-slate-100/70 border border-slate-300">
+                      <span className="text-[10px] uppercase font-bold text-slate-800 block">Failed / Skipped</span>
+                      <span className="text-sm font-bold text-slate-950 font-mono">{deleteQueueStats.failed}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Real-time Activity Terminal Feed */}
+              {deleteLogs.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] text-charcoal-muted">
+                    <span className="font-bold uppercase tracking-wider">Live Deletion Feed</span>
+                    <span>{deleteLogs.length} events logged</span>
+                  </div>
+                  <div className="bg-slate-950 text-slate-200 font-mono text-[11px] p-3 rounded-xl border border-slate-800 h-48 overflow-y-auto space-y-1.5 select-text shadow-inner">
+                    {deleteLogs.map((log) => (
+                      <div
+                        key={log.id}
+                        className={`leading-relaxed flex items-start gap-2 ${
+                          log.type === 'deleted'
+                            ? 'text-rose-400'
+                            : log.type === 'failed'
+                            ? 'text-red-400'
+                            : 'text-amber-300'
+                        }`}
+                      >
+                        <span className="text-slate-500 text-[10px] shrink-0">[{log.time}]</span>
+                        <span className="flex-1 break-words">{log.text}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer Controls */}
+            <div className="px-6 py-4 bg-cream-light/60 border-t border-cream-border flex items-center justify-between gap-3 shrink-0">
+              <div>
+                {syncCandidatesLoading && (
+                  <span className="text-xs text-charcoal-muted flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Counting candidates...
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {!deleteQueueActive ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setShowDeleteAllModal(false)}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-charcoal border border-cream-border bg-white hover:bg-cream-light transition-all cursor-pointer shadow-2xs"
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      onClick={startDeleteQueue}
+                      disabled={syncCandidatesLoading || !deleteConfirmChecked || syncCandidateStats.total === 0}
+                      className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-xs flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Start Bulk Delete</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={togglePauseDelete}
+                      className="px-4 py-2 rounded-xl text-xs font-bold text-amber-900 border border-amber-300 bg-amber-50 hover:bg-amber-100 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                    >
+                      {deleteQueuePaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                      <span>{deleteQueuePaused ? 'Resume' : 'Pause'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={stopDeleteQueue}
+                      className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                    >
+                      <Square className="w-3.5 h-3.5" />
+                      <span>Stop Delete</span>
                     </button>
                   </>
                 )}

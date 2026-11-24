@@ -251,6 +251,11 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     variantCode = `${itemGroupId}-${cleanSize}`;
     effectiveQuantity = sizeData ? sizeData.quantity : baseQuantity;
     effectiveSize = variantSize;
+    // Set effectiveProductName with size suffix if not already present
+    const sizeSuffix = ` - ${variantSize}`;
+    if (!baseProductName.toUpperCase().endsWith(sizeSuffix.toUpperCase())) {
+      effectiveProductName = `${baseProductName}${sizeSuffix}`;
+    }
     variantStockCodes = sizeData?.stockCodes || (sizeData?.stockCode ? [sizeData.stockCode] : []);
     variantSpecificBarcode = variantStockCodes[0] || sizeData?.stockCode || variantCode;
   } else if (availableSizes.length === 1 && availableSizes[0].toUpperCase() !== 'FREE') {
@@ -266,6 +271,9 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     const vCode = `${itemGroupId}-${sz.toLowerCase()}`;
     const vCodes = sData.stockCodes && sData.stockCodes.length > 0 ? sData.stockCodes : (sData.stockCode ? [sData.stockCode] : []);
     const vBarcode = vCodes[0] || sData.stockCode || vCode;
+    const vTitle = baseProductName.toUpperCase().endsWith(` - ${sz.toUpperCase()}`)
+      ? baseProductName
+      : `${baseProductName} - ${sz}`;
 
     return {
       id: vCode,
@@ -282,11 +290,13 @@ export function formatProductPayload(product: any, variantSize?: string): Record
       barcodes: vCodes.join(', '),
       stock_code: sData.stockCode || vBarcode || masterStockCode,
       stock_codes: vCodes,
-      title: `${effectiveProductName} - ${sz}`,
-      name: `${effectiveProductName} - ${sz}`,
+      title: vTitle,
+      name: vTitle,
+      productName: vTitle,
+      product_name: vTitle,
       size: sz,
       variant: sz,
-      variant_name: sz,
+      variant_name: vTitle,
       color: String(product.color || '').trim(),
       category: category,
       product_type: category.toLowerCase(),
@@ -346,6 +356,8 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     name: effectiveProductName,
     productName: effectiveProductName,
     product_name: effectiveProductName,
+    base_product_name: baseProductName,
+    baseProductName: baseProductName,
     description: description,
     productDescription: description,
     product_description: description,
@@ -405,8 +417,8 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     stock: effectiveQuantity,
     size: String(effectiveSize).trim(),
     variant: String(effectiveSize).trim(),
-    variant_name: String(effectiveSize).trim(),
-    variantName: String(effectiveSize).trim(),
+    variant_name: variantSize ? effectiveProductName : String(effectiveSize).trim(),
+    variantName: variantSize ? effectiveProductName : String(effectiveSize).trim(),
     option_name: 'Size',
     option_value: String(effectiveSize).trim(),
     option1_name: 'Size',
@@ -807,8 +819,17 @@ export async function updatePickyProduct(
  * If connector responds asynchronously with an empty body, waits for the inbound callback.
  */
 export async function deletePickyProduct(
-  productOrIdentifier: any
-): Promise<{ success: boolean; status?: number; data?: any; error?: string; callbackReceived?: boolean; message?: string }> {
+  productOrIdentifier: any,
+  options?: { deleteVariants?: boolean }
+): Promise<{
+  success: boolean;
+  status?: number;
+  data?: any;
+  error?: string;
+  callbackReceived?: boolean;
+  message?: string;
+  variantsDeleted?: number;
+}> {
   const webhookUrl = process.env.PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL;
   if (!webhookUrl) {
     console.warn('[Picky Assist] PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL is not configured');
@@ -846,35 +867,125 @@ export async function deletePickyProduct(
     ? `${baseCallback}&identifier=${cleanId}${tokenParam}`
     : `${baseCallback}?identifier=${cleanId}${tokenParam}`;
 
+  const isObject = typeof productOrIdentifier === 'object' && productOrIdentifier !== null;
+  const productName = isObject ? String(productOrIdentifier.productName || productOrIdentifier.title || identifier).trim() : identifier;
+  const code1 = isObject ? String(productOrIdentifier.code1 || identifier).trim() : identifier;
+  const masterStockCode = isObject ? String(productOrIdentifier.stockCode || identifier).trim() : identifier;
+
+  // Check if product has multi-size variants
+  const rawSizeInv = isObject ? (productOrIdentifier.sizeInventory || productOrIdentifier.size_inventory) : null;
+  let sizeEntries: string[] = [];
+  if (rawSizeInv && typeof rawSizeInv === 'object') {
+    sizeEntries = Object.keys(rawSizeInv).filter(s => s.trim().toUpperCase() !== 'FREE');
+  }
+
+  // Build variant metadata with size-specific names: e.g. "Aqua Blue Kurti - M"
+  const variantCodes: string[] = [];
+  const variantNames: string[] = [];
+  const variantsList: any[] = [];
+
+  for (const sz of sizeEntries) {
+    const vCode = `${code1}-${sz.toLowerCase()}`;
+    const vTitle = productName.toUpperCase().endsWith(` - ${sz.toUpperCase()}`)
+      ? productName
+      : `${productName} - ${sz}`;
+    variantCodes.push(vCode);
+    variantNames.push(vTitle);
+    variantsList.push({
+      id: vCode,
+      product_id: vCode,
+      variant_code: vCode,
+      title: vTitle,
+      name: vTitle,
+      productName: vTitle,
+      size: sz,
+      barcode: masterStockCode,
+    });
+  }
+
+  // If product has multiple sizes, delete each size variant individually in Picky Assist
+  // (just like addPickyProduct and updatePickyProduct push them individually!)
+  let variantsDeleted = 0;
+  if (options?.deleteVariants !== false && sizeEntries.length > 1) {
+    for (const sz of sizeEntries) {
+      try {
+        const vCode = `${code1}-${sz.toLowerCase()}`;
+        const vTitle = productName.toUpperCase().endsWith(` - ${sz.toUpperCase()}`)
+          ? productName
+          : `${productName} - ${sz}`;
+        const vCallback = baseCallback.includes('?')
+          ? `${baseCallback}&identifier=${encodeURIComponent(vCode)}${tokenParam}`
+          : `${baseCallback}?identifier=${encodeURIComponent(vCode)}${tokenParam}`;
+
+        const vPayload = {
+          action: 'delete',
+          stock_code: masterStockCode,
+          stockCode: masterStockCode,
+          code1: code1,
+          product_id: vCode,
+          productId: vCode,
+          retailer_id: vCode,
+          id: vCode,
+          sku: vCode,
+          SKU: vCode,
+          variant_code: vCode,
+          variantCode: vCode,
+          item_group_id: code1,
+          itemGroupId: code1,
+          productName: vTitle,
+          product_name: vTitle,
+          title: vTitle,
+          name: vTitle,
+          base_product_name: productName,
+          size: sz,
+          variant: sz,
+          variant_name: vTitle,
+          callback_url: vCallback,
+          webhook_url: vCallback,
+          reply_url: vCallback,
+          base_callback_url: baseCallback,
+        };
+
+        const vRes = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(vPayload),
+        });
+        if (vRes.ok) variantsDeleted++;
+      } catch (vErr) {
+        console.warn(`[Picky Assist] Error deleting variant ${sz} for ${identifier}:`, vErr);
+      }
+    }
+  }
+
   const payload: Record<string, any> = {
     action: 'delete',
-    stock_code: identifier,
-    stockCode: identifier,
-    code1: identifier,
-    product_id: identifier,
-    productId: identifier,
-    retailer_id: identifier,
+    stock_code: masterStockCode,
+    stockCode: masterStockCode,
+    code1: code1,
+    product_id: code1 || identifier,
+    productId: code1 || identifier,
+    retailer_id: code1 || identifier,
     id: identifier,
-    productCode: identifier,
+    sku: code1 || identifier,
+    productCode: code1 || identifier,
+    productName: productName,
+    product_name: productName,
+    title: productName,
+    name: productName,
+    base_product_name: productName,
     callback_url: callbackUrlWithQuery,
     webhook_url: callbackUrlWithQuery,
     reply_url: callbackUrlWithQuery,
     base_callback_url: baseCallback,
   };
 
-  // If a full product object was provided, also include code1, productName and variant codes
-  if (typeof productOrIdentifier === 'object' && productOrIdentifier !== null) {
-    if (productOrIdentifier.productName) payload.productName = productOrIdentifier.productName;
-    if (productOrIdentifier.title) payload.title = productOrIdentifier.title;
-    if (productOrIdentifier.code1) payload.code1 = productOrIdentifier.code1;
-
-    // If product has size variants, pass list of variant IDs so connector can remove all associated variant SKUs
-    const rawSizeInv = productOrIdentifier.sizeInventory || productOrIdentifier.size_inventory;
-    if (rawSizeInv && typeof rawSizeInv === 'object') {
-      const variantCodes = Object.keys(rawSizeInv).map(sz => `${payload.code1 || identifier}-${sz.toLowerCase()}`);
-      payload.variant_codes = variantCodes;
-      payload.variantCodes = variantCodes;
-    }
+  if (variantCodes.length > 0) {
+    payload.variant_codes = variantCodes;
+    payload.variantCodes = variantCodes;
+    payload.variant_names = variantNames;
+    payload.variantNames = variantNames;
+    payload.variants = variantsList;
   }
 
   try {
@@ -894,7 +1005,7 @@ export async function deletePickyProduct(
 
     if (!response.ok) {
       console.error(`[Picky Assist] Delete failed for ${identifier}. Status: ${response.status}`, data);
-      return { success: false, status: response.status, data, error: `Picky Assist returned HTTP ${response.status}` };
+      return { success: false, status: response.status, data, error: `Picky Assist returned HTTP ${response.status}`, variantsDeleted };
     }
 
     // If Picky Assist connector returns empty or 200 without payload, wait for inbound callback
@@ -908,6 +1019,7 @@ export async function deletePickyProduct(
           data: callbackEntry.rawPayload,
           callbackReceived: true,
           message: callbackEntry.summary,
+          variantsDeleted,
         };
       }
       return {
@@ -915,7 +1027,10 @@ export async function deletePickyProduct(
         status: 200,
         data: 'Triggered delete webhook. Awaiting async confirmation callback.',
         callbackReceived: false,
-        message: `Delete triggered for ${identifier}. Awaiting confirmation from Picky Assist.`,
+        message: variantsDeleted > 0
+          ? `Delete triggered for ${identifier} (${variantsDeleted} size variants). Awaiting confirmation from Picky Assist.`
+          : `Delete triggered for ${identifier}. Awaiting confirmation from Picky Assist.`,
+        variantsDeleted,
       };
     }
 
@@ -933,7 +1048,10 @@ export async function deletePickyProduct(
       success: isDeleted || true,
       status: response.status,
       data,
-      message: `Product ${identifier} successfully deleted from Picky Assist`,
+      message: variantsDeleted > 0
+        ? `Product ${identifier} and ${variantsDeleted} size variants deleted from Picky Assist`
+        : `Product ${identifier} successfully deleted from Picky Assist`,
+      variantsDeleted,
     };
   } catch (err: any) {
     console.error(`[Picky Assist] Error deleting product ${identifier}:`, err);
