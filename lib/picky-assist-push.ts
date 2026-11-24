@@ -2,6 +2,7 @@
 // lib/picky-assist-push.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { waitForSearchResponse } from '@/lib/picky-assist-search-store';
+import { waitForDeleteResponse } from '@/lib/picky-assist-delete-store';
 import { getSetting } from '@/lib/settings';
 
 export interface PickyAssistProductPayload {
@@ -461,7 +462,7 @@ export async function searchPickyProduct(identifier: string): Promise<{ exists: 
   }
 
   // Resolve base callback URL dynamically from environment, strictly without trailing slash
-  const envCallback = process.env.PICKY_ASSIST_SEARCH_CALLBACK_URL?.trim();
+  const envCallback = (await getSetting('PICKY_ASSIST_SEARCH_CALLBACK_URL', process.env.PICKY_ASSIST_SEARCH_CALLBACK_URL))?.trim();
   let baseCallback = envCallback;
   if (!baseCallback) {
     const baseHost = (
@@ -627,11 +628,7 @@ export async function addPickyProduct(
           });
           const text = await response.text();
           let data: any = text;
-          try {
-            data = JSON.parse(text);
-          } catch {
-            data = text;
-          }
+          try { data = JSON.parse(text); } catch { }
 
           if (variantsCount === 0) {
             firstStatus = response.status;
@@ -661,11 +658,7 @@ export async function addPickyProduct(
 
     const text = await response.text();
     let data: any = text;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
+    try { data = JSON.parse(text); } catch { }
 
     if (!response.ok) {
       console.error(`[Picky Assist] Add failed for ${mainPayload.stock_code}. Status: ${response.status}`, data);
@@ -748,11 +741,7 @@ export async function updatePickyProduct(
 
           const text = await response.text();
           let data: any = text;
-          try {
-            data = JSON.parse(text);
-          } catch {
-            data = text;
-          }
+          try { data = JSON.parse(text); } catch { }
 
           results.push({
             size: sz,
@@ -809,11 +798,7 @@ export async function updatePickyProduct(
 
     const text = await response.text();
     let data: any = text;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
+    try { data = JSON.parse(text); } catch { }
 
     if (!response.ok) {
       console.error(`[Picky Assist] Update failed for ${payload.stock_code}. Status: ${response.status}`, data);
@@ -846,7 +831,7 @@ export async function deletePickyProduct(
   message?: string;
   variantsDeleted?: number;
 }> {
-  const webhookUrl = process.env.PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL;
+  const webhookUrl = await getSetting('PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL);
   if (!webhookUrl) {
     console.warn('[Picky Assist] PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL is not configured');
     return { success: false, error: 'PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL is not configured' };
@@ -862,7 +847,7 @@ export async function deletePickyProduct(
   }
 
   // Resolve delete callback URL dynamically
-  const envCallback = process.env.PICKY_ASSIST_DELETE_CALLBACK_URL?.trim();
+  const envCallback = (await getSetting('PICKY_ASSIST_DELETE_CALLBACK_URL', process.env.PICKY_ASSIST_DELETE_CALLBACK_URL))?.trim();
   let baseCallback = envCallback;
   if (!baseCallback) {
     const baseHost = (

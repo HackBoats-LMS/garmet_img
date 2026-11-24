@@ -25,7 +25,9 @@ export async function POST(req: NextRequest) {
       searchUrl: (await getSetting('PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL)) || null,
       addUrl: (await getSetting('PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL)) || null,
       updateUrl: (await getSetting('PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL)) || null,
+      deleteUrl: (await getSetting('PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL', process.env.PICKY_ASSIST_DELETE_PRODUCT_WEBHOOK_URL)) || null,
       searchCallbackUrl: (await getSetting('PICKY_ASSIST_SEARCH_CALLBACK_URL', process.env.PICKY_ASSIST_SEARCH_CALLBACK_URL)) || null,
+      deleteCallbackUrl: (await getSetting('PICKY_ASSIST_DELETE_CALLBACK_URL', process.env.PICKY_ASSIST_DELETE_CALLBACK_URL)) || null,
     };
 
     if (action === 'get_env') {
