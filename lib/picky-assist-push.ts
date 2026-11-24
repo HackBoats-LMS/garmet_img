@@ -448,7 +448,29 @@ export async function searchPickyProduct(identifier: string): Promise<{ exists: 
     return { exists: false };
   }
 
-  const callbackUrl = process.env.PICKY_ASSIST_SEARCH_CALLBACK_URL || 'https://unshaken-runway-emit.ngrok-free.dev/api/webhooks/picky-assist/search-response';
+  // Resolve base callback URL dynamically from environment, strictly without trailing slash
+  const envCallback = process.env.PICKY_ASSIST_SEARCH_CALLBACK_URL?.trim();
+  let baseCallback = envCallback;
+  if (!baseCallback) {
+    const baseHost = (
+      process.env.NEXTAUTH_URL ||
+      process.env.APP_URL ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '') ||
+      'https://rgjdass.impactsync27.com'
+    ).trim().replace(/\/+$/, '');
+    baseCallback = `${baseHost}/api/webhooks/picky-assist/search-response`;
+  }
+  // Remove any trailing slash to prevent Next.js 308 redirect
+  baseCallback = baseCallback.replace(/\/+$/, '');
+
+  // Append identifier & token query param so callback payload retains reference even if Picky Assist sends bare {"result":""}
+  const cleanId = encodeURIComponent(identifier.trim());
+  const tokenVal = process.env.PICKY_ASSIST_API_TOKEN?.trim() || '';
+  const tokenParam = tokenVal ? `&token=${encodeURIComponent(tokenVal)}` : '';
+  const callbackUrlWithQuery = baseCallback.includes('?')
+    ? `${baseCallback}&identifier=${cleanId}${tokenParam}`
+    : `${baseCallback}?identifier=${cleanId}${tokenParam}`;
 
   try {
     const payload = {
@@ -458,9 +480,11 @@ export async function searchPickyProduct(identifier: string): Promise<{ exists: 
       code1: identifier,
       productCode: identifier,
       product_id: identifier,
-      callback_url: callbackUrl,
-      webhook_url: callbackUrl,
-      reply_url: callbackUrl,
+      callback_url: callbackUrlWithQuery,
+      webhook_url: callbackUrlWithQuery,
+      reply_url: callbackUrlWithQuery,
+      // Also provide the clean base URL in case connector requires bare endpoint
+      base_callback_url: baseCallback,
     };
 
     let response = await fetch(webhookUrl, {
@@ -492,7 +516,7 @@ export async function searchPickyProduct(identifier: string): Promise<{ exists: 
     // the connector endpoint returns HTTP 200 OK with an empty body "" or status: 200 with headers like PICKY-CONNECTOR-LOG.
     if (response.ok) {
       if (rawData === '' || rawData === null || rawData === undefined) {
-        console.log(`[Picky Assist] Search triggered for '${identifier}'. Waiting for inbound callback on ${callbackUrl}...`);
+        console.log(`[Picky Assist] Search triggered for '${identifier}'. Waiting for inbound callback on ${callbackUrlWithQuery}...`);
         const callbackEntry = await waitForSearchResponse(identifier, 8000);
         if (callbackEntry) {
           return {
@@ -504,7 +528,7 @@ export async function searchPickyProduct(identifier: string): Promise<{ exists: 
 
         return {
           exists: false,
-          raw: `HTTP 200 OK received from search connector, but no callback arrived within 3.5s. Please ensure your Picky Assist connector has a Webhook action posting search results to ${callbackUrl}`,
+          raw: `HTTP 200 OK received from search connector, but no callback arrived within 8s. Please ensure your Picky Assist connector has a Webhook action posting search results to ${baseCallback}`,
         };
       }
 
