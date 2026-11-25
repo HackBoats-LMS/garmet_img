@@ -883,16 +883,17 @@ export async function deletePickyProduct(
     if (s && s.toUpperCase() !== 'FREE') sizeSet.add(s.toUpperCase());
   }
 
-  // Also parse garment sizes from length_Size / size string (e.g. "M, L, XL", "38, 40, 42")
-  // Ignore saree fabric lengths like "5.5m", "6.3 meters", "blouse", etc.
+  // Also parse garment sizes AND saree numeric lengths (e.g. "M, L, XL", "38, 40, 42", "6.2", "5.5m")
+  // Ignore plain words like "meters", "blouse", "free"
   if (isObject) {
     const lenSizeStr = String(productOrIdentifier.length_Size || productOrIdentifier.size || '').trim();
     if (lenSizeStr && lenSizeStr !== '-' && !/free\s*size/i.test(lenSizeStr)) {
-      const GARMENT_SIZE_REGEX = /^(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL|6XL|28|30|32|34|36|38|40|42|44|46|48|50|52|54|56)$/;
+      const GARMENT_OR_LENGTH_REGEX = /^(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL|6XL|\d+(\.\d+)?)$/i;
       const tokens = lenSizeStr.split(/[,;/|\s]+/).map(t => t.trim().toUpperCase()).filter(Boolean);
-      for (const t of tokens) {
-        if (GARMENT_SIZE_REGEX.test(t)) {
-          sizeSet.add(t);
+      for (const rawTok of tokens) {
+        const cleaned = rawTok.replace(/(MTR|METERS|METER|M)$/i, '').trim();
+        if (GARMENT_OR_LENGTH_REGEX.test(cleaned)) {
+          sizeSet.add(cleaned);
         }
       }
     }
@@ -983,12 +984,22 @@ export async function deletePickyProduct(
             base_callback_url: baseCallback,
           };
 
-          const vRes = await fetch(webhookUrl, {
+          let vRes = await fetch(webhookUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(vPayload),
           });
+          if (vRes.status === 429 || vRes.status === 503) {
+            await new Promise((r) => setTimeout(r, 1200));
+            vRes = await fetch(webhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(vPayload),
+            });
+          }
           if (vRes.ok) variantsDeleted++;
+          // Polite delay so Picky Assist connector doesn't drop rapid variant bursts
+          await new Promise((r) => setTimeout(r, 120));
         } catch (vErr) {
           console.warn(`[Picky Assist] Error deleting variant ${vCode} for ${identifier}:`, vErr);
         }
@@ -1039,11 +1050,20 @@ export async function deletePickyProduct(
         sku: masterStockCode,
         productCode: masterStockCode,
       };
-      await fetch(webhookUrl, {
+      let altRes = await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(altPayload),
       });
+      if (altRes.status === 429 || altRes.status === 503) {
+        await new Promise((r) => setTimeout(r, 1200));
+        await fetch(webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(altPayload),
+        });
+      }
+      await new Promise((r) => setTimeout(r, 120));
     } catch (altErr) {
       console.warn(`[Picky Assist] Secondary delete for ${masterStockCode} encountered:`, altErr);
     }
