@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import {
   Plus, Search, Filter, Package, RefreshCw, Archive, Camera,
@@ -53,7 +54,12 @@ const STATUS_CONFIG = {
 };
 
 export default function AdminInventoryPage() {
+  const [mounted, setMounted] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
@@ -939,6 +945,42 @@ export default function AdminInventoryPage() {
     setDeleteQueuePaused(false);
   };
 
+  const [customDeleteCode, setCustomDeleteCode] = useState('');
+  const [customDeleteLoading, setCustomDeleteLoading] = useState(false);
+
+  const handleCustomCodeDelete = async () => {
+    const code = customDeleteCode.trim();
+    if (!code) return;
+    setCustomDeleteLoading(true);
+    try {
+      const res = await fetch('/api/admin/picky-assist/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stockCode: code, action: 'delete' }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setDeleteLogs((prev) => [
+          {
+            id: `del_log_custom_${Date.now()}`,
+            time: new Date().toLocaleTimeString(),
+            text: `🗑️ [MANUAL DELETE] ${code}: Successfully sent delete command to Picky Assist!`,
+            type: 'deleted',
+          },
+          ...prev,
+        ]);
+        setCustomDeleteCode('');
+        fetchProducts();
+      } else {
+        alert(data.message || data.error || 'Failed to delete SKU from Picky Assist');
+      }
+    } catch (err: any) {
+      alert(`Network error: ${err.message}`);
+    } finally {
+      setCustomDeleteLoading(false);
+    }
+  };
+
   const stats = {
     total: total,
     inStock: products.filter(p => p.status === 'ACTIVE').length,
@@ -1514,8 +1556,8 @@ export default function AdminInventoryPage() {
       </Card>
 
       {/* ── PICKY ASSIST SMART SYNC ALL QUEUE MODAL ── */}
-      {showSyncAllModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in font-sans">
+      {mounted && showSyncAllModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[9999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 font-sans">
           <div className="bg-white rounded-2xl shadow-2xl border border-cream-border max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh]">
             {/* Modal Header */}
             <div className="px-6 py-4.5 bg-gradient-to-r from-emerald-900 via-slate-900 to-charcoal text-white flex items-center justify-between shrink-0">
@@ -1895,12 +1937,13 @@ export default function AdminInventoryPage() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ── PICKY ASSIST BULK DELETE ALL QUEUE MODAL ── */}
-      {showDeleteAllModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-fade-in font-sans">
+      {mounted && showDeleteAllModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[9999] bg-black/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 font-sans">
           <div className="bg-white rounded-2xl shadow-2xl border border-cream-border max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh]">
             {/* Modal Header */}
             <div className="px-6 py-4.5 bg-gradient-to-r from-rose-950 via-slate-900 to-charcoal text-white flex items-center justify-between shrink-0">
@@ -2009,6 +2052,37 @@ export default function AdminInventoryPage() {
                         I confirm I want to delete products from Picky Assist. I understand my local database products will NOT be deleted.
                       </span>
                     </label>
+                  </div>
+
+                  {/* Direct Orphaned SKU / Custom Code Purge Box */}
+                  <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-charcoal uppercase tracking-wider block">
+                        Delete Specific Orphaned SKU or Custom Code
+                      </span>
+                      <span className="text-[10px] text-charcoal-muted">
+                        Useful for clearing duplicate or deleted items
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="e.g. K001, saree-01-m, or custom code..."
+                        value={customDeleteCode}
+                        onChange={(e) => setCustomDeleteCode(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleCustomCodeDelete(); }}
+                        className="flex-1 px-3 py-1.5 text-xs border border-cream-border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCustomCodeDelete}
+                        disabled={!customDeleteCode.trim() || customDeleteLoading}
+                        className="px-3.5 py-1.5 rounded-lg text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all disabled:opacity-50 flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>{customDeleteLoading ? 'Deleting...' : 'Delete SKU'}</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -2291,7 +2365,8 @@ export default function AdminInventoryPage() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

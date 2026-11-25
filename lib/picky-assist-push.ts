@@ -4,6 +4,7 @@
 import { waitForSearchResponse } from '@/lib/picky-assist-search-store';
 import { waitForDeleteResponse } from '@/lib/picky-assist-delete-store';
 import { getSetting } from '@/lib/settings';
+import { normalizeSizeInventory } from '@/lib/size-inventory';
 
 export interface PickyAssistProductPayload {
   stock_code: string;
@@ -873,12 +874,31 @@ export async function deletePickyProduct(
   const code1 = isObject ? String(productOrIdentifier.code1 || identifier).trim() : identifier;
   const masterStockCode = isObject ? String(productOrIdentifier.stockCode || identifier).trim() : identifier;
 
-  // Check if product has multi-size variants
+  // Check if product has multi-size variants from sizeInventory OR length_Size string
   const rawSizeInv = isObject ? (productOrIdentifier.sizeInventory || productOrIdentifier.size_inventory) : null;
-  let sizeEntries: string[] = [];
-  if (rawSizeInv && typeof rawSizeInv === 'object') {
-    sizeEntries = Object.keys(rawSizeInv).filter(s => s.trim().toUpperCase() !== 'FREE');
+  const normInv = normalizeSizeInventory(rawSizeInv);
+  const sizeSet = new Set<string>();
+
+  for (const s of Object.keys(normInv)) {
+    if (s && s.toUpperCase() !== 'FREE') sizeSet.add(s.toUpperCase());
   }
+
+  // Also parse garment sizes from length_Size / size string (e.g. "M, L, XL", "38, 40, 42")
+  // Ignore saree fabric lengths like "5.5m", "6.3 meters", "blouse", etc.
+  if (isObject) {
+    const lenSizeStr = String(productOrIdentifier.length_Size || productOrIdentifier.size || '').trim();
+    if (lenSizeStr && lenSizeStr !== '-' && !/free\s*size/i.test(lenSizeStr)) {
+      const GARMENT_SIZE_REGEX = /^(XXS|XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL|5XL|6XL|28|30|32|34|36|38|40|42|44|46|48|50|52|54|56)$/;
+      const tokens = lenSizeStr.split(/[,;/|\s]+/).map(t => t.trim().toUpperCase()).filter(Boolean);
+      for (const t of tokens) {
+        if (GARMENT_SIZE_REGEX.test(t)) {
+          sizeSet.add(t);
+        }
+      }
+    }
+  }
+
+  const sizeEntries = Array.from(sizeSet);
 
   // Build variant metadata with size-specific names: e.g. "Aqua Blue Kurti - M"
   const variantCodes: string[] = [];
@@ -904,57 +924,74 @@ export async function deletePickyProduct(
     });
   }
 
-  // If product has multiple sizes, delete each size variant individually in Picky Assist
-  // (just like addPickyProduct and updatePickyProduct push them individually!)
+  // Delete each size variant individually in Picky Assist for ALL sizes (including single size)
+  // to ensure no variant entries remain in Picky Assist's catalog
   let variantsDeleted = 0;
-  if (options?.deleteVariants !== false && sizeEntries.length > 1) {
+  if (options?.deleteVariants !== false && sizeEntries.length >= 1) {
     for (const sz of sizeEntries) {
-      try {
-        const vCode = `${code1}-${sz.toLowerCase()}`;
-        const vTitle = productName.toUpperCase().endsWith(` - ${sz.toUpperCase()}`)
-          ? productName
-          : `${productName} - ${sz}`;
-        const vCallback = baseCallback.includes('?')
-          ? `${baseCallback}&identifier=${encodeURIComponent(vCode)}${tokenParam}`
-          : `${baseCallback}?identifier=${encodeURIComponent(vCode)}${tokenParam}`;
+      // Collect all variant codes that could have been created for this size
+      const vCodes = new Set<string>();
+      if (code1) {
+        vCodes.add(`${code1}-${sz.toLowerCase()}`);
+      }
+      if (masterStockCode && masterStockCode !== code1) {
+        vCodes.add(`${masterStockCode}-${sz.toLowerCase()}`);
+      }
+      const sData = normInv[sz];
+      if (sData) {
+        if (sData.stockCode) vCodes.add(sData.stockCode);
+        if (Array.isArray(sData.stockCodes)) {
+          sData.stockCodes.forEach(c => { if (c) vCodes.add(c); });
+        }
+      }
 
-        const vPayload = {
-          action: 'delete',
-          stock_code: masterStockCode,
-          stockCode: masterStockCode,
-          code1: code1,
-          product_id: vCode,
-          productId: vCode,
-          retailer_id: vCode,
-          id: vCode,
-          sku: vCode,
-          SKU: vCode,
-          variant_code: vCode,
-          variantCode: vCode,
-          item_group_id: code1,
-          itemGroupId: code1,
-          productName: vTitle,
-          product_name: vTitle,
-          title: vTitle,
-          name: vTitle,
-          base_product_name: productName,
-          size: sz,
-          variant: sz,
-          variant_name: vTitle,
-          callback_url: vCallback,
-          webhook_url: vCallback,
-          reply_url: vCallback,
-          base_callback_url: baseCallback,
-        };
+      for (const vCode of vCodes) {
+        try {
+          const vTitle = productName.toUpperCase().endsWith(` - ${sz.toUpperCase()}`)
+            ? productName
+            : `${productName} - ${sz}`;
+          const vCallback = baseCallback.includes('?')
+            ? `${baseCallback}&identifier=${encodeURIComponent(vCode)}${tokenParam}`
+            : `${baseCallback}?identifier=${encodeURIComponent(vCode)}${tokenParam}`;
 
-        const vRes = await fetch(webhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(vPayload),
-        });
-        if (vRes.ok) variantsDeleted++;
-      } catch (vErr) {
-        console.warn(`[Picky Assist] Error deleting variant ${sz} for ${identifier}:`, vErr);
+          const vPayload = {
+            action: 'delete',
+            stock_code: masterStockCode,
+            stockCode: masterStockCode,
+            code1: code1,
+            product_id: vCode,
+            productId: vCode,
+            retailer_id: vCode,
+            id: vCode,
+            sku: vCode,
+            SKU: vCode,
+            variant_code: vCode,
+            variantCode: vCode,
+            item_group_id: code1 || masterStockCode,
+            itemGroupId: code1 || masterStockCode,
+            productName: vTitle,
+            product_name: vTitle,
+            title: vTitle,
+            name: vTitle,
+            base_product_name: productName,
+            size: sz,
+            variant: sz,
+            variant_name: vTitle,
+            callback_url: vCallback,
+            webhook_url: vCallback,
+            reply_url: vCallback,
+            base_callback_url: baseCallback,
+          };
+
+          const vRes = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(vPayload),
+          });
+          if (vRes.ok) variantsDeleted++;
+        } catch (vErr) {
+          console.warn(`[Picky Assist] Error deleting variant ${vCode} for ${identifier}:`, vErr);
+        }
       }
     }
   }
@@ -987,6 +1024,29 @@ export async function deletePickyProduct(
     payload.variant_names = variantNames;
     payload.variantNames = variantNames;
     payload.variants = variantsList;
+  }
+
+  // Also send a secondary delete for masterStockCode if different from code1
+  // to ensure duplicate products created under stockCode are also purged!
+  if (isObject && masterStockCode && code1 && masterStockCode !== code1) {
+    try {
+      const altPayload = {
+        ...payload,
+        product_id: masterStockCode,
+        productId: masterStockCode,
+        retailer_id: masterStockCode,
+        id: masterStockCode,
+        sku: masterStockCode,
+        productCode: masterStockCode,
+      };
+      await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(altPayload),
+      });
+    } catch (altErr) {
+      console.warn(`[Picky Assist] Secondary delete for ${masterStockCode} encountered:`, altErr);
+    }
   }
 
   try {

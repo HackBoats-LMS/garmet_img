@@ -19,11 +19,21 @@ async function handleSync(productId?: string | null, stockCode?: string | null, 
     }
   });
 
+  const effectiveAction = action || 'sync';
+
   if (!product) {
+    if (effectiveAction === 'delete') {
+      const rawIdentifier = (stockCode || productId || '').trim();
+      const res = await deletePickyProduct(rawIdentifier);
+      return NextResponse.json({
+        success: res.success,
+        actionTaken: 'deleted',
+        message: res.success ? `Deleted ${rawIdentifier} from Picky Assist` : (res.error || 'Failed to delete from Picky Assist'),
+        details: res,
+      }, { status: res.success ? 200 : 502 });
+    }
     return NextResponse.json({ error: 'Product not found in local database' }, { status: 404 });
   }
-
-  const effectiveAction = action || 'sync';
 
   if (effectiveAction === 'add') {
     const res = await addPickyProduct(product);
