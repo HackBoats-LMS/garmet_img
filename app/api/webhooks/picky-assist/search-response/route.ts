@@ -3,6 +3,7 @@ import { parsePickyAssistWebhookBody } from '@/lib/picky-assist-orders';
 import { saveSearchResponse } from '@/lib/picky-assist-search-store';
 import { saveRequest, RecordedRequest } from '@/lib/picky-assist-logger';
 import { safeTimingCompare, checkRateLimit } from '@/lib/security';
+import { getSetting } from '@/lib/settings';
 
 export async function POST(req: NextRequest) {
   return handleSearchCallback(req);
@@ -29,17 +30,19 @@ async function handleSearchCallback(req: NextRequest) {
     return NextResponse.json({ error: 'Too Many Requests' }, { status: 429 });
   }
 
-  // 2. Token verification if PICKY_ASSIST_API_TOKEN is configured
-  const expectedToken = process.env.PICKY_ASSIST_API_TOKEN;
+  // 2. Token verification: if token is provided, verify it against expectedToken.
+  // We do NOT block with 401 if Picky Assist does not send headers/query token,
+  // matching the resilient behavior of delete-response.
+  const expectedToken = (await getSetting('PICKY_ASSIST_API_TOKEN', process.env.PICKY_ASSIST_API_TOKEN))?.trim();
   if (expectedToken) {
     const authHeader = req.headers.get('authorization') || '';
     const apiKeyHeader = req.headers.get('x-api-key') || '';
     const tokenParam = req.nextUrl.searchParams.get('token') || '';
     const rawToken = authHeader.replace(/^Bearer\s+/i, '').trim() || apiKeyHeader.trim() || tokenParam.trim();
 
-    if (!rawToken || !safeTimingCompare(rawToken, expectedToken)) {
-      console.warn(`[Picky Assist Search Callback] Unauthorized attempt from IP: ${ip}`);
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (rawToken && !safeTimingCompare(rawToken, expectedToken)) {
+      console.warn(`[Picky Assist Search Callback] Invalid token attempt from IP: ${ip}`);
+      return NextResponse.json({ error: 'Unauthorized: Invalid Token' }, { status: 401 });
     }
   }
 

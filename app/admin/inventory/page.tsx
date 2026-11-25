@@ -6,7 +6,8 @@ import {
   Plus, Search, Filter, Package, RefreshCw, Archive, Camera,
   ChevronUp, ChevronDown, AlertCircle, CheckCircle2,
   XCircle, Layers, Edit2, MoreHorizontal, Tag,
-  Upload, FileSpreadsheet, Play, Pause, Square, Sparkles, Check, X, Globe, ShoppingBag, Trash, Trash2
+  Upload, FileSpreadsheet, Play, Pause, Square, Sparkles, Check, X, Globe, ShoppingBag, Trash, Trash2,
+  RotateCcw, Download
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
@@ -40,6 +41,7 @@ interface Product {
   category: { id: string; name: string; slug: string } | null;
   subCategory: { id: string; name: string; slug: string } | null;
   updatedAt: string;
+  syncedAt?: string | null;
   _count?: { inventoryLogs: number };
 }
 
@@ -347,6 +349,18 @@ export default function AdminInventoryPage() {
   const [syncQueueProgress, setSyncQueueProgress] = useState({ current: 0, total: 0 });
   const [syncQueueStats, setSyncQueueStats] = useState({ updated: 0, added: 0, failed: 0 });
   const [syncLogs, setSyncLogs] = useState<Array<{ id: string; time: string; text: string; type: 'updated' | 'added' | 'failed' | 'info' }>>([]);
+  const [syncAuditList, setSyncAuditList] = useState<Array<{
+    id: string;
+    stockCode: string;
+    code1?: string;
+    productName: string;
+    status: 'success' | 'failed';
+    actionTaken?: 'updated' | 'added' | 'deleted' | 'no_change';
+    message: string;
+    error?: string;
+    time: string;
+  }>>([]);
+  const [syncModalTab, setSyncModalTab] = useState<'feed' | 'failed' | 'success'>('feed');
   const abortSyncRef = useRef(false);
   const pausedSyncRef = useRef(false);
 
@@ -359,8 +373,45 @@ export default function AdminInventoryPage() {
   const [deleteQueueProgress, setDeleteQueueProgress] = useState({ current: 0, total: 0 });
   const [deleteQueueStats, setDeleteQueueStats] = useState({ deleted: 0, failed: 0 });
   const [deleteLogs, setDeleteLogs] = useState<Array<{ id: string; time: string; text: string; type: 'deleted' | 'failed' | 'info' }>>([]);
+  const [deleteAuditList, setDeleteAuditList] = useState<Array<{
+    id: string;
+    stockCode: string;
+    code1?: string;
+    productName: string;
+    status: 'success' | 'failed';
+    actionTaken?: 'updated' | 'added' | 'deleted' | 'no_change';
+    message: string;
+    error?: string;
+    time: string;
+  }>>([]);
+  const [deleteModalTab, setDeleteModalTab] = useState<'feed' | 'failed' | 'success'>('feed');
   const abortDeleteRef = useRef(false);
   const pausedDeleteRef = useRef(false);
+
+  const exportQueueAuditCsv = (items: any[], prefix: string) => {
+    if (!items || items.length === 0) {
+      alert('No audit logs to export yet.');
+      return;
+    }
+    const headers = ['Stock Code', 'Product Code', 'Product Name', 'Status', 'Action Taken', 'Message / Error', 'Timestamp'];
+    const rows = items.map((item) => [
+      `"${item.stockCode || ''}"`,
+      `"${item.code1 || ''}"`,
+      `"${(item.productName || '').replace(/"/g, '""')}"`,
+      `"${item.status}"`,
+      `"${item.actionTaken || ''}"`,
+      `"${(item.error || item.message || '').replace(/"/g, '""')}"`,
+      `"${item.time}"`,
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `${prefix}-audit-${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const fetchSyncCandidates = async () => {
     setSyncCandidatesLoading(true);
@@ -445,6 +496,7 @@ export default function AdminInventoryPage() {
         actionTaken: 'deleted',
         message: data.message || `Deleted ${product.stockCode} from Picky Assist`,
       });
+      fetchProducts();
     } catch (err: any) {
       console.error('Picky delete error:', err);
       setSyncNotice({
@@ -460,16 +512,16 @@ export default function AdminInventoryPage() {
     }
   };
 
-  const startSyncQueue = async () => {
-    let itemsToProcess = [...syncCandidateList];
-    if (syncFilterMode === 'unsynced') {
+  const startSyncQueue = async (overrideItems?: any[]) => {
+    let itemsToProcess = overrideItems || [...syncCandidateList];
+    if (!overrideItems && syncFilterMode === 'unsynced') {
       itemsToProcess = syncCandidateList.filter(
         (p) => !p.syncedAt || (p.updatedAt && new Date(p.updatedAt).getTime() > new Date(p.syncedAt).getTime() + 1000)
       );
     }
 
     if (itemsToProcess.length === 0) {
-      alert('No products match the selected sync filter.');
+      alert('No products to sync.');
       return;
     }
 
@@ -478,59 +530,118 @@ export default function AdminInventoryPage() {
     setSyncQueueActive(true);
     setSyncQueuePaused(false);
     setSyncQueueProgress({ current: 0, total: itemsToProcess.length });
-    setSyncQueueStats({ updated: 0, added: 0, failed: 0 });
-    setSyncLogs([
+
+    if (overrideItems) {
+      setSyncAuditList((prev) => prev.filter((item) => item.status === 'success'));
+      setSyncQueueStats((prev) => ({ updated: prev.updated, added: prev.added, failed: 0 }));
+    } else {
+      setSyncAuditList([]);
+      setSyncQueueStats({ updated: 0, added: 0, failed: 0 });
+    }
+
+    setSyncLogs((prev) => [
       {
         id: `log_${Date.now()}`,
         time: new Date().toLocaleTimeString(),
-        text: `Starting Smart Sync for ${itemsToProcess.length} products. (Searching Picky Assist before creating to prevent duplicates)...`,
+        text: `Starting Smart Sync for ${itemsToProcess.length} products (2 concurrent workers, auto-retry on 429/503)...`,
         type: 'info',
       },
+      ...prev.slice(0, 50),
     ]);
 
-    let updatedCount = 0;
-    let addedCount = 0;
+    let currentIndex = 0;
+    let completedCount = 0;
+    let updatedCount = overrideItems ? syncQueueStats.updated : 0;
+    let addedCount = overrideItems ? syncQueueStats.added : 0;
     let failedCount = 0;
 
-    for (let i = 0; i < itemsToProcess.length; i++) {
-      if (abortSyncRef.current) {
-        setSyncLogs((prev) => [
-          {
-            id: `log_${Date.now()}_abort`,
-            time: new Date().toLocaleTimeString(),
-            text: '🛑 Sync was stopped by user.',
-            type: 'info',
-          },
-          ...prev,
-        ]);
-        break;
+    const executeItemWithRetry = async (item: any): Promise<{ success: boolean; actionTaken?: string; message: string; error?: string }> => {
+      let attempts = 0;
+      const maxAttempts = 2;
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          const res = await fetch('/api/admin/picky-assist/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ productId: item.id, action: 'sync' }),
+          });
+
+          if (res.status === 429 || res.status === 503) {
+            if (attempts < maxAttempts) {
+              await new Promise((r) => setTimeout(r, 1800));
+              continue;
+            }
+          }
+
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.success) {
+            return {
+              success: true,
+              actionTaken: data.actionTaken || 'updated',
+              message: data.message || `Successfully synced ${item.stockCode}`,
+            };
+          } else {
+            return {
+              success: false,
+              actionTaken: 'no_change',
+              message: data.message || data.error || `HTTP ${res.status}`,
+              error: data.error || data.message || `HTTP ${res.status}`,
+            };
+          }
+        } catch (err: any) {
+          if (attempts < maxAttempts) {
+            await new Promise((r) => setTimeout(r, 1500));
+            continue;
+          }
+          return {
+            success: false,
+            actionTaken: 'no_change',
+            message: err.message || 'Network error',
+            error: err.message || 'Network error',
+          };
+        }
       }
+      return { success: false, actionTaken: 'no_change', message: 'Unknown error', error: 'Unknown error' };
+    };
 
-      // Check pause state
-      while (pausedSyncRef.current && !abortSyncRef.current) {
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      if (abortSyncRef.current) break;
+    const worker = async () => {
+      while (currentIndex < itemsToProcess.length && !abortSyncRef.current) {
+        while (pausedSyncRef.current && !abortSyncRef.current) {
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        if (abortSyncRef.current) break;
 
-      const item = itemsToProcess[i];
-      const code = item.code1 || item.stockCode;
+        const idx = currentIndex++;
+        if (idx >= itemsToProcess.length) break;
 
-      try {
-        const res = await fetch('/api/admin/picky-assist/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ productId: item.id, action: 'sync' }),
-        });
-        const data = await res.json();
+        const item = itemsToProcess[idx];
+        const code = item.code1 || item.stockCode;
+        const result = await executeItemWithRetry(item);
 
-        if (res.ok && data.success) {
-          if (data.actionTaken === 'updated') {
+        completedCount++;
+        const auditEntry = {
+          id: item.id,
+          stockCode: item.stockCode,
+          code1: item.code1,
+          productName: item.productName || item.title || item.stockCode,
+          status: result.success ? ('success' as const) : ('failed' as const),
+          actionTaken: (result.actionTaken as any) || 'no_change',
+          message: result.message,
+          error: result.error,
+          time: new Date().toLocaleTimeString(),
+        };
+
+        setSyncAuditList((prev) => [auditEntry, ...prev.filter((p) => p.id !== item.id)]);
+
+        if (result.success) {
+          if (result.actionTaken === 'updated') {
             updatedCount++;
             setSyncLogs((prev) => [
               {
-                id: `log_${Date.now()}_${i}`,
+                id: `log_${Date.now()}_${idx}`,
                 time: new Date().toLocaleTimeString(),
-                text: `✅ [UPDATED] ${code}: Found in Picky Assist ➔ Updated stock & details`,
+                text: `✅ [UPDATED] ${code}: Found in Picky Assist ➔ Updated details`,
                 type: 'updated',
               },
               ...prev.slice(0, 99),
@@ -539,7 +650,7 @@ export default function AdminInventoryPage() {
             addedCount++;
             setSyncLogs((prev) => [
               {
-                id: `log_${Date.now()}_${i}`,
+                id: `log_${Date.now()}_${idx}`,
                 time: new Date().toLocaleTimeString(),
                 text: `➕ [CREATED] ${code}: Not in Picky Assist ➔ Added as new product`,
                 type: 'added',
@@ -551,29 +662,47 @@ export default function AdminInventoryPage() {
           failedCount++;
           setSyncLogs((prev) => [
             {
-              id: `log_${Date.now()}_${i}`,
+              id: `log_${Date.now()}_${idx}`,
               time: new Date().toLocaleTimeString(),
-              text: `⚠️ [FAILED] ${code}: ${data.message || data.error || 'Failed to sync'}`,
+              text: `⚠️ [FAILED] ${code}: ${result.error || result.message}`,
               type: 'failed',
             },
             ...prev.slice(0, 99),
           ]);
         }
-      } catch (err: any) {
-        failedCount++;
-        setSyncLogs((prev) => [
-          {
-            id: `log_${Date.now()}_${i}`,
-            time: new Date().toLocaleTimeString(),
-            text: `❌ [ERROR] ${code}: ${err.message || 'Network error'}`,
-            type: 'failed',
-          },
-          ...prev.slice(0, 99),
-        ]);
-      }
 
-      setSyncQueueProgress({ current: i + 1, total: itemsToProcess.length });
-      setSyncQueueStats({ updated: updatedCount, added: addedCount, failed: failedCount });
+        setSyncQueueProgress({ current: completedCount, total: itemsToProcess.length });
+        setSyncQueueStats({ updated: updatedCount, added: addedCount, failed: failedCount });
+
+        // Polite pacing delay
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    };
+
+    const concurrency = Math.min(2, itemsToProcess.length);
+    const workers = Array.from({ length: concurrency }, () => worker());
+    await Promise.all(workers);
+
+    if (abortSyncRef.current) {
+      setSyncLogs((prev) => [
+        {
+          id: `log_${Date.now()}_abort`,
+          time: new Date().toLocaleTimeString(),
+          text: '🛑 Sync was stopped by user.',
+          type: 'info',
+        },
+        ...prev,
+      ]);
+    } else {
+      setSyncLogs((prev) => [
+        {
+          id: `log_${Date.now()}_complete`,
+          time: new Date().toLocaleTimeString(),
+          text: `🎉 Smart Sync complete! ${updatedCount} updated, ${addedCount} created, ${failedCount} failed.`,
+          type: 'info',
+        },
+        ...prev,
+      ]);
     }
 
     setSyncQueueActive(false);
@@ -607,14 +736,14 @@ export default function AdminInventoryPage() {
     fetchSyncCandidates();
   };
 
-  const startDeleteQueue = async () => {
-    if (!deleteConfirmChecked) {
+  const startDeleteQueue = async (overrideItems?: any[]) => {
+    if (!deleteConfirmChecked && !overrideItems) {
       alert('Please check the confirmation box to proceed.');
       return;
     }
 
-    let itemsToProcess = [...syncCandidateList];
-    if (deleteFilterMode === 'syncedOnly') {
+    let itemsToProcess = overrideItems || [...syncCandidateList];
+    if (!overrideItems && deleteFilterMode === 'syncedOnly') {
       itemsToProcess = syncCandidateList.filter((p) => p.syncedAt);
     }
 
@@ -628,54 +757,111 @@ export default function AdminInventoryPage() {
     setDeleteQueueActive(true);
     setDeleteQueuePaused(false);
     setDeleteQueueProgress({ current: 0, total: itemsToProcess.length });
-    setDeleteQueueStats({ deleted: 0, failed: 0 });
-    setDeleteLogs([
+
+    if (overrideItems) {
+      setDeleteAuditList((prev) => prev.filter((item) => item.status === 'success'));
+      setDeleteQueueStats((prev) => ({ deleted: prev.deleted, failed: 0 }));
+    } else {
+      setDeleteAuditList([]);
+      setDeleteQueueStats({ deleted: 0, failed: 0 });
+    }
+
+    setDeleteLogs((prev) => [
       {
         id: `del_log_${Date.now()}`,
         time: new Date().toLocaleTimeString(),
-        text: `Starting Bulk Delete for ${itemsToProcess.length} products from Picky Assist... (Database products are preserved)`,
+        text: `Starting Bulk Delete for ${itemsToProcess.length} products from Picky Assist (2 workers, preserving local database)...`,
         type: 'info',
       },
+      ...prev.slice(0, 50),
     ]);
 
-    let deletedCount = 0;
+    let currentIndex = 0;
+    let completedCount = 0;
+    let deletedCount = overrideItems ? deleteQueueStats.deleted : 0;
     let failedCount = 0;
 
-    for (let i = 0; i < itemsToProcess.length; i++) {
-      if (abortDeleteRef.current) {
-        setDeleteLogs((prev) => [
-          {
-            id: `del_log_${Date.now()}_abort`,
-            time: new Date().toLocaleTimeString(),
-            text: '🛑 Bulk delete was stopped by user.',
-            type: 'info',
-          },
-          ...prev,
-        ]);
-        break;
+    const executeItemWithRetry = async (item: any): Promise<{ success: boolean; message: string; error?: string }> => {
+      let attempts = 0;
+      const maxAttempts = 2;
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          const res = await fetch('/api/admin/picky-assist/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ productId: item.id, action: 'delete' }),
+          });
+
+          if (res.status === 429 || res.status === 503) {
+            if (attempts < maxAttempts) {
+              await new Promise((r) => setTimeout(r, 1800));
+              continue;
+            }
+          }
+
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.success) {
+            return {
+              success: true,
+              message: data.message || `Deleted ${item.stockCode} from Picky Assist`,
+            };
+          } else {
+            return {
+              success: false,
+              message: data.message || data.error || `HTTP ${res.status}`,
+              error: data.error || data.message || `HTTP ${res.status}`,
+            };
+          }
+        } catch (err: any) {
+          if (attempts < maxAttempts) {
+            await new Promise((r) => setTimeout(r, 1500));
+            continue;
+          }
+          return {
+            success: false,
+            message: err.message || 'Network error',
+            error: err.message || 'Network error',
+          };
+        }
       }
+      return { success: false, message: 'Unknown error', error: 'Unknown error' };
+    };
 
-      while (pausedDeleteRef.current && !abortDeleteRef.current) {
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      if (abortDeleteRef.current) break;
+    const worker = async () => {
+      while (currentIndex < itemsToProcess.length && !abortDeleteRef.current) {
+        while (pausedDeleteRef.current && !abortDeleteRef.current) {
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        if (abortDeleteRef.current) break;
 
-      const item = itemsToProcess[i];
-      const code = item.code1 || item.stockCode;
+        const idx = currentIndex++;
+        if (idx >= itemsToProcess.length) break;
 
-      try {
-        const res = await fetch('/api/admin/picky-assist/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ productId: item.id, action: 'delete' }),
-        });
-        const data = await res.json();
+        const item = itemsToProcess[idx];
+        const code = item.code1 || item.stockCode;
+        const result = await executeItemWithRetry(item);
 
-        if (res.ok && data.success) {
+        completedCount++;
+        const auditEntry = {
+          id: item.id,
+          stockCode: item.stockCode,
+          code1: item.code1,
+          productName: item.productName || item.title || item.stockCode,
+          status: result.success ? ('success' as const) : ('failed' as const),
+          actionTaken: result.success ? ('deleted' as const) : ('no_change' as const),
+          message: result.message,
+          error: result.error,
+          time: new Date().toLocaleTimeString(),
+        };
+
+        setDeleteAuditList((prev) => [auditEntry, ...prev.filter((p) => p.id !== item.id)]);
+
+        if (result.success) {
           deletedCount++;
           setDeleteLogs((prev) => [
             {
-              id: `del_log_${Date.now()}_${i}`,
+              id: `del_log_${Date.now()}_${idx}`,
               time: new Date().toLocaleTimeString(),
               text: `🗑️ [DELETED] ${code}: Successfully removed from Picky Assist`,
               type: 'deleted',
@@ -686,29 +872,46 @@ export default function AdminInventoryPage() {
           failedCount++;
           setDeleteLogs((prev) => [
             {
-              id: `del_log_${Date.now()}_${i}`,
+              id: `del_log_${Date.now()}_${idx}`,
               time: new Date().toLocaleTimeString(),
-              text: `⚠️ [FAILED] ${code}: ${data.message || data.error || 'Failed to delete'}`,
+              text: `⚠️ [FAILED] ${code}: ${result.error || result.message}`,
               type: 'failed',
             },
             ...prev.slice(0, 99),
           ]);
         }
-      } catch (err: any) {
-        failedCount++;
-        setDeleteLogs((prev) => [
-          {
-            id: `del_log_${Date.now()}_${i}`,
-            time: new Date().toLocaleTimeString(),
-            text: `❌ [ERROR] ${code}: ${err.message || 'Network error'}`,
-            type: 'failed',
-          },
-          ...prev.slice(0, 99),
-        ]);
-      }
 
-      setDeleteQueueProgress({ current: i + 1, total: itemsToProcess.length });
-      setDeleteQueueStats({ deleted: deletedCount, failed: failedCount });
+        setDeleteQueueProgress({ current: completedCount, total: itemsToProcess.length });
+        setDeleteQueueStats({ deleted: deletedCount, failed: failedCount });
+
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    };
+
+    const concurrency = Math.min(2, itemsToProcess.length);
+    const workers = Array.from({ length: concurrency }, () => worker());
+    await Promise.all(workers);
+
+    if (abortDeleteRef.current) {
+      setDeleteLogs((prev) => [
+        {
+          id: `del_log_${Date.now()}_abort`,
+          time: new Date().toLocaleTimeString(),
+          text: '🛑 Bulk delete was stopped by user.',
+          type: 'info',
+        },
+        ...prev,
+      ]);
+    } else {
+      setDeleteLogs((prev) => [
+        {
+          id: `del_log_${Date.now()}_complete`,
+          time: new Date().toLocaleTimeString(),
+          text: `🎉 Bulk delete complete! ${deletedCount} removed from Picky Assist, ${failedCount} failed.`,
+          type: 'info',
+        },
+        ...prev,
+      ]);
     }
 
     setDeleteQueueActive(false);
@@ -1044,6 +1247,36 @@ export default function AdminInventoryPage() {
                             {product.code1 || product.friendlyCode}
                           </p>
                         )}
+                        {/* Picky Assist Sync Status Badge */}
+                        <div className="mt-1 flex items-center">
+                          {product.syncedAt ? (
+                            new Date(product.updatedAt).getTime() > new Date(product.syncedAt).getTime() + 1000 ? (
+                              <span
+                                title={`Modified locally (${new Date(product.updatedAt).toLocaleDateString()}) - Picky Assist needs update`}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                Picky: Modified
+                              </span>
+                            ) : (
+                              <span
+                                title={`Synced to Picky Assist on ${new Date(product.syncedAt).toLocaleString()}`}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                Picky: Synced
+                              </span>
+                            )
+                          ) : (
+                            <span
+                              title="Never synced to Picky Assist"
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                              Picky: Not Synced
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Category / Garment Type Quick Selector */}
@@ -1419,8 +1652,65 @@ export default function AdminInventoryPage() {
                 </div>
               )}
 
-              {/* Real-time Activity Terminal Feed */}
-              {syncLogs.length > 0 && (
+              {/* Modal View Tabs */}
+              {(syncQueueActive || syncQueueProgress.current > 0 || syncLogs.length > 0) && (
+                <div className="flex items-center gap-1.5 border-b border-cream-border pb-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setSyncModalTab('feed')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      syncModalTab === 'feed'
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'text-charcoal-muted hover:text-charcoal hover:bg-cream-light'
+                    }`}
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Live Feed</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300">
+                      {syncLogs.length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSyncModalTab('success')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      syncModalTab === 'success'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-charcoal-muted hover:text-emerald-700 hover:bg-emerald-50'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Successful</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800">
+                      {syncAuditList.filter((a) => a.status === 'success').length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSyncModalTab('failed')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      syncModalTab === 'failed'
+                        ? 'bg-rose-600 text-white shadow-xs'
+                        : syncAuditList.some((a) => a.status === 'failed')
+                        ? 'text-rose-700 bg-rose-50 border border-rose-200'
+                        : 'text-charcoal-muted hover:text-rose-700 hover:bg-rose-50'
+                    }`}
+                  >
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    <span>Failed</span>
+                    {syncAuditList.filter((a) => a.status === 'failed').length > 0 && (
+                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-rose-200 text-rose-950 font-bold">
+                        {syncAuditList.filter((a) => a.status === 'failed').length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {/* Tab 1: Monospace Terminal Live Feed */}
+              {syncModalTab === 'feed' && syncLogs.length > 0 && (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between text-[11px] text-charcoal-muted">
                     <span className="font-bold uppercase tracking-wider">Live Activity Feed</span>
@@ -1447,16 +1737,119 @@ export default function AdminInventoryPage() {
                   </div>
                 </div>
               )}
+
+              {/* Tab 2: Successful Audit List */}
+              {syncModalTab === 'success' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-charcoal-muted">
+                    <span className="font-bold uppercase tracking-wider">Successfully Synced Products</span>
+                    <span>{syncAuditList.filter((a) => a.status === 'success').length} products</span>
+                  </div>
+                  <div className="border border-cream-border rounded-xl h-52 overflow-y-auto divide-y divide-cream-border bg-white">
+                    {syncAuditList.filter((a) => a.status === 'success').length === 0 ? (
+                      <div className="p-6 text-center text-xs text-charcoal-muted">
+                        No successful syncs recorded yet in this session.
+                      </div>
+                    ) : (
+                      syncAuditList
+                        .filter((a) => a.status === 'success')
+                        .map((item) => (
+                          <div key={item.id} className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-emerald-50/40">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-bold text-charcoal">{item.stockCode}</span>
+                                {item.code1 && (
+                                  <span className="text-[10px] font-mono text-charcoal-muted">({item.code1})</span>
+                                )}
+                                <span
+                                  className={`text-[9px] font-bold px-1.5 py-0.2 rounded uppercase ${
+                                    item.actionTaken === 'updated'
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : 'bg-blue-100 text-blue-800'
+                                  }`}
+                                >
+                                  {item.actionTaken || 'SYNCED'}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-charcoal-muted truncate mt-0.5">{item.productName}</p>
+                            </div>
+                            <span className="text-[10px] text-slate-400 shrink-0 font-mono">{item.time}</span>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 3: Failed Audit List with 1-Click Retry */}
+              {syncModalTab === 'failed' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-rose-900">
+                      Failed Products ({syncAuditList.filter((a) => a.status === 'failed').length})
+                    </span>
+                    {syncAuditList.filter((a) => a.status === 'failed').length > 0 && !syncQueueActive && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const failedIds = new Set(syncAuditList.filter((a) => a.status === 'failed').map((a) => a.id));
+                          const failedItems = syncCandidateList.filter((p) => failedIds.has(p.id));
+                          startSyncQueue(failedItems);
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Retry Failed Items ({syncAuditList.filter((a) => a.status === 'failed').length})</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="border border-rose-200 rounded-xl h-52 overflow-y-auto divide-y divide-rose-100 bg-rose-50/20">
+                    {syncAuditList.filter((a) => a.status === 'failed').length === 0 ? (
+                      <div className="p-8 text-center text-xs text-charcoal-muted flex flex-col items-center justify-center">
+                        <CheckCircle2 className="w-8 h-8 text-emerald-500 mb-2" />
+                        <p className="font-bold text-charcoal">Zero Failed Items!</p>
+                        <p className="text-[11px] text-charcoal-muted mt-0.5">All products processed without errors.</p>
+                      </div>
+                    ) : (
+                      syncAuditList
+                        .filter((a) => a.status === 'failed')
+                        .map((item) => (
+                          <div key={item.id} className="p-3 text-xs space-y-1 hover:bg-rose-50/60">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono font-bold text-rose-950">{item.stockCode}</span>
+                              <span className="text-[10px] text-rose-600 font-mono">{item.time}</span>
+                            </div>
+                            <p className="text-[11px] text-charcoal truncate">{item.productName}</p>
+                            <p className="text-[11px] text-rose-700 bg-rose-100/70 p-1.5 rounded font-mono break-words">
+                              {item.error || item.message || 'Unknown sync error'}
+                            </p>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Modal Footer Controls */}
             <div className="px-6 py-4 bg-cream-light/60 border-t border-cream-border flex items-center justify-between gap-3 shrink-0">
-              <div>
-                {syncCandidatesLoading && (
+              <div className="flex items-center gap-2">
+                {syncCandidatesLoading ? (
                   <span className="text-xs text-charcoal-muted flex items-center gap-1.5">
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Counting candidates...
                   </span>
-                )}
+                ) : syncAuditList.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => exportQueueAuditCsv(syncAuditList, 'picky-assist-sync')}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-charcoal border border-cream-border bg-white hover:bg-cream-light transition-all cursor-pointer shadow-2xs flex items-center gap-1.5"
+                    title="Export CSV proof of all synced, updated, or failed items"
+                  >
+                    <Download className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Export Audit CSV</span>
+                  </button>
+                ) : null}
               </div>
 
               <div className="flex items-center gap-2">
@@ -1471,7 +1864,7 @@ export default function AdminInventoryPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={startSyncQueue}
+                      onClick={() => startSyncQueue()}
                       disabled={syncCandidatesLoading || syncCandidateStats.total === 0}
                       className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition-all cursor-pointer shadow-xs flex items-center gap-1.5 disabled:opacity-50"
                     >
@@ -1666,8 +2059,62 @@ export default function AdminInventoryPage() {
                 </div>
               )}
 
-              {/* Real-time Activity Terminal Feed */}
-              {deleteLogs.length > 0 && (
+              {/* Modal View Tabs */}
+              {(deleteQueueActive || deleteQueueProgress.current > 0 || deleteLogs.length > 0) && (
+                <div className="flex items-center gap-1.5 border-b border-cream-border pb-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setDeleteModalTab('feed')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      deleteModalTab === 'feed'
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'text-charcoal-muted hover:text-charcoal hover:bg-cream-light'
+                    }`}
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Live Feed</span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-slate-800 text-slate-300">
+                      {deleteLogs.length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeleteModalTab('success')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      deleteModalTab === 'success'
+                        ? 'bg-rose-700 text-white shadow-xs'
+                        : 'text-charcoal-muted hover:text-rose-700 hover:bg-rose-50'
+                    }`}
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Deleted ({deleteAuditList.filter((a) => a.status === 'success').length})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeleteModalTab('failed')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      deleteModalTab === 'failed'
+                        ? 'bg-red-600 text-white shadow-xs'
+                        : deleteAuditList.some((a) => a.status === 'failed')
+                        ? 'text-red-700 bg-red-50 border border-red-200'
+                        : 'text-charcoal-muted hover:text-red-700 hover:bg-red-50'
+                    }`}
+                  >
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    <span>Failed</span>
+                    {deleteAuditList.filter((a) => a.status === 'failed').length > 0 && (
+                      <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-red-200 text-red-950 font-bold">
+                        {deleteAuditList.filter((a) => a.status === 'failed').length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {/* Tab 1: Monospace Terminal Live Feed */}
+              {deleteModalTab === 'feed' && deleteLogs.length > 0 && (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between text-[11px] text-charcoal-muted">
                     <span className="font-bold uppercase tracking-wider">Live Deletion Feed</span>
@@ -1692,16 +2139,113 @@ export default function AdminInventoryPage() {
                   </div>
                 </div>
               )}
+
+              {/* Tab 2: Successfully Deleted List */}
+              {deleteModalTab === 'success' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-charcoal-muted">
+                    <span className="font-bold uppercase tracking-wider">Deleted from Picky Assist</span>
+                    <span>{deleteAuditList.filter((a) => a.status === 'success').length} products</span>
+                  </div>
+                  <div className="border border-cream-border rounded-xl h-52 overflow-y-auto divide-y divide-cream-border bg-white">
+                    {deleteAuditList.filter((a) => a.status === 'success').length === 0 ? (
+                      <div className="p-6 text-center text-xs text-charcoal-muted">
+                        No deletions recorded yet in this session.
+                      </div>
+                    ) : (
+                      deleteAuditList
+                        .filter((a) => a.status === 'success')
+                        .map((item) => (
+                          <div key={item.id} className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-rose-50/40">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-bold text-charcoal">{item.stockCode}</span>
+                                {item.code1 && (
+                                  <span className="text-[10px] font-mono text-charcoal-muted">({item.code1})</span>
+                                )}
+                                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded uppercase bg-rose-100 text-rose-800">
+                                  REMOVED
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-charcoal-muted truncate mt-0.5">{item.productName}</p>
+                            </div>
+                            <span className="text-[10px] text-slate-400 shrink-0 font-mono">{item.time}</span>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 3: Failed Deletions with 1-Click Retry */}
+              {deleteModalTab === 'failed' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-rose-900">
+                      Failed Deletions ({deleteAuditList.filter((a) => a.status === 'failed').length})
+                    </span>
+                    {deleteAuditList.filter((a) => a.status === 'failed').length > 0 && !deleteQueueActive && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const failedIds = new Set(deleteAuditList.filter((a) => a.status === 'failed').map((a) => a.id));
+                          const failedItems = syncCandidateList.filter((p) => failedIds.has(p.id));
+                          startDeleteQueue(failedItems);
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Retry Failed ({deleteAuditList.filter((a) => a.status === 'failed').length})</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="border border-rose-200 rounded-xl h-52 overflow-y-auto divide-y divide-rose-100 bg-rose-50/20">
+                    {deleteAuditList.filter((a) => a.status === 'failed').length === 0 ? (
+                      <div className="p-8 text-center text-xs text-charcoal-muted flex flex-col items-center justify-center">
+                        <CheckCircle2 className="w-8 h-8 text-emerald-500 mb-2" />
+                        <p className="font-bold text-charcoal">Zero Failed Deletions!</p>
+                        <p className="text-[11px] text-charcoal-muted mt-0.5">All targeted products were removed cleanly.</p>
+                      </div>
+                    ) : (
+                      deleteAuditList
+                        .filter((a) => a.status === 'failed')
+                        .map((item) => (
+                          <div key={item.id} className="p-3 text-xs space-y-1 hover:bg-rose-50/60">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono font-bold text-rose-950">{item.stockCode}</span>
+                              <span className="text-[10px] text-rose-600 font-mono">{item.time}</span>
+                            </div>
+                            <p className="text-[11px] text-charcoal truncate">{item.productName}</p>
+                            <p className="text-[11px] text-rose-700 bg-rose-100/70 p-1.5 rounded font-mono break-words">
+                              {item.error || item.message || 'Unknown delete error'}
+                            </p>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Modal Footer Controls */}
             <div className="px-6 py-4 bg-cream-light/60 border-t border-cream-border flex items-center justify-between gap-3 shrink-0">
-              <div>
-                {syncCandidatesLoading && (
+              <div className="flex items-center gap-2">
+                {syncCandidatesLoading ? (
                   <span className="text-xs text-charcoal-muted flex items-center gap-1.5">
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Counting candidates...
                   </span>
-                )}
+                ) : deleteAuditList.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => exportQueueAuditCsv(deleteAuditList, 'picky-assist-delete')}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-charcoal border border-cream-border bg-white hover:bg-cream-light transition-all cursor-pointer shadow-2xs flex items-center gap-1.5"
+                    title="Export CSV proof of all deleted or failed items"
+                  >
+                    <Download className="w-3.5 h-3.5 text-slate-600" />
+                    <span>Export Audit CSV</span>
+                  </button>
+                ) : null}
               </div>
 
               <div className="flex items-center gap-2">
@@ -1716,7 +2260,7 @@ export default function AdminInventoryPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={startDeleteQueue}
+                      onClick={() => startDeleteQueue()}
                       disabled={syncCandidatesLoading || !deleteConfirmChecked || syncCandidateStats.total === 0}
                       className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 transition-all cursor-pointer shadow-xs flex items-center gap-1.5 disabled:opacity-50"
                     >
