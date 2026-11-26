@@ -8,7 +8,7 @@ import {
   ChevronUp, ChevronDown, AlertCircle, CheckCircle2,
   XCircle, Layers, Edit2, MoreHorizontal, Tag,
   Upload, FileSpreadsheet, Play, Pause, Square, Sparkles, Check, X, Globe, ShoppingBag, Trash, Trash2,
-  RotateCcw, Download
+  RotateCcw, Download, SlidersHorizontal, ArrowUpDown, ImageOff, IndianRupee
 } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
@@ -17,7 +17,13 @@ import * as XLSX from 'xlsx';
 import { parseSheetSmart, mapSpreadsheetRow } from '@/lib/spreadsheet-mapper';
 import { consolidateSpreadsheetRows } from '@/lib/size-inventory';
 
-interface Category { id: string; name: string; slug: string; subCategories: { id: string; name: string; slug: string }[] }
+interface Category {
+  id: string;
+  name: string;
+  slug: string;
+  subCategories: { id: string; name: string; slug: string }[];
+  _count?: { products: number };
+}
 interface Product {
   id: string;
   stockCode: string;
@@ -39,11 +45,23 @@ interface Product {
   soldQty: number;
   status: 'ACTIVE' | 'OUT_OF_STOCK' | 'ARCHIVED' | 'DRAFT';
   coverImageUrl: string | null;
+  hasAi?: boolean;
+  syncedAt?: string | null;
   category: { id: string; name: string; slug: string } | null;
   subCategory: { id: string; name: string; slug: string } | null;
   updatedAt: string;
-  syncedAt?: string | null;
   _count?: { inventoryLogs: number };
+}
+interface InventoryStats {
+  total: number;
+  inStock: number;
+  outOfStock: number;
+  lowStock: number;
+  categorized: number;
+  uncategorized: number;
+  synced: number;
+  modified: number;
+  unsynced: number;
 }
 
 const STATUS_CONFIG = {
@@ -65,13 +83,27 @@ export default function AdminInventoryPage() {
   const [total, setTotal] = useState(0);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // Filters
+  // Filters (hydrated from URL query params on mount)
+  const [filtersReady, setFiltersReady] = useState(false);
   const [search, setSearch] = useState('');
+  const [categorizedFilter, setCategorizedFilter] = useState<'' | 'true' | 'false'>('');
   const [categoryId, setCategoryId] = useState('');
+  const [subCategoryId, setSubCategoryId] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [uncategorizedCount, setUncategorizedCount] = useState<number | null>(null);
+  const [syncFilter, setSyncFilter] = useState<'' | 'synced' | 'modified' | 'unsynced'>('');
+  const [missingImage, setMissingImage] = useState<'' | 'true' | 'false'>('');
+  const [missingPrice, setMissingPrice] = useState<'' | 'true' | 'false'>('');
+  const [missingAi, setMissingAi] = useState<'' | 'true' | 'false'>('');
+  const [clothTypeFilter, setClothTypeFilter] = useState('');
+  const [colorFilter, setColorFilter] = useState('');
+  const [sort, setSort] = useState('newest');
   const [page, setPage] = useState(1);
-  const limit = 20;
+  const [limit, setLimit] = useState(20);
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+
+  const [globalStats, setGlobalStats] = useState<InventoryStats | null>(null);
+  const [facets, setFacets] = useState<{ clothTypes: string[]; colors: string[] }>({ clothTypes: [], colors: [] });
+  const [uncategorizedCount, setUncategorizedCount] = useState<number | null>(null);
 
   // Quick qty edit
   const [editingQty, setEditingQty] = useState<string | null>(null);
@@ -213,13 +245,70 @@ export default function AdminInventoryPage() {
     }
   };
 
+  // Hydrate filters from URL on initial mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get('search')) setSearch(sp.get('search') || '');
+    const catFlag = sp.get('categorized');
+    if (catFlag === 'true' || catFlag === 'false') setCategorizedFilter(catFlag);
+    const catId = sp.get('categoryId') || '';
+    if (catId === 'uncategorized') {
+      setCategorizedFilter('false');
+    } else if (catId) {
+      setCategoryId(catId);
+    }
+    if (sp.get('subCategoryId')) setSubCategoryId(sp.get('subCategoryId') || '');
+    if (sp.get('status')) setStatusFilter(sp.get('status') || '');
+    const sync = sp.get('syncStatus');
+    if (sync === 'synced' || sync === 'modified' || sync === 'unsynced') setSyncFilter(sync);
+    const mi = sp.get('missingImage');
+    if (mi === 'true' || mi === 'false') setMissingImage(mi);
+    const mp = sp.get('missingPrice');
+    if (mp === 'true' || mp === 'false') setMissingPrice(mp);
+    const ma = sp.get('missingAi');
+    if (ma === 'true' || ma === 'false') setMissingAi(ma);
+    if (sp.get('clothType')) setClothTypeFilter(sp.get('clothType') || '');
+    if (sp.get('color')) setColorFilter(sp.get('color') || '');
+    if (sp.get('sort')) setSort(sp.get('sort') || 'newest');
+    if (sp.get('page')) setPage(Math.max(1, parseInt(sp.get('page') || '1') || 1));
+    if (sp.get('limit')) {
+      const parsedLimit = parseInt(sp.get('limit') || '20') || 20;
+      if ([20, 50, 100].includes(parsedLimit)) setLimit(parsedLimit);
+    }
+    if (mi || mp || ma || sp.get('clothType') || sp.get('color')) {
+      setShowMoreFilters(true);
+    }
+    setFiltersReady(true);
+  }, []);
+
+  const buildQueryParams = useCallback(() => {
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    if (categorizedFilter) params.set('categorized', categorizedFilter);
+    if (categoryId) params.set('categoryId', categoryId);
+    if (subCategoryId) params.set('subCategoryId', subCategoryId);
+    if (statusFilter) params.set('status', statusFilter);
+    if (syncFilter) params.set('syncStatus', syncFilter);
+    if (missingImage) params.set('missingImage', missingImage);
+    if (missingPrice) params.set('missingPrice', missingPrice);
+    if (missingAi) params.set('missingAi', missingAi);
+    if (clothTypeFilter) params.set('clothType', clothTypeFilter);
+    if (colorFilter) params.set('color', colorFilter);
+    if (sort && sort !== 'newest') params.set('sort', sort);
+    if (page > 1) params.set('page', String(page));
+    if (limit !== 20) params.set('limit', String(limit));
+    return params;
+  }, [
+    search, categorizedFilter, categoryId, subCategoryId, statusFilter,
+    syncFilter, missingImage, missingPrice, missingAi, clothTypeFilter,
+    colorFilter, sort, page, limit,
+  ]);
+
   const fetchProducts = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (search) params.set('search', search);
-      if (categoryId) params.set('categoryId', categoryId);
-      if (statusFilter) params.set('status', statusFilter);
+      const params = buildQueryParams();
       params.set('page', String(page));
       params.set('limit', String(limit));
 
@@ -231,8 +320,17 @@ export default function AdminInventoryPage() {
       setFetchError(null);
       setProducts(data.products || []);
       setTotal(data.total || 0);
-      if (typeof data.uncategorizedCount === 'number') {
+      if (data.stats) {
+        setGlobalStats(data.stats);
+        setUncategorizedCount(data.stats.uncategorized);
+      } else if (typeof data.uncategorizedCount === 'number') {
         setUncategorizedCount(data.uncategorizedCount);
+      }
+      if (data.facets) {
+        setFacets({
+          clothTypes: data.facets.clothTypes || [],
+          colors: data.facets.colors || [],
+        });
       }
     } catch (err: any) {
       console.error('Fetch products error:', err);
@@ -242,7 +340,7 @@ export default function AdminInventoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [search, categoryId, statusFilter, page]);
+  }, [buildQueryParams, page, limit]);
 
   useEffect(() => {
     fetch('/api/admin/categories').then(async r => {
@@ -253,9 +351,32 @@ export default function AdminInventoryPage() {
   }, []);
 
   useEffect(() => {
-    const t = setTimeout(fetchProducts, 300);
+    if (!filtersReady) return;
+    if (typeof window !== 'undefined') {
+      const params = buildQueryParams();
+      const qs = params.toString();
+      const nextUrl = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+      window.history.replaceState(null, '', nextUrl);
+    }
+    const t = setTimeout(fetchProducts, 250);
     return () => clearTimeout(t);
-  }, [fetchProducts]);
+  }, [filtersReady, buildQueryParams, fetchProducts]);
+
+  const resetAllFilters = () => {
+    setSearch('');
+    setCategorizedFilter('');
+    setCategoryId('');
+    setSubCategoryId('');
+    setStatusFilter('');
+    setSyncFilter('');
+    setMissingImage('');
+    setMissingPrice('');
+    setMissingAi('');
+    setClothTypeFilter('');
+    setColorFilter('');
+    setSort('newest');
+    setPage(1);
+  };
 
   const handleQuickQtyUpdate = async (productId: string, newQty: number) => {
     await fetch(`/api/admin/products/${productId}`, {
@@ -295,8 +416,26 @@ export default function AdminInventoryPage() {
               const wasUncat = !p.category;
               if (wasUncat && updatedCat) {
                 setUncategorizedCount((prevCount) => (prevCount !== null && prevCount > 0 ? prevCount - 1 : 0));
+                setGlobalStats((prevStats) =>
+                  prevStats
+                    ? {
+                        ...prevStats,
+                        categorized: prevStats.categorized + 1,
+                        uncategorized: Math.max(0, prevStats.uncategorized - 1),
+                      }
+                    : prevStats
+                );
               } else if (!wasUncat && !updatedCat) {
                 setUncategorizedCount((prevCount) => (prevCount !== null ? prevCount + 1 : 1));
+                setGlobalStats((prevStats) =>
+                  prevStats
+                    ? {
+                        ...prevStats,
+                        categorized: Math.max(0, prevStats.categorized - 1),
+                        uncategorized: prevStats.uncategorized + 1,
+                      }
+                    : prevStats
+                );
               }
               return { ...p, category: updatedCat, subCategory: null };
             }
@@ -981,12 +1120,23 @@ export default function AdminInventoryPage() {
     }
   };
 
-  const stats = {
-    total: total,
-    inStock: products.filter(p => p.status === 'ACTIVE').length,
-    outOfStock: products.filter(p => p.status === 'OUT_OF_STOCK').length,
-    lowStock: products.filter(p => p.status === 'ACTIVE' && p.quantity <= 3).length,
+  const stats = globalStats ?? {
+    total,
+    inStock: 0,
+    outOfStock: 0,
+    lowStock: 0,
+    categorized: 0,
+    uncategorized: uncategorizedCount ?? 0,
+    synced: 0,
+    modified: 0,
+    unsynced: 0,
   };
+
+  const selectedCategory = categories.find((c) => c.id === categoryId) || null;
+  const advancedFilterCount = [missingImage, missingPrice, missingAi, clothTypeFilter, colorFilter].filter(Boolean).length;
+  const hasAnyFilter = Boolean(
+    search || categorizedFilter || categoryId || subCategoryId || statusFilter || syncFilter || advancedFilterCount > 0
+  );
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -1102,101 +1252,392 @@ export default function AdminInventoryPage() {
         </div>
       )}
 
-      {/* Summary Stats */}
+      {/* Summary Stats (Global DB Counts — Clickable Quick Filters) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
-          { label: 'Total Products', value: total, color: 'text-charcoal', icon: Package },
-          { label: 'In Stock', value: stats.inStock, color: 'text-emerald-600', icon: CheckCircle2 },
-          { label: 'Out of Stock', value: stats.outOfStock, color: 'text-red-600', icon: XCircle },
-          { label: 'Low Stock (≤3)', value: stats.lowStock, color: 'text-amber-600', icon: AlertCircle },
+          {
+            label: 'Total Products',
+            value: stats.total,
+            color: 'text-charcoal',
+            activeBorder: 'border-charcoal/40 ring-2 ring-charcoal/10',
+            icon: Package,
+            active: !statusFilter,
+            onClick: () => { setStatusFilter(''); setPage(1); },
+          },
+          {
+            label: 'In Stock',
+            value: stats.inStock,
+            color: 'text-emerald-600',
+            activeBorder: 'border-emerald-400 ring-2 ring-emerald-500/20 bg-emerald-50/30',
+            icon: CheckCircle2,
+            active: statusFilter === 'ACTIVE',
+            onClick: () => { setStatusFilter(statusFilter === 'ACTIVE' ? '' : 'ACTIVE'); setPage(1); },
+          },
+          {
+            label: 'Out of Stock',
+            value: stats.outOfStock,
+            color: 'text-red-600',
+            activeBorder: 'border-red-400 ring-2 ring-red-500/20 bg-red-50/30',
+            icon: XCircle,
+            active: statusFilter === 'OUT_OF_STOCK',
+            onClick: () => { setStatusFilter(statusFilter === 'OUT_OF_STOCK' ? '' : 'OUT_OF_STOCK'); setPage(1); },
+          },
+          {
+            label: 'Low Stock (≤3)',
+            value: stats.lowStock,
+            color: 'text-amber-600',
+            activeBorder: 'border-amber-400 ring-2 ring-amber-500/20 bg-amber-50/30',
+            icon: AlertCircle,
+            active: statusFilter === 'LOW_STOCK',
+            onClick: () => { setStatusFilter(statusFilter === 'LOW_STOCK' ? '' : 'LOW_STOCK'); setPage(1); },
+          },
         ].map((s) => {
           const Icon = s.icon;
           return (
-            <Card key={s.label} className="p-5">
+            <button
+              key={s.label}
+              type="button"
+              onClick={s.onClick}
+              className={`text-left rounded-2xl border bg-white p-5 transition-all cursor-pointer hover:shadow-sm ${
+                s.active && s.label !== 'Total Products' ? s.activeBorder : 'border-cream-border hover:border-charcoal/20'
+              }`}
+            >
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-charcoal-muted">{s.label}</span>
                 <Icon className={`w-4 h-4 ${s.color}`} />
               </div>
               <p className={`font-display text-3xl font-extrabold mt-2 ${s.color}`}>
-                {loading ? '—' : s.value}
+                {loading && !globalStats ? '—' : s.value}
               </p>
-            </Card>
+            </button>
           );
         })}
       </div>
 
-      {/* Search + Filter Row */}
-      <div className="flex flex-col sm:flex-row gap-3 items-center">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-charcoal-muted" />
-          <input
-            suppressHydrationWarning
-            className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-            placeholder="Search by code, title, tag, colour..."
-            value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1); }}
-          />
+      {/* Catalog Health & Picky Sync Strip */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 px-4 py-3 rounded-2xl bg-white border border-cream-border">
+        {/* Categorization Breakdown */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-charcoal-muted mr-1">
+            Categorization:
+          </span>
+          <button
+            type="button"
+            onClick={() => { setCategorizedFilter(''); setCategoryId(''); setSubCategoryId(''); setPage(1); }}
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              !categorizedFilter && !categoryId
+                ? 'bg-charcoal text-white'
+                : 'bg-cream-light text-charcoal-muted hover:text-charcoal'
+            }`}
+          >
+            All ({stats.total})
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCategorizedFilter(categorizedFilter === 'true' ? '' : 'true');
+              setCategoryId('');
+              setSubCategoryId('');
+              setPage(1);
+            }}
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              categorizedFilter === 'true'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+            }`}
+          >
+            Categorized ({stats.categorized})
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCategorizedFilter(categorizedFilter === 'false' ? '' : 'false');
+              setCategoryId('');
+              setSubCategoryId('');
+              setPage(1);
+            }}
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              categorizedFilter === 'false'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
+            }`}
+          >
+            Uncategorized ({stats.uncategorized})
+          </button>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* Picky Assist Sync Breakdown */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-charcoal-muted mr-1">
+            Picky Sync:
+          </span>
+          <button
+            type="button"
+            onClick={() => { setSyncFilter(''); setPage(1); }}
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              !syncFilter
+                ? 'bg-charcoal text-white'
+                : 'bg-cream-light text-charcoal-muted hover:text-charcoal'
+            }`}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            onClick={() => { setSyncFilter(syncFilter === 'synced' ? '' : 'synced'); setPage(1); }}
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              syncFilter === 'synced'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+            }`}
+          >
+            Synced ({stats.synced})
+          </button>
+          <button
+            type="button"
+            onClick={() => { setSyncFilter(syncFilter === 'modified' ? '' : 'modified'); setPage(1); }}
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              syncFilter === 'modified'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
+            }`}
+          >
+            Needs Re-sync ({stats.modified})
+          </button>
+          <button
+            type="button"
+            onClick={() => { setSyncFilter(syncFilter === 'unsynced' ? '' : 'unsynced'); setPage(1); }}
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              syncFilter === 'unsynced'
+                ? 'bg-slate-700 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200'
+            }`}
+          >
+            Not Synced ({stats.unsynced})
+          </button>
+        </div>
+      </div>
+
+      {/* Primary Search + Filter Bar */}
+      <div className="space-y-3">
+        <div className="flex flex-wrap gap-2.5 items-center">
+          {/* Search */}
+          <div className="relative flex-1 min-w-[220px] max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-charcoal-muted" />
+            <input
+              suppressHydrationWarning
+              className="w-full pl-9 pr-8 py-2.5 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+              placeholder="Search code, title, tag, colour..."
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(1); }}
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => { setSearch(''); setPage(1); }}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-charcoal-muted hover:text-charcoal cursor-pointer"
+                title="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Garment Type (Category) */}
           <select
             value={categoryId}
-            onChange={e => { setCategoryId(e.target.value); setPage(1); }}
-            className={`px-3 py-2.5 rounded-xl border text-sm cursor-pointer transition-colors ${
-              categoryId === 'uncategorized'
-                ? 'border-amber-400 bg-amber-50 text-amber-900 font-semibold ring-2 ring-amber-300/40'
+            onChange={e => {
+              const val = e.target.value;
+              setCategoryId(val);
+              setSubCategoryId('');
+              if (val) setCategorizedFilter('');
+              setPage(1);
+            }}
+            className={`px-3 py-2.5 rounded-xl border text-sm cursor-pointer transition-colors focus:outline-none focus:border-accent ${
+              categoryId
+                ? 'border-accent bg-accent-bg/30 text-charcoal font-semibold'
                 : 'border-cream-border bg-white text-charcoal'
-            } focus:outline-none focus:border-accent`}
+            }`}
           >
             <option value="">All Garment Types</option>
-            <option value="uncategorized" className="font-bold text-amber-700 bg-amber-50">
-              ⚠️ Uncategorized {uncategorizedCount !== null ? `(${uncategorizedCount})` : ''}
-            </option>
             {categories.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={c.id}>
+                {c.name}{typeof c._count?.products === 'number' ? ` (${c._count.products})` : ''}
+              </option>
             ))}
           </select>
 
-          {uncategorizedCount !== null && uncategorizedCount > 0 && (
+          {/* Dynamic Sub-Category (only when selected category has subCategories) */}
+          {selectedCategory && selectedCategory.subCategories.length > 0 && (
+            <select
+              value={subCategoryId}
+              onChange={e => { setSubCategoryId(e.target.value); setPage(1); }}
+              className="px-3 py-2.5 rounded-xl border border-accent/40 bg-white text-sm text-charcoal focus:outline-none focus:border-accent cursor-pointer"
+            >
+              <option value="">All Sub-Categories</option>
+              {selectedCategory.subCategories.map(sc => (
+                <option key={sc.id} value={sc.id}>{sc.name}</option>
+              ))}
+            </select>
+          )}
+
+          {/* Stock & Status */}
+          <select
+            value={statusFilter}
+            onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
+            className={`px-3 py-2.5 rounded-xl border text-sm cursor-pointer focus:outline-none focus:border-accent ${
+              statusFilter
+                ? 'border-accent bg-accent-bg/30 text-charcoal font-semibold'
+                : 'border-cream-border bg-white text-charcoal'
+            }`}
+          >
+            <option value="">All Status</option>
+            <option value="ACTIVE">In Stock</option>
+            <option value="LOW_STOCK">Low Stock (≤3)</option>
+            <option value="OUT_OF_STOCK">Out of Stock</option>
+            <option value="DRAFT">Draft</option>
+            <option value="ARCHIVED">Archived</option>
+          </select>
+
+          {/* Sort */}
+          <div className="relative inline-flex items-center">
+            <ArrowUpDown className="w-3.5 h-3.5 text-charcoal-muted absolute left-3 pointer-events-none" />
+            <select
+              value={sort}
+              onChange={e => { setSort(e.target.value); setPage(1); }}
+              className="pl-8 pr-3 py-2.5 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent cursor-pointer"
+              title="Sort products"
+            >
+              <option value="newest">Newest Added</option>
+              <option value="updated">Recently Updated</option>
+              <option value="qty_asc">Qty: Low → High</option>
+              <option value="qty_desc">Qty: High → Low</option>
+              <option value="price_asc">Price: Low → High</option>
+              <option value="price_desc">Price: High → Low</option>
+              <option value="code_asc">Stock Code (A–Z)</option>
+            </select>
+          </div>
+
+          {/* More Filters Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowMoreFilters((v) => !v)}
+            className={`inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl border text-sm font-semibold transition-all cursor-pointer ${
+              showMoreFilters || advancedFilterCount > 0
+                ? 'border-accent bg-accent-bg text-accent'
+                : 'border-cream-border bg-white text-charcoal hover:border-accent/40'
+            }`}
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+            <span>More Filters</span>
+            {advancedFilterCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-accent text-white text-[10px] font-bold">
+                {advancedFilterCount}
+              </span>
+            )}
+          </button>
+
+          {hasAnyFilter && (
             <button
               type="button"
-              onClick={() => {
-                setCategoryId(categoryId === 'uncategorized' ? '' : 'uncategorized');
-                setPage(1);
-              }}
-              title={categoryId === 'uncategorized' ? 'Clear uncategorized filter' : 'Show only uncategorized products'}
-              className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
-                categoryId === 'uncategorized'
-                  ? 'bg-amber-600 text-white border-amber-700 shadow-sm'
-                  : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100 hover:border-amber-300'
-              }`}
+              onClick={resetAllFilters}
+              className="inline-flex items-center gap-1 px-3 py-2.5 rounded-xl border border-red-200 bg-red-50 text-xs font-bold text-red-700 hover:bg-red-100 transition-colors cursor-pointer"
             >
-              <span>⚠️</span>
-              <span>{uncategorizedCount} Uncategorized</span>
-              {categoryId === 'uncategorized' && <span className="text-[10px] bg-black/20 px-1 rounded font-normal">Active ✕</span>}
+              <X className="w-3.5 h-3.5" />
+              Reset
             </button>
           )}
+
+          <button
+            onClick={fetchProducts}
+            className="p-2.5 rounded-xl border border-cream-border bg-white text-charcoal-muted hover:text-charcoal hover:border-accent/40 transition-colors cursor-pointer"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
         </div>
 
-        <select
-          value={statusFilter}
-          onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
-          className="px-3 py-2.5 rounded-xl border border-cream-border bg-white text-sm text-charcoal focus:outline-none focus:border-accent cursor-pointer"
-        >
-          <option value="">All Status</option>
-          <option value="ACTIVE">In Stock</option>
-          <option value="OUT_OF_STOCK">Out of Stock</option>
-          <option value="DRAFT">Draft</option>
-          <option value="ARCHIVED">Archived</option>
-        </select>
+        {/* Collapsible Advanced / Catalog-Audit Filters */}
+        {showMoreFilters && (
+          <div className="p-4 rounded-2xl bg-white border border-cream-border grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 animate-fade-in">
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-charcoal-muted mb-1">
+                Product Image
+              </label>
+              <select
+                value={missingImage}
+                onChange={e => { setMissingImage(e.target.value as any); setPage(1); }}
+                className="w-full px-2.5 py-2 rounded-lg border border-cream-border bg-cream-light/40 text-xs text-charcoal focus:outline-none focus:border-accent cursor-pointer"
+              >
+                <option value="">All</option>
+                <option value="true">Missing Image</option>
+                <option value="false">Has Image</option>
+              </select>
+            </div>
 
-        <button
-          onClick={fetchProducts}
-          className="p-2.5 rounded-xl border border-cream-border bg-white text-charcoal-muted hover:text-charcoal hover:border-accent/40 transition-colors cursor-pointer"
-          title="Refresh"
-        >
-          <RefreshCw className="w-4 h-4" />
-        </button>
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-charcoal-muted mb-1">
+                Pricing
+              </label>
+              <select
+                value={missingPrice}
+                onChange={e => { setMissingPrice(e.target.value as any); setPage(1); }}
+                className="w-full px-2.5 py-2 rounded-lg border border-cream-border bg-cream-light/40 text-xs text-charcoal focus:outline-none focus:border-accent cursor-pointer"
+              >
+                <option value="">All</option>
+                <option value="true">Missing Price</option>
+                <option value="false">Has Price</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-charcoal-muted mb-1">
+                AI Images
+              </label>
+              <select
+                value={missingAi}
+                onChange={e => { setMissingAi(e.target.value as any); setPage(1); }}
+                className="w-full px-2.5 py-2 rounded-lg border border-cream-border bg-cream-light/40 text-xs text-charcoal focus:outline-none focus:border-accent cursor-pointer"
+              >
+                <option value="">All</option>
+                <option value="true">Pending AI</option>
+                <option value="false">Has AI Images</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-charcoal-muted mb-1">
+                Cloth Type
+              </label>
+              <select
+                value={clothTypeFilter}
+                onChange={e => { setClothTypeFilter(e.target.value); setPage(1); }}
+                className="w-full px-2.5 py-2 rounded-lg border border-cream-border bg-cream-light/40 text-xs text-charcoal focus:outline-none focus:border-accent cursor-pointer"
+              >
+                <option value="">All Fabrics</option>
+                {facets.clothTypes.map(ct => (
+                  <option key={ct} value={ct}>{ct}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-charcoal-muted mb-1">
+                Color
+              </label>
+              <select
+                value={colorFilter}
+                onChange={e => { setColorFilter(e.target.value); setPage(1); }}
+                className="w-full px-2.5 py-2 rounded-lg border border-cream-border bg-cream-light/40 text-xs text-charcoal focus:outline-none focus:border-accent cursor-pointer"
+              >
+                <option value="">All Colors</option>
+                {facets.colors.map(col => (
+                  <option key={col} value={col}>{col}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Product Table */}
@@ -1212,12 +1653,16 @@ export default function AdminInventoryPage() {
             <div>
               <p className="font-display text-base font-bold text-charcoal">No products found</p>
               <p className="text-xs text-charcoal-muted mt-1">
-                {search || categoryId || statusFilter
-                  ? 'Try clearing filters'
+                {hasAnyFilter
+                  ? 'Try adjusting or resetting your filters'
                   : 'Add your first product to get started'}
               </p>
             </div>
-            {!search && !categoryId && !statusFilter && (
+            {hasAnyFilter ? (
+              <Button variant="secondary" size="md" className="mt-2" onClick={resetAllFilters}>
+                <X className="w-4 h-4" /> Reset Filters
+              </Button>
+            ) : (
               <Link href="/admin/inventory/new">
                 <Button size="md" className="mt-2">
                   <Plus className="w-4 h-4" /> Add First Product
@@ -1530,27 +1975,44 @@ export default function AdminInventoryPage() {
         )}
 
         {/* Pagination */}
-        {total > limit && (
-          <div className="px-5 py-4 border-t border-cream-border flex items-center justify-between text-sm">
-            <p className="text-charcoal-muted text-xs">
-              Showing {(page - 1) * limit + 1}–{Math.min(page * limit, total)} of {total} products
-            </p>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPage(p => Math.max(1, p - 1))}
-                disabled={page === 1}
-                className="px-3 py-1.5 rounded-lg border border-cream-border text-xs font-semibold disabled:opacity-40 hover:border-accent transition-colors cursor-pointer"
+        {total > 0 && (
+          <div className="px-5 py-4 border-t border-cream-border flex flex-col sm:flex-row items-center justify-between gap-3 text-sm">
+            <div className="flex items-center gap-3">
+              <p className="text-charcoal-muted text-xs">
+                Showing {(page - 1) * limit + 1}–{Math.min(page * limit, total)} of {total} products
+              </p>
+              <select
+                value={limit}
+                onChange={e => { setLimit(Number(e.target.value)); setPage(1); }}
+                className="px-2 py-1 rounded-lg border border-cream-border bg-white text-xs text-charcoal cursor-pointer"
+                title="Rows per page"
               >
-                Previous
-              </button>
-              <button
-                onClick={() => setPage(p => p + 1)}
-                disabled={page * limit >= total}
-                className="px-3 py-1.5 rounded-lg border border-cream-border text-xs font-semibold disabled:opacity-40 hover:border-accent transition-colors cursor-pointer"
-              >
-                Next
-              </button>
+                <option value={20}>20 / page</option>
+                <option value={50}>50 / page</option>
+                <option value={100}>100 / page</option>
+              </select>
             </div>
+            {total > limit && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-charcoal-muted mr-1">
+                  Page {page} of {Math.max(1, Math.ceil(total / limit))}
+                </span>
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  className="px-3 py-1.5 rounded-lg border border-cream-border text-xs font-semibold disabled:opacity-40 hover:border-accent transition-colors cursor-pointer"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={page * limit >= total}
+                  className="px-3 py-1.5 rounded-lg border border-cream-border text-xs font-semibold disabled:opacity-40 hover:border-accent transition-colors cursor-pointer"
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
         )}
       </Card>

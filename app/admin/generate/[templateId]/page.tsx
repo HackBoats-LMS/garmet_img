@@ -461,6 +461,49 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   // Step: Image Format
   const [selectedAspectRatio, setSelectedAspectRatio] = useState<string>('3:4');
 
+  // Pre-flight Cloudflare R2 / Permanent Storage Health Check
+  const [storageHealth, setStorageHealth] = useState<{
+    checked: boolean;
+    checking: boolean;
+    ok: boolean;
+    provider?: string;
+    bucket?: string;
+    publicUrlConfigured?: boolean;
+    missingEnvVars?: string[];
+    error?: string | null;
+  }>({ checked: false, checking: false, ok: true });
+
+  const checkStorageHealth = React.useCallback(async (force: boolean = false) => {
+    setStorageHealth((prev) => ({ ...prev, checking: true }));
+    try {
+      const res = await fetch(`/api/admin/storage-health${force ? '?force=true' : ''}`);
+      const data = await res.json();
+      const next = {
+        checked: true,
+        checking: false,
+        ok: Boolean(data?.ok),
+        provider: data?.provider,
+        bucket: data?.bucket,
+        publicUrlConfigured: data?.publicUrlConfigured,
+        missingEnvVars: Array.isArray(data?.missingEnvVars) ? data.missingEnvVars : [],
+        error: data?.error || (!res.ok ? `Storage health check failed (HTTP ${res.status})` : null),
+      };
+      setStorageHealth(next);
+      return next;
+    } catch (err: any) {
+      const next = {
+        checked: true,
+        checking: false,
+        ok: false,
+        provider: 'none',
+        missingEnvVars: [],
+        error: err?.message || 'Failed to verify Cloudflare R2 storage on server',
+      };
+      setStorageHealth(next);
+      return next;
+    }
+  }, []);
+
   useEffect(() => {
     setMounted(true);
     fetchData();
@@ -553,6 +596,12 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
   };
 
   const currentContent = getStepContent();
+
+  useEffect(() => {
+    if (currentContent === 'generate' && !storageHealth.checked && !storageHealth.checking) {
+      checkStorageHealth(false);
+    }
+  }, [currentContent, storageHealth.checked, storageHealth.checking, checkStorageHealth]);
   // Drag & Drop State
   const [dragActiveSlot, setDragActiveSlot] = useState<string | null>(null);
   const [openPicker, authResponse] = useDrivePicker();
@@ -1069,6 +1118,28 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     setGenError(null);
     setPoseErrors(prev => { const n = { ...prev }; delete n[poseId]; return n; });
 
+    // Pre-flight storage check for single-pose generation (batches check once before launching)
+    if (!cachedCompressedUploaded) {
+      setGenStatus('Verifying Cloudflare R2 permanent storage...');
+      const health = await checkStorageHealth(true);
+      if (!health.ok) {
+        const missingMsg = health.missingEnvVars?.length
+          ? ` Missing server env: ${health.missingEnvVars.join(', ')}.`
+          : '';
+        const errMsg = `${health.error || 'Cloudflare R2 storage upload check failed.'}${missingMsg} Generation blocked so images do not expire.`;
+        setGenError(errMsg);
+        setGenStatus(null);
+        setPoseErrors(prev => ({ ...prev, [poseId]: errMsg }));
+        setGeneratingPose(null);
+        setGeneratingPoseIds(prev => {
+          const n = new Set(prev);
+          n.delete(poseId);
+          return n;
+        });
+        return;
+      }
+    }
+
     // Build options string
     const optStr = Object.entries(selectedOptions)
       .map(([id, val]) => {
@@ -1332,6 +1403,17 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     setIsGeneratingAll(true);
     setGenError(null);
     try {
+      setGenStatus('Verifying Cloudflare R2 permanent storage before generating...');
+      const health = await checkStorageHealth(true);
+      if (!health.ok) {
+        const missingMsg = health.missingEnvVars?.length
+          ? ` Missing server env: ${health.missingEnvVars.join(', ')}.`
+          : '';
+        throw new Error(
+          `${health.error || 'Cloudflare R2 storage upload check failed.'}${missingMsg} Generation blocked so images are not saved with expiring temporary links.`
+        );
+      }
+
       setGenStatus('⚡ Preparing and optimizing fabric images...');
       const { compressedUploaded: cachedCompressedUploaded, compressedFabric: cachedCompressedFabric } = await prepareGenerationImages();
 
@@ -1367,6 +1449,17 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
     setIsGeneratingSelected(true);
     setGenError(null);
     try {
+      setGenStatus('Verifying Cloudflare R2 permanent storage before generating...');
+      const health = await checkStorageHealth(true);
+      if (!health.ok) {
+        const missingMsg = health.missingEnvVars?.length
+          ? ` Missing server env: ${health.missingEnvVars.join(', ')}.`
+          : '';
+        throw new Error(
+          `${health.error || 'Cloudflare R2 storage upload check failed.'}${missingMsg} Generation blocked so images are not saved with expiring temporary links.`
+        );
+      }
+
       setGenStatus('⚡ Preparing and optimizing fabric images...');
       const { compressedUploaded: cachedCompressedUploaded, compressedFabric: cachedCompressedFabric } = await prepareGenerationImages();
 
@@ -2918,6 +3011,60 @@ function AdminGenerateContent({ templateId }: { templateId: string }) {
           </Card>
 
 
+
+          {/* Pre-Flight Permanent Storage Status Banner (Cloudflare R2 / Cloudinary) */}
+          <div
+            className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs ${
+              storageHealth.checking
+                ? 'bg-slate-50 border-slate-200 text-slate-700'
+                : storageHealth.ok
+                ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                : 'bg-red-50 border-red-300 text-red-900'
+            }`}
+          >
+            <div className="flex items-start gap-2.5">
+              {storageHealth.checking ? (
+                <Loader2 className="w-4 h-4 animate-spin text-slate-600 shrink-0 mt-0.5" />
+              ) : storageHealth.ok ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              )}
+              <div>
+                <p className="font-bold">
+                  {storageHealth.checking
+                    ? 'Testing Cloudflare R2 permanent storage...'
+                    : storageHealth.ok
+                    ? `Permanent Storage Ready (${storageHealth.provider === 'r2' ? `Cloudflare R2 · bucket "${storageHealth.bucket}"` : 'Cloudinary'})`
+                    : 'Permanent Storage Unavailable — Generation Blocked'}
+                </p>
+                {!storageHealth.checking && storageHealth.ok && !storageHealth.publicUrlConfigured && (
+                  <p className="text-[11px] text-amber-800 mt-0.5">
+                    Note: <code className="font-mono">R2_GENERATED_PUBLIC_URL</code> is not set; images will be served via <code className="font-mono">/api/images/...</code>.
+                  </p>
+                )}
+                {!storageHealth.checking && !storageHealth.ok && (
+                  <div className="mt-1 space-y-1">
+                    <p className="text-[11px] text-red-800">{storageHealth.error}</p>
+                    {storageHealth.missingEnvVars && storageHealth.missingEnvVars.length > 0 && (
+                      <p className="text-[11px] font-mono bg-white/80 px-2 py-1 rounded border border-red-200 inline-block">
+                        Missing env on server: {storageHealth.missingEnvVars.join(', ')}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={storageHealth.checking}
+              onClick={() => checkStorageHealth(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-cream-border text-charcoal font-semibold hover:border-accent hover:text-accent transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${storageHealth.checking ? 'animate-spin' : ''}`} />
+              <span>Test R2 Upload</span>
+            </button>
+          </div>
 
           {/* Action Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-cream-border shadow-xs">

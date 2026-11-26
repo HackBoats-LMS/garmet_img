@@ -1,10 +1,93 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // lib/picky-assist-push.ts
 // ─────────────────────────────────────────────────────────────────────────────
-import { waitForSearchResponse } from '@/lib/picky-assist-search-store';
+import { waitForSearchResponse, parseSearchCallbackPayload } from '@/lib/picky-assist-search-store';
 import { waitForDeleteResponse } from '@/lib/picky-assist-delete-store';
 import { getSetting } from '@/lib/settings';
 import { normalizeSizeInventory } from '@/lib/size-inventory';
+
+declare global {
+  var __inFlightPickySyncs: Map<string, Promise<any>> | undefined;
+}
+
+const inFlightPickySyncs: Map<string, Promise<any>> =
+  global.__inFlightPickySyncs || new Map<string, Promise<any>>();
+global.__inFlightPickySyncs = inFlightPickySyncs;
+
+/**
+ * Strips any price patterns (e.g. "₹1900", "Rs. 1,499/-", "1900 INR") from a product title/name
+ * while preserving numeric series codes like "401" and sizes like "3XL" or "40".
+ */
+export function stripPriceFromTitle(raw: string): string {
+  return String(raw || '')
+    .replace(/(?:\s*[|—–-]\s*)?(?:₹|Rs\.?|INR)\s*[\d,]+(?:\.\d{1,2})?(?:\s*\/-)?/gi, '')
+    .replace(/(?:\s*[|—–-]\s*)?\b[\d,]+(?:\.\d{1,2})?\s*(?:INR|Rs\.?|\/-)/gi, '')
+    .replace(/^[\s|—–\-.,:]+|[\s|—–\-.,:]+$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/**
+ * Extracts the unique leading series digits from an ERP stockCode.
+ * e.g. "401000001" -> "401", "5010000339" -> "501", "5270000094" -> "527".
+ */
+export function extractStockCodePrefix(stockCode?: string | null): string {
+  const clean = String(stockCode || '').trim();
+  if (!clean) return '';
+
+  // Standard 6+ digit numeric barcode (e.g. 401000001 -> 401, 5010000339 -> 501)
+  if (/^\d{6,}$/.test(clean)) {
+    return clean.slice(0, 3);
+  }
+
+  // Delimited numeric prefix like "401-0001" or "401_0001"
+  const delimitedMatch = clean.match(/^(\d{2,4})[-_]\d+$/);
+  if (delimitedMatch && delimitedMatch[1]) {
+    return delimitedMatch[1];
+  }
+
+  return '';
+}
+
+/**
+ * Prepends the stockCode series prefix (e.g. "401") to a clean product title
+ * without duplicating it or prepending to raw numeric fallback codes.
+ */
+export function applyStockCodePrefix(title: string, stockCode?: string | null): string {
+  const cleanTitle = String(title || '').trim();
+  if (!cleanTitle) return cleanTitle;
+
+  const prefix = extractStockCodePrefix(stockCode);
+  if (!prefix) return cleanTitle;
+
+  // Do not prepend prefix if title is just the raw numeric stockCode itself
+  if (/^\d+$/.test(cleanTitle)) return cleanTitle;
+
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const alreadyHasPrefix = new RegExp(`(?:^|\\b)${escaped}(?:\\b|$)`).test(cleanTitle);
+  if (alreadyHasPrefix) return cleanTitle;
+
+  return `${prefix} ${cleanTitle}`;
+}
+
+/**
+ * Appends the garment size to the product title/name if not already present.
+ */
+export function appendSizeToTitle(baseTitle: string, size?: string | null): string {
+  const cleanTitle = String(baseTitle || '').trim();
+  const cleanSize = String(size || '').trim().toUpperCase();
+  if (!cleanTitle || !cleanSize || cleanSize === 'FREE' || cleanSize === 'FREE SIZE') {
+    return cleanTitle;
+  }
+
+  const escaped = cleanSize.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sizeRegex = new RegExp(`(?:\\s*-\\s*|\\s+)${escaped}$`, 'i');
+  if (sizeRegex.test(cleanTitle)) {
+    return cleanTitle;
+  }
+
+  return `${cleanTitle} - ${cleanSize}`;
+}
 
 export interface PickyAssistProductPayload {
   stock_code: string;
@@ -47,10 +130,24 @@ export interface PickyAssistProductPayload {
  */
 export function extractProductImages(product: any): string[] {
   const images: string[] = [];
+  const publicBase = (
+    process.env.NEXTAUTH_URL ||
+    process.env.APP_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    ''
+  )
+    .trim()
+    .replace(/\/+$/, '');
 
   const addImg = (url: any) => {
-    if (typeof url === 'string' && url.trim() && !images.includes(url.trim())) {
-      images.push(url.trim());
+    if (typeof url === 'string' && url.trim()) {
+      let clean = url.trim();
+      if (clean.startsWith('/api/images/') && publicBase) {
+        clean = `${publicBase}${clean}`;
+      }
+      if (!images.includes(clean)) {
+        images.push(clean);
+      }
     }
   };
 
@@ -89,14 +186,15 @@ export function extractProductImages(product: any): string[] {
  */
 export function parseCatalogueTitleAndDescription(rawText: any, fallbackTitle: string = ''): { title: string; description: string } {
   const text = String(rawText || '').trim();
+  const cleanFallback = stripPriceFromTitle(fallbackTitle);
   if (!text) {
-    return { title: fallbackTitle, description: '' };
+    return { title: cleanFallback, description: '' };
   }
 
   // Check pipe separator: "Title | [optional specs |] [₹Price]. Description"
   if (text.includes('|')) {
     const parts = text.split('|').map(p => p.trim()).filter(Boolean);
-    const candidateTitle = parts[0];
+    const candidateTitle = stripPriceFromTitle(parts[0]) || cleanFallback;
     const remaining = parts.slice(1).join(' | ');
 
     // Match price pattern followed by description: e.g. "₹1900. A breathable..." or "1900 INR - A breathable..."
@@ -108,7 +206,7 @@ export function parseCatalogueTitleAndDescription(rawText: any, fallbackTitle: s
       };
     }
 
-    // If remaining starts with a price without delimiter
+    // If remaining starts with a price without delimiter (or is ONLY a price)
     const priceStripped = remaining.replace(/^(?:(?:₹|Rs\.?|INR)\s*[\d,]+(?:\.\d+)?|[\d,]+\s*(?:INR|Rs\.?))\s*[–—\-.:|]*\s*/i, '').trim();
     if (priceStripped) {
       return {
@@ -117,48 +215,51 @@ export function parseCatalogueTitleAndDescription(rawText: any, fallbackTitle: s
       };
     }
 
+    // Remaining had only price and no description
     return {
       title: candidateTitle,
-      description: remaining || text
+      description: ''
     };
   }
 
   // Pattern 2: Title — Description (separated by dash e.g. "Coral Bloom — White & Coral Floral Saree")
   const dashMatch = text.match(/^(.+?)\s+[—–-]\s+(.+)$/);
   if (dashMatch && dashMatch[1].length <= 80) {
-    const candidateTitle = dashMatch[1].trim();
+    const candidateTitle = stripPriceFromTitle(dashMatch[1].trim()) || cleanFallback;
     const rightSide = dashMatch[2].trim();
     const priceMatch = rightSide.match(/(?:(?:₹|Rs\.?|INR)\s*[\d,]+(?:\.\d+)?|[\d,]+\s*(?:INR|Rs\.?))[\s.\-–—:]+(.*)$/i);
+    const strippedRight = stripPriceFromTitle(rightSide);
     return {
       title: candidateTitle,
-      description: (priceMatch && priceMatch[1] && priceMatch[1].trim()) ? priceMatch[1].trim() : rightSide
+      description: (priceMatch && priceMatch[1] && priceMatch[1].trim())
+        ? priceMatch[1].trim()
+        : (strippedRight ? rightSide : '')
     };
   }
 
   return {
-    title: fallbackTitle || text,
-    description: text
+    title: cleanFallback || stripPriceFromTitle(text) || text,
+    description: stripPriceFromTitle(text) ? text : ''
   };
 }
 
 export function formatProductPayload(product: any, variantSize?: string): Record<string, any> {
   const masterStockCode = String(product.stockCode || product.stock_code || '').trim();
   const code1 = product.code1 || product.friendlyCode || product.friendly_code;
-  const fallbackTitle = String(product.productName || product.title || masterStockCode).trim();
+  const fallbackTitle = stripPriceFromTitle(String(product.productName || product.title || masterStockCode).trim()) || masterStockCode;
 
   // Raw catalogue copy from WhatsApp Catalogue Title & Description
   const rawCatalogueCopy = String(product.whatsappCatalogueTitle || product.whatsapp_catalogue_title || '').trim();
   const parsedCatalogue = parseCatalogueTitleAndDescription(rawCatalogueCopy, fallbackTitle);
 
-  // 1. Resolve product title:
-  // If parsed title from catalogue exists and is not just the whole raw text, use it;
-  // otherwise use productName as at the top of the form, or fallback to masterStockCode
-  let baseProductName = '';
+  // 1. Resolve product title (strictly stripped of any price):
+  let rawBaseProductName = '';
   if (parsedCatalogue.title && parsedCatalogue.title !== rawCatalogueCopy) {
-    baseProductName = parsedCatalogue.title;
+    rawBaseProductName = parsedCatalogue.title;
   } else {
-    baseProductName = fallbackTitle || parsedCatalogue.title || masterStockCode;
+    rawBaseProductName = fallbackTitle || parsedCatalogue.title || masterStockCode;
   }
+  const cleanBaseProductName = stripPriceFromTitle(rawBaseProductName) || fallbackTitle || masterStockCode;
 
   // 2. Resolve description:
   // Priority: parsed description from WhatsApp Catalogue Title & Description -> productDescription -> description
@@ -235,7 +336,6 @@ export function formatProductPayload(product: any, variantSize?: string): Record
 
   // If this payload is formatted specifically for a single size variant:
   let effectiveStockCode = masterStockCode;
-  let effectiveProductName = baseProductName;
   let effectiveQuantity = baseQuantity;
   let effectiveSize = variantSize || (availableSizes.length > 0 ? availableSizes.join(', ') : (product.length_Size || product.size || 'Free Size'));
 
@@ -253,11 +353,6 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     variantCode = `${itemGroupId}-${cleanSize}`;
     effectiveQuantity = sizeData ? sizeData.quantity : baseQuantity;
     effectiveSize = variantSize;
-    // Set effectiveProductName with size suffix if not already present
-    const sizeSuffix = ` - ${variantSize}`;
-    if (!baseProductName.toUpperCase().endsWith(sizeSuffix.toUpperCase())) {
-      effectiveProductName = `${baseProductName}${sizeSuffix}`;
-    }
     variantStockCodes = sizeData?.stockCodes || (sizeData?.stockCode ? [sizeData.stockCode] : []);
     variantSpecificBarcode = variantStockCodes[0] || sizeData?.stockCode || variantCode;
   } else if (availableSizes.length === 1 && availableSizes[0].toUpperCase() !== 'FREE') {
@@ -268,14 +363,29 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     variantSpecificBarcode = variantStockCodes[0] || singleData?.stockCode || variantCode;
   }
 
+  // Resolve numeric stockCode prefix (e.g. "401000001" -> "401") and prepend to base title
+  const prefixSourceCode =
+    extractStockCodePrefix(variantSpecificBarcode) ? variantSpecificBarcode : masterStockCode;
+  const baseProductName = applyStockCodePrefix(cleanBaseProductName, prefixSourceCode);
+
+  // Include size in Picky Assist product name when variant/single size is known (without price)
+  const sizeForTitle =
+    variantSize ||
+    (availableSizes.length === 1 && availableSizes[0].toUpperCase() !== 'FREE'
+      ? availableSizes[0]
+      : undefined);
+  const effectiveProductName = sizeForTitle
+    ? appendSizeToTitle(baseProductName, sizeForTitle)
+    : baseProductName;
+
   // Build nested variants array for Picky Assist catalog / CRM connectors that support batch variant objects
   const variantsList = Object.entries(normalizedSizes).map(([sz, sData]) => {
     const vCode = `${itemGroupId}-${sz.toLowerCase()}`;
     const vCodes = sData.stockCodes && sData.stockCodes.length > 0 ? sData.stockCodes : (sData.stockCode ? [sData.stockCode] : []);
     const vBarcode = vCodes[0] || sData.stockCode || vCode;
-    const vTitle = baseProductName.toUpperCase().endsWith(` - ${sz.toUpperCase()}`)
-      ? baseProductName
-      : `${baseProductName} - ${sz}`;
+    const vPrefixCode = extractStockCodePrefix(vBarcode) ? vBarcode : masterStockCode;
+    const vBaseTitle = applyStockCodePrefix(cleanBaseProductName, vPrefixCode);
+    const vTitle = appendSizeToTitle(vBaseTitle, sz);
 
     return {
       id: vCode,
@@ -419,8 +529,8 @@ export function formatProductPayload(product: any, variantSize?: string): Record
     stock: effectiveQuantity,
     size: String(effectiveSize).trim(),
     variant: String(effectiveSize).trim(),
-    variant_name: variantSize ? effectiveProductName : String(effectiveSize).trim(),
-    variantName: variantSize ? effectiveProductName : String(effectiveSize).trim(),
+    variant_name: sizeForTitle ? effectiveProductName : String(effectiveSize).trim(),
+    variantName: sizeForTitle ? effectiveProductName : String(effectiveSize).trim(),
     option_name: 'Size',
     option_value: String(effectiveSize).trim(),
     option1_name: 'Size',
@@ -462,46 +572,68 @@ export async function searchPickyProduct(identifier: string): Promise<{ exists: 
     return { exists: false };
   }
 
-  // Resolve base callback URL dynamically from environment, strictly without trailing slash
-  const envCallback = (await getSetting('PICKY_ASSIST_SEARCH_CALLBACK_URL', process.env.PICKY_ASSIST_SEARCH_CALLBACK_URL))?.trim();
-  let baseCallback = envCallback;
+  let baseCallback = (await getSetting('PICKY_ASSIST_SEARCH_CALLBACK_URL', process.env.PICKY_ASSIST_SEARCH_CALLBACK_URL))?.trim() || '';
   if (!baseCallback) {
     const baseHost = (
       process.env.NEXTAUTH_URL ||
       process.env.APP_URL ||
       process.env.NEXT_PUBLIC_APP_URL ||
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '') ||
-      'https://rgjdass.impactsync27.com'
-    ).trim().replace(/\/+$/, '');
-    baseCallback = `${baseHost}/api/webhooks/picky-assist/search-response`;
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '')
+    )
+      .trim()
+      .replace(/\/+$/, '');
+    if (baseHost) {
+      baseCallback = `${baseHost}/api/webhooks/picky-assist/search-response`;
+    }
   }
-  // Remove any trailing slash to prevent Next.js 308 redirect
   baseCallback = baseCallback.replace(/\/+$/, '');
 
-  // Append identifier & token query param so callback payload retains reference even if Picky Assist sends bare {"result":""}
-  const cleanId = encodeURIComponent(identifier.trim());
-  const tokenVal = process.env.PICKY_ASSIST_API_TOKEN?.trim() || '';
+  const cleanIdentifier = String(identifier || '').trim();
+  if (!cleanIdentifier) {
+    return { exists: false };
+  }
+
+  const startedAt = Date.now();
+  const searchId = `srch_${startedAt}_${Math.random().toString(36).slice(2, 7)}`;
+  const cleanId = encodeURIComponent(cleanIdentifier);
+  const tokenVal = ((await getSetting('PICKY_ASSIST_API_TOKEN', process.env.PICKY_ASSIST_API_TOKEN)) || '').trim();
   const tokenParam = tokenVal ? `&token=${encodeURIComponent(tokenVal)}` : '';
-  const callbackUrlWithQuery = baseCallback.includes('?')
-    ? `${baseCallback}&identifier=${cleanId}${tokenParam}`
-    : `${baseCallback}?identifier=${cleanId}${tokenParam}`;
+  const callbackUrlWithQuery = baseCallback
+    ? baseCallback.includes('?')
+      ? `${baseCallback}&identifier=${cleanId}&searchId=${searchId}${tokenParam}`
+      : `${baseCallback}?identifier=${cleanId}&searchId=${searchId}${tokenParam}`
+    : '';
 
   try {
-    const payload = {
-      search: identifier,
-      stock_code: identifier,
-      stockCode: identifier,
-      code1: identifier,
-      productCode: identifier,
-      product_id: identifier,
-      callback_url: callbackUrlWithQuery,
-      webhook_url: callbackUrlWithQuery,
-      reply_url: callbackUrlWithQuery,
-      // Also provide the clean base URL in case connector requires bare endpoint
-      base_callback_url: baseCallback,
+    const payload: Record<string, any> = {
+      search: cleanIdentifier,
+      query: cleanIdentifier,
+      identifier: cleanIdentifier,
+      stock_code: cleanIdentifier,
+      stockCode: cleanIdentifier,
+      code1: cleanIdentifier,
+      productCode: cleanIdentifier,
+      product_code: cleanIdentifier,
+      product_id: cleanIdentifier,
+      productId: cleanIdentifier,
+      sku: cleanIdentifier,
+      SKU: cleanIdentifier,
+      retailer_id: cleanIdentifier,
+      id: cleanIdentifier,
+      variant_code: cleanIdentifier,
+      variantCode: cleanIdentifier,
+      item_group_id: cleanIdentifier,
+      barcode: cleanIdentifier,
+      searchId,
     };
+    if (callbackUrlWithQuery) {
+      payload.callback_url = callbackUrlWithQuery;
+      payload.webhook_url = callbackUrlWithQuery;
+      payload.reply_url = callbackUrlWithQuery;
+      payload.base_callback_url = baseCallback;
+    }
 
-    let response = await fetch(webhookUrl, {
+    const response = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -516,7 +648,6 @@ export async function searchPickyProduct(identifier: string): Promise<{ exists: 
     }
 
     if (!response.ok) {
-      // If endpoint returns 404, product is not found
       if (response.status === 404) {
         return { exists: false, raw: rawData };
       }
@@ -524,72 +655,55 @@ export async function searchPickyProduct(identifier: string): Promise<{ exists: 
       return { exists: false, raw: rawData };
     }
 
-    // Evaluate response format
-    // Picky Assist connector search:
-    // When Picky Assist executes "SEARCH RECORDS FROM CRM -> EXECUTED ( Total Records found - 1 )",
-    // the connector endpoint returns HTTP 200 OK with an empty body "" or status: 200 with headers like PICKY-CONNECTOR-LOG.
-    if (response.ok) {
-      if (rawData === '' || rawData === null || rawData === undefined) {
-        console.log(`[Picky Assist] Search triggered for '${identifier}'. Waiting for inbound callback on ${callbackUrlWithQuery}...`);
-        const callbackEntry = await waitForSearchResponse(identifier, 8000);
-        if (callbackEntry) {
-          return {
-            exists: callbackEntry.found,
-            product: callbackEntry.product,
-            raw: callbackEntry.rawPayload,
-          };
-        }
-
+    // Async connector: HTTP 200 OK with empty body -> wait for inbound callback strictly after startedAt
+    if (rawData === '' || rawData === null || rawData === undefined) {
+      console.log(`[Picky Assist] Search triggered for '${cleanIdentifier}' (${searchId}). Waiting for callback on ${callbackUrlWithQuery || baseCallback}...`);
+      const callbackEntry = await waitForSearchResponse(cleanIdentifier, 8000, { startedAt, searchId });
+      if (callbackEntry) {
         return {
-          exists: false,
-          raw: `HTTP 200 OK received from search connector, but no callback arrived within 8s. Please ensure your Picky Assist connector has a Webhook action posting search results to ${baseCallback}`,
+          exists: callbackEntry.found,
+          product: callbackEntry.product,
+          raw: callbackEntry.rawPayload,
         };
       }
 
-      if (typeof rawData === 'object') {
-        if (
-          rawData.exists === false ||
-          rawData.found === false ||
-          rawData.status === 'not_found' ||
-          rawData.error === 'not_found' ||
-          rawData.total_records === 0 ||
-          rawData.count === 0
-        ) {
-          return { exists: false, raw: rawData };
-        }
-        if (
-          rawData.exists === true ||
-          rawData.found === true ||
-          (typeof rawData.total_records === 'number' && rawData.total_records > 0) ||
-          (typeof rawData.count === 'number' && rawData.count > 0)
-        ) {
-          return { exists: true, product: rawData.product || rawData.data || rawData, raw: rawData };
-        }
-        if (Array.isArray(rawData)) {
-          if (rawData.length > 0) {
-            return { exists: true, product: rawData[0], raw: rawData };
-          }
-          return { exists: false, raw: rawData };
-        }
-        if (Array.isArray(rawData.data) || Array.isArray(rawData.products) || Array.isArray(rawData.records) || Array.isArray(rawData.items)) {
-          const list = rawData.data || rawData.products || rawData.records || rawData.items;
-          if (list.length > 0) {
-            return { exists: true, product: list[0], raw: rawData };
-          }
-          return { exists: false, raw: rawData };
-        }
-        // If it returns an object matching stockCode or id
-        if (rawData.stock_code || rawData.stockCode || rawData.code1 || rawData.id || rawData.productName) {
-          return { exists: true, product: rawData, raw: rawData };
-        }
-      }
+      return {
+        exists: false,
+        raw: `HTTP 200 OK received from search connector, but no callback arrived within 8s (${baseCallback || 'callback URL not set'})`,
+      };
+    }
 
-      return { exists: false, raw: rawData };
+    // Synchronous object/array/string response
+    if (typeof rawData === 'object') {
+      const parsed = parseSearchCallbackPayload(rawData);
+      if (parsed.found) {
+        return { exists: true, product: parsed.product || rawData.product || rawData.data || rawData, raw: rawData };
+      }
+      if (
+        rawData.exists === false ||
+        rawData.found === false ||
+        rawData.status === 'not_found' ||
+        rawData.error === 'not_found' ||
+        rawData.total_records === 0 ||
+        rawData.count === 0
+      ) {
+        return { exists: false, raw: rawData };
+      }
+      if (Array.isArray(rawData)) {
+        return rawData.length > 0 ? { exists: true, product: rawData[0], raw: rawData } : { exists: false, raw: rawData };
+      }
+      if (Array.isArray(rawData.data) || Array.isArray(rawData.products) || Array.isArray(rawData.records) || Array.isArray(rawData.items)) {
+        const list = rawData.data || rawData.products || rawData.records || rawData.items;
+        return list.length > 0 ? { exists: true, product: list[0], raw: rawData } : { exists: false, raw: rawData };
+      }
+      if (rawData.stock_code || rawData.stockCode || rawData.code1 || rawData.id || rawData.sku || rawData.productName) {
+        return { exists: true, product: rawData, raw: rawData };
+      }
     }
 
     return { exists: false, raw: rawData };
   } catch (err) {
-    console.error(`[Picky Assist] Error searching for ${identifier}:`, err);
+    console.error(`[Picky Assist] Error searching for ${cleanIdentifier}:`, err);
     return { exists: false, raw: String(err) };
   }
 }
@@ -1142,9 +1256,12 @@ export async function deletePickyProduct(
 
 /**
  * Smart Sync:
- * 1. Checks PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL to see if product exists in Picky Assist.
- * 2. If NOT found -> calls PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL.
- * 3. If ALREADY exists -> computes differences (diff) and calls PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL.
+ * 1. Coalesces concurrent syncs for the same product to prevent double-pushes.
+ * 2. Searches PICKY_ASSIST_SEARCH_PRODUCT_WEBHOOK_URL across code1, stockCode, variant codes & variant barcodes.
+ * 3. If found -> computes diff and calls PICKY_ASSIST_UPDATE_PRODUCT_WEBHOOK_URL.
+ * 4. If NOT found:
+ *    - If product was ALREADY synced before (syncedAt is set), updates instead of creating a duplicate!
+ *    - Otherwise calls PICKY_ASSIST_ADD_PRODUCT_WEBHOOK_URL.
  */
 export async function syncPickyProductWithDiff(localProduct: any): Promise<{
   action: 'added' | 'updated' | 'no_change';
@@ -1153,109 +1270,174 @@ export async function syncPickyProductWithDiff(localProduct: any): Promise<{
   diff?: Record<string, { local: any; remote: any }>;
   remoteProduct?: any;
 }> {
-  // 1. Try matching primary identifier (code1, stockCode, id)
-  const primaryId = localProduct.code1 || localProduct.stockCode || localProduct.id;
-  let searchResult = await searchPickyProduct(primaryId);
-
-  // 2. If not found, and there is a secondary barcode / stockCode, search it too
-  if (!searchResult.exists && localProduct.stockCode && localProduct.stockCode !== primaryId) {
-    const secResult = await searchPickyProduct(localProduct.stockCode);
-    if (secResult.exists) {
-      searchResult = secResult;
-    }
+  const lockKey = String(localProduct.id || localProduct.stockCode || localProduct.code1 || '');
+  if (lockKey && inFlightPickySyncs.has(lockKey)) {
+    return inFlightPickySyncs.get(lockKey)!;
   }
 
-  // 3. If still not found and product has size variants, check first size variant code (e.g. K-1-ORCHID-5x)
-  if (!searchResult.exists) {
+  const runSync = async (): Promise<{
+    action: 'added' | 'updated' | 'no_change';
+    success: boolean;
+    message: string;
+    diff?: Record<string, { local: any; remote: any }>;
+    remoteProduct?: any;
+  }> => {
+    const primaryId = String(localProduct.code1 || localProduct.stockCode || localProduct.id || '').trim();
+    const itemGroupId = String(localProduct.code1 || localProduct.stockCode || '').trim();
+
+    // Build deduplicated ordered list of search candidates
+    const candidates: string[] = [];
+    const addCandidate = (c?: string | null) => {
+      const s = String(c || '').trim();
+      if (s && !candidates.includes(s)) candidates.push(s);
+    };
+
+    addCandidate(primaryId);
+    addCandidate(localProduct.stockCode);
+
     const rawSizeInv = localProduct.sizeInventory || localProduct.size_inventory;
     if (rawSizeInv && typeof rawSizeInv === 'object') {
-      const firstSize = Object.keys(rawSizeInv)[0];
-      if (firstSize) {
-        const itemGroupId = localProduct.code1 || localProduct.stockCode;
-        const vCode = `${itemGroupId}-${firstSize.toLowerCase()}`;
-        const vResult = await searchPickyProduct(vCode);
-        if (vResult.exists) {
-          searchResult = vResult;
+      const sizeEntries = Object.entries(rawSizeInv).sort(([, a]: any, [, b]: any) => {
+        const qa = typeof a === 'number' ? a : (a?.quantity ?? 0);
+        const qb = typeof b === 'number' ? b : (b?.quantity ?? 0);
+        return qb - qa; // Check in-stock variants first
+      });
+
+      for (const [sz, val] of sizeEntries) {
+        const cleanSz = String(sz).trim();
+        if (!cleanSz || cleanSz.toUpperCase() === 'FREE') continue;
+        if (itemGroupId) {
+          addCandidate(`${itemGroupId}-${cleanSz.toLowerCase()}`);
+        }
+        if (val && typeof val === 'object') {
+          const sCodes = Array.isArray((val as any).stockCodes) ? (val as any).stockCodes : [];
+          for (const sc of sCodes) addCandidate(sc);
+          if ((val as any).stockCode) {
+            String((val as any).stockCode)
+              .split(/[,;|\s]+/)
+              .forEach((sc) => addCandidate(sc));
+          }
         }
       }
     }
-  }
 
-  // 4. Product does NOT exist in Picky Assist -> ADD
-  if (!searchResult.exists) {
-    const addResult = await addPickyProduct(localProduct);
-    if (!addResult.success) {
-      return {
-        action: 'added',
-        success: false,
-        message: addResult.error || 'Failed to add product to Picky Assist',
-      };
-    }
-    return {
-      action: 'added',
-      success: true,
-      message: `Product ${primaryId} was not in Picky Assist. Created new catalog entry.`,
-    };
-  }
-
-  // 5. Product DOES exist -> Compare diff and UPDATE
-  const remote = searchResult.product || {};
-  const localFormatted = formatProductPayload(localProduct);
-
-  const diff: Record<string, { local: any; remote: any }> = {};
-  const changedFields: Record<string, any> = {};
-
-  const fieldsToCompare = [
-    { key: 'quantity', localVal: localFormatted.quantity, remoteVal: remote.quantity ?? remote.qty },
-    { key: 'unitPrice', localVal: localFormatted.unitPrice, remoteVal: remote.unitPrice ?? remote.price },
-    { key: 'retailPrice', localVal: localFormatted.retailPrice, remoteVal: remote.retailPrice ?? remote.mrp },
-    { key: 'productName', localVal: localFormatted.productName, remoteVal: remote.productName ?? remote.title },
-    { key: 'status', localVal: localFormatted.status, remoteVal: remote.status },
-    { key: 'color', localVal: localFormatted.color, remoteVal: remote.color },
-    { key: 'coverImageUrl', localVal: localFormatted.coverImageUrl, remoteVal: remote.coverImageUrl ?? remote.cover_image_url ?? remote.image_link },
-    { key: 'description', localVal: localFormatted.description, remoteVal: remote.description ?? remote.productDescription },
-    { key: 'size', localVal: localFormatted.size, remoteVal: remote.size ?? remote.length_Size },
-    { key: 'size_inventory', localVal: JSON.stringify(localFormatted.size_inventory), remoteVal: remote.size_inventory ? JSON.stringify(remote.size_inventory) : undefined },
-    { key: 'kurta_length', localVal: localFormatted.kurta_length, remoteVal: remote.kurta_length ?? remote.kurtaLength },
-    { key: 'pant_style', localVal: localFormatted.pant_style, remoteVal: remote.pant_style ?? remote.pantStyle },
-    { key: 'embroidery_type', localVal: localFormatted.embroidery_type, remoteVal: remote.embroidery_type ?? remote.embroideryType },
-    { key: 'cut_style', localVal: localFormatted.cut_style, remoteVal: remote.cut_style ?? remote.cutStyle },
-    { key: 'border', localVal: localFormatted.border, remoteVal: remote.border },
-    { key: 'dealer_price', localVal: localFormatted.dealer_price, remoteVal: remote.dealer_price ?? remote.wholesale_price },
-  ];
-
-  for (const f of fieldsToCompare) {
-    if (f.remoteVal !== undefined && f.remoteVal !== null) {
-      const loc = f.localVal === undefined || f.localVal === null ? '' : String(f.localVal).trim();
-      const rem = String(f.remoteVal).trim();
-
-      if (loc !== rem) {
-        diff[f.key] = { local: f.localVal, remote: f.remoteVal };
-        changedFields[f.key] = f.key === 'size_inventory' ? localFormatted.size_inventory : f.localVal;
+    let searchResult: { exists: boolean; product?: any; raw?: any } = { exists: false };
+    for (const candidate of candidates) {
+      const res = await searchPickyProduct(candidate);
+      if (res.exists) {
+        searchResult = res;
+        break;
       }
     }
-  }
 
-  const hasDiff = Object.keys(diff).length > 0;
-  const updateResult = await updatePickyProduct(localProduct, hasDiff ? changedFields : undefined);
+    // Duplicate Prevention Guard:
+    // If Picky Assist search returned not found (e.g. empty {"result":""} callback),
+    // but this product already has syncedAt recorded in DB, NEVER push as new (add) again!
+    if (!searchResult.exists && localProduct.syncedAt) {
+      console.warn(
+        `[Picky Assist] Search returned not found for already-synced product ${primaryId} (syncedAt=${localProduct.syncedAt}). Routing to update to prevent duplicate.`
+      );
+      const updateResult = await updatePickyProduct(localProduct);
+      if (!updateResult.success) {
+        return {
+          action: 'updated',
+          success: false,
+          message: updateResult.error || 'Product was already synced earlier, and update to Picky Assist failed.',
+        };
+      }
+      return {
+        action: 'updated',
+        success: true,
+        message: `Product ${primaryId} was already synced earlier; updated existing Picky Assist entry instead of creating a duplicate.`,
+      };
+    }
 
-  if (!updateResult.success) {
+    // 4. Product does NOT exist in Picky Assist and has never been synced -> ADD
+    if (!searchResult.exists) {
+      const addResult = await addPickyProduct(localProduct);
+      if (!addResult.success) {
+        return {
+          action: 'added',
+          success: false,
+          message: addResult.error || 'Failed to add product to Picky Assist',
+        };
+      }
+      return {
+        action: 'added',
+        success: true,
+        message: `Product ${primaryId} was not in Picky Assist. Created new catalog entry.`,
+      };
+    }
+
+    // 5. Product DOES exist -> Compare diff and UPDATE
+    const remote = searchResult.product || {};
+    const localFormatted = formatProductPayload(localProduct);
+
+    const diff: Record<string, { local: any; remote: any }> = {};
+    const changedFields: Record<string, any> = {};
+
+    const fieldsToCompare = [
+      { key: 'quantity', localVal: localFormatted.quantity, remoteVal: remote.quantity ?? remote.qty },
+      { key: 'unitPrice', localVal: localFormatted.unitPrice, remoteVal: remote.unitPrice ?? remote.price },
+      { key: 'retailPrice', localVal: localFormatted.retailPrice, remoteVal: remote.retailPrice ?? remote.mrp },
+      { key: 'productName', localVal: localFormatted.productName, remoteVal: remote.productName ?? remote.title },
+      { key: 'status', localVal: localFormatted.status, remoteVal: remote.status },
+      { key: 'color', localVal: localFormatted.color, remoteVal: remote.color },
+      { key: 'coverImageUrl', localVal: localFormatted.coverImageUrl, remoteVal: remote.coverImageUrl ?? remote.cover_image_url ?? remote.image_link },
+      { key: 'description', localVal: localFormatted.description, remoteVal: remote.description ?? remote.productDescription },
+      { key: 'size', localVal: localFormatted.size, remoteVal: remote.size ?? remote.length_Size },
+      { key: 'size_inventory', localVal: JSON.stringify(localFormatted.size_inventory), remoteVal: remote.size_inventory ? JSON.stringify(remote.size_inventory) : undefined },
+      { key: 'kurta_length', localVal: localFormatted.kurta_length, remoteVal: remote.kurta_length ?? remote.kurtaLength },
+      { key: 'pant_style', localVal: localFormatted.pant_style, remoteVal: remote.pant_style ?? remote.pantStyle },
+      { key: 'embroidery_type', localVal: localFormatted.embroidery_type, remoteVal: remote.embroidery_type ?? remote.embroideryType },
+      { key: 'cut_style', localVal: localFormatted.cut_style, remoteVal: remote.cut_style ?? remote.cutStyle },
+      { key: 'border', localVal: localFormatted.border, remoteVal: remote.border },
+      { key: 'dealer_price', localVal: localFormatted.dealer_price, remoteVal: remote.dealer_price ?? remote.wholesale_price },
+    ];
+
+    for (const f of fieldsToCompare) {
+      if (f.remoteVal !== undefined && f.remoteVal !== null) {
+        const loc = f.localVal === undefined || f.localVal === null ? '' : String(f.localVal).trim();
+        const rem = String(f.remoteVal).trim();
+
+        if (loc !== rem) {
+          diff[f.key] = { local: f.localVal, remote: f.remoteVal };
+          changedFields[f.key] = f.key === 'size_inventory' ? localFormatted.size_inventory : f.localVal;
+        }
+      }
+    }
+
+    const hasDiff = Object.keys(diff).length > 0;
+    const updateResult = await updatePickyProduct(localProduct, hasDiff ? changedFields : undefined);
+
+    if (!updateResult.success) {
+      return {
+        action: 'updated',
+        success: false,
+        message: updateResult.error || 'Failed to update product in Picky Assist',
+        diff,
+        remoteProduct: remote,
+      };
+    }
+
     return {
       action: 'updated',
-      success: false,
-      message: updateResult.error || 'Failed to update product in Picky Assist',
+      success: true,
+      message: hasDiff
+        ? `Product ${primaryId} found in Picky Assist. Updated fields: ${Object.keys(diff).join(', ')}.`
+        : `Product ${primaryId} found in Picky Assist. Updated stock & details.`,
       diff,
       remoteProduct: remote,
     };
+  };
+
+  if (!lockKey) {
+    return runSync();
   }
 
-  return {
-    action: 'updated',
-    success: true,
-    message: hasDiff
-      ? `Product ${primaryId} found in Picky Assist. Updated fields: ${Object.keys(diff).join(', ')}.`
-      : `Product ${primaryId} found in Picky Assist. Updated stock & details.`,
-    diff,
-    remoteProduct: remote,
-  };
+  const promise = runSync().finally(() => {
+    inFlightPickySyncs.delete(lockKey);
+  });
+  inFlightPickySyncs.set(lockKey, promise);
+  return promise;
 }

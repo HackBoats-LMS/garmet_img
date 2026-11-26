@@ -1,16 +1,28 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { isSafeExternalUrl } from '@/lib/security';
 
+function getGeneratedBucketName(): string {
+  return (process.env.R2_GENERATED_BUCKET || process.env.R2_BUCKET_NAME || 'generatedimages').trim();
+}
+
+function getImagesBucketName(): string {
+  return (process.env.R2_IMAGES_BUCKET || process.env.R2_BUCKET_NAME || 'images').trim();
+}
+
+function getModelsBucketName(): string {
+  return (process.env.R2_MODELS_BUCKET || process.env.R2_BUCKET_NAME || 'models').trim();
+}
+
 // 1. Bucket for Generated AI Photoshoots & Customer Uploads
-export const R2_GENERATED_BUCKET = process.env.R2_GENERATED_BUCKET || process.env.R2_BUCKET_NAME || 'generatedimages';
+export const R2_GENERATED_BUCKET = getGeneratedBucketName();
 export const R2_GENERATED_PUBLIC_URL = (process.env.R2_GENERATED_PUBLIC_URL || process.env.R2_PUBLIC_URL || '').replace(/\/$/, '');
 
 // 2. Bucket for Templates, Covers & Pose Guides
-export const R2_IMAGES_BUCKET = process.env.R2_IMAGES_BUCKET || 'images';
+export const R2_IMAGES_BUCKET = getImagesBucketName();
 export const R2_IMAGES_PUBLIC_URL = (process.env.R2_IMAGES_PUBLIC_URL || process.env.R2_PUBLIC_URL || '').replace(/\/$/, '');
 
 // 3. Bucket for Model Portraits & Face References
-export const R2_MODELS_BUCKET = process.env.R2_MODELS_BUCKET || 'models';
+export const R2_MODELS_BUCKET = getModelsBucketName();
 export const R2_MODELS_PUBLIC_URL = (process.env.R2_MODELS_PUBLIC_URL || process.env.R2_PUBLIC_URL || '').replace(/\/$/, '');
 
 /**
@@ -40,9 +52,9 @@ export function getS3Client(): S3Client | null {
 }
 
 export const isStorageConfigured = (): boolean => {
-  const accountId = process.env.R2_ACCOUNT_ID || '';
-  const accessKeyId = process.env.R2_ACCESS_KEY_ID || '';
-  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY || '';
+  const accountId = (process.env.R2_ACCOUNT_ID || '').trim();
+  const accessKeyId = (process.env.R2_ACCESS_KEY_ID || '').trim();
+  const secretAccessKey = (process.env.R2_SECRET_ACCESS_KEY || '').trim();
   const isR2 = Boolean(accountId && accessKeyId && secretAccessKey);
   const isCloudinary = Boolean(
     (process.env.CLOUDINARY_CLOUD_NAME || process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME) &&
@@ -51,6 +63,171 @@ export const isStorageConfigured = (): boolean => {
   );
   return isR2 || isCloudinary;
 };
+
+export interface StorageHealthResult {
+  ok: boolean;
+  provider: 'r2' | 'cloudinary' | 'none';
+  bucket: string;
+  publicUrlConfigured: boolean;
+  publicUrlReachable: boolean | null;
+  missingEnvVars: string[];
+  error: string | null;
+  checkedAt: string;
+}
+
+let cachedStorageHealth: { expiresAt: number; result: StorageHealthResult } | null = null;
+
+/**
+ * Verifies that permanent storage (Cloudflare R2 or Cloudinary) is configured
+ * AND actually accepts live writes/deletes before spending AI generation credits.
+ */
+export async function verifyStorageHealth(force: boolean = false): Promise<StorageHealthResult> {
+  if (!force && cachedStorageHealth && Date.now() < cachedStorageHealth.expiresAt && cachedStorageHealth.result.ok) {
+    return cachedStorageHealth.result;
+  }
+
+  const accountId = (process.env.R2_ACCOUNT_ID || '').trim().replace(/^["']|["']$/g, '');
+  const accessKeyId = (process.env.R2_ACCESS_KEY_ID || '').trim().replace(/^["']|["']$/g, '');
+  const secretAccessKey = (process.env.R2_SECRET_ACCESS_KEY || '').trim().replace(/^["']|["']$/g, '');
+  const bucket = (process.env.R2_GENERATED_BUCKET || process.env.R2_BUCKET_NAME || 'generatedimages').trim();
+  const publicBaseUrl = (process.env.R2_GENERATED_PUBLIC_URL || process.env.R2_PUBLIC_URL || '').trim().replace(/\/$/, '');
+
+  const missingR2Vars: string[] = [];
+  if (!accountId) missingR2Vars.push('R2_ACCOUNT_ID');
+  if (!accessKeyId) missingR2Vars.push('R2_ACCESS_KEY_ID');
+  if (!secretAccessKey) missingR2Vars.push('R2_SECRET_ACCESS_KEY');
+
+  const isCloudinary = Boolean(
+    (process.env.CLOUDINARY_CLOUD_NAME || process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME) &&
+      (process.env.CLOUDINARY_API_KEY || process.env.NEXT_PUBLIC_CLOUDINARY_API_KEY) &&
+      process.env.CLOUDINARY_API_SECRET
+  );
+
+  const client = getS3Client();
+  if (client) {
+    const probeKey = `_healthcheck/probe_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.txt`;
+    let publicUrlReachable: boolean | null = null;
+    try {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: probeKey,
+          Body: Buffer.from('ok'),
+          ContentType: 'text/plain',
+        })
+      );
+
+      await client.send(
+        new HeadObjectCommand({
+          Bucket: bucket,
+          Key: probeKey,
+        })
+      );
+
+      if (publicBaseUrl) {
+        if (publicBaseUrl.includes('.r2.cloudflarestorage.com')) {
+          publicUrlReachable = false;
+        } else {
+          try {
+            const pubRes = await fetch(`${publicBaseUrl}/${probeKey}`, { method: 'GET' });
+            publicUrlReachable = pubRes.ok;
+          } catch {
+            publicUrlReachable = false;
+          }
+        }
+      }
+
+      // Clean up test probe
+      await client.send(
+        new DeleteObjectCommand({
+          Bucket: bucket,
+          Key: probeKey,
+        })
+      ).catch(() => {});
+
+      const warnings: string[] = [];
+      if (!publicBaseUrl) {
+        warnings.push('R2_PUBLIC_URL / R2_GENERATED_PUBLIC_URL is not set (falling back to /api/images proxy)');
+      } else if (publicBaseUrl.includes('.r2.cloudflarestorage.com')) {
+        warnings.push(
+          'R2_PUBLIC_URL is set to the private S3 API endpoint (.r2.cloudflarestorage.com), which browsers cannot load. Enable R2.dev Subdomain in Cloudflare R2 → Bucket → Settings → Public Development URL (https://pub-....r2.dev), or clear R2_PUBLIC_URL to proxy through /api/images.'
+        );
+      } else if (publicUrlReachable === false) {
+        warnings.push(
+          `R2 upload succeeded, but public URL (${publicBaseUrl}) returned an error. Enable Public Development URL (r2.dev) in Cloudflare R2 Bucket Settings or clear R2_PUBLIC_URL to use /api/images proxy.`
+        );
+      }
+
+      const result: StorageHealthResult = {
+        ok: publicUrlReachable !== false,
+        provider: 'r2',
+        bucket,
+        publicUrlConfigured: Boolean(publicBaseUrl),
+        publicUrlReachable,
+        missingEnvVars: publicBaseUrl ? [] : ['R2_GENERATED_PUBLIC_URL'],
+        error: publicUrlReachable === false ? warnings[0] : null,
+        checkedAt: new Date().toISOString(),
+      };
+
+      if (result.ok) {
+        cachedStorageHealth = { expiresAt: Date.now() + 60_000, result };
+      }
+      return result;
+    } catch (err: any) {
+      const errMsg = err?.message || 'Cloudflare R2 write probe failed';
+      if (isCloudinary) {
+        return {
+          ok: true,
+          provider: 'cloudinary',
+          bucket: 'cloudinary',
+          publicUrlConfigured: true,
+          publicUrlReachable: null,
+          missingEnvVars: [],
+          error: `R2 probe failed (${errMsg}); Cloudinary fallback is configured.`,
+          checkedAt: new Date().toISOString(),
+        };
+      }
+      return {
+        ok: false,
+        provider: 'r2',
+        bucket,
+        publicUrlConfigured: Boolean(publicBaseUrl),
+        publicUrlReachable: null,
+        missingEnvVars: publicBaseUrl ? [] : ['R2_GENERATED_PUBLIC_URL'],
+        error: `Cloudflare R2 upload check failed for bucket '${bucket}': ${errMsg}`,
+        checkedAt: new Date().toISOString(),
+      };
+    }
+  }
+
+  if (isCloudinary) {
+    const result: StorageHealthResult = {
+      ok: true,
+      provider: 'cloudinary',
+      bucket: 'cloudinary',
+      publicUrlConfigured: true,
+      publicUrlReachable: null,
+      missingEnvVars: missingR2Vars,
+      error: null,
+      checkedAt: new Date().toISOString(),
+    };
+    cachedStorageHealth = { expiresAt: Date.now() + 60_000, result };
+    return result;
+  }
+
+  if (!publicBaseUrl) missingR2Vars.push('R2_GENERATED_PUBLIC_URL');
+
+  return {
+    ok: false,
+    provider: 'none',
+    bucket,
+    publicUrlConfigured: false,
+    publicUrlReachable: null,
+    missingEnvVars: missingR2Vars,
+    error: `Permanent storage is not configured on the server. Missing environment variable(s): ${missingR2Vars.join(', ')}`,
+    checkedAt: new Date().toISOString(),
+  };
+}
 
 export interface UploadOptions {
   folder: string;
@@ -236,7 +413,7 @@ export async function uploadToStorage(
 
     const fileName = options.publicId ? `${options.publicId}.${ext}` : `${Date.now()}.${ext}`;
     const objectKey = options.folder ? `${options.folder}/${fileName}` : fileName;
-    const targetBucket = options.bucket || R2_GENERATED_BUCKET;
+    const targetBucket = options.bucket || getGeneratedBucketName();
 
     console.log(`[Storage] Uploading ${Math.round(buffer.length / 1024)}KB to R2 bucket '${targetBucket}' key '${objectKey}'`);
 
@@ -295,9 +472,9 @@ export async function uploadToStorage(
     const modPubUrl = (process.env.R2_MODELS_PUBLIC_URL || process.env.R2_PUBLIC_URL || R2_MODELS_PUBLIC_URL || '').replace(/\/$/, '');
 
     let fileUrl: string;
-    if (targetBucket === R2_IMAGES_BUCKET) {
+    if (targetBucket === getImagesBucketName() && targetBucket !== getGeneratedBucketName()) {
       fileUrl = imgPubUrl ? `${imgPubUrl}/${objectKey}` : `/api/images/${objectKey}`;
-    } else if (targetBucket === R2_MODELS_BUCKET) {
+    } else if (targetBucket === getModelsBucketName() && targetBucket !== getGeneratedBucketName()) {
       fileUrl = modPubUrl ? `${modPubUrl}/${objectKey}` : `/api/images/${objectKey}`;
     } else {
       fileUrl = genPubUrl ? `${genPubUrl}/${objectKey}` : `/api/images/${objectKey}`;
@@ -402,7 +579,7 @@ export async function uploadAdminTemplateAsset(
   assetName: string
 ): Promise<string> {
   const res = await uploadToStorage(fileInput, {
-    bucket: R2_IMAGES_BUCKET,
+    bucket: getImagesBucketName(),
     folder: `templates/${templateSlug}`,
     publicId: assetName.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
   });
@@ -418,7 +595,7 @@ export async function uploadAdminModelAsset(
   modelName: string
 ): Promise<string> {
   const res = await uploadToStorage(fileInput, {
-    bucket: R2_MODELS_BUCKET,
+    bucket: getModelsBucketName(),
     folder: 'coutureai/admin/models',
     publicId: modelName.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
   });
@@ -436,7 +613,7 @@ export async function uploadCustomerSwatchAsset(
   slotId: string
 ): Promise<string> {
   const res = await uploadToStorage(fileInput, {
-    bucket: R2_GENERATED_BUCKET,
+    bucket: getGeneratedBucketName(),
     folder: `coutureai/users/${userId}/swatches/${orderId}`,
     publicId: `slot_${slotId}_${Date.now()}`,
   });
@@ -455,7 +632,7 @@ export async function uploadGeneratedAsset(
   productInfo?: { productName?: string; stockCode?: string }
 ): Promise<string> {
   const res = await uploadToStorage(fileInput, {
-    bucket: R2_GENERATED_BUCKET,
+    bucket: getGeneratedBucketName(),
     folder: `coutureai/users/${userId}/generated/${orderId}`,
     publicId: `pose_${poseId}_${Date.now()}`,
     productName: productInfo?.productName,
