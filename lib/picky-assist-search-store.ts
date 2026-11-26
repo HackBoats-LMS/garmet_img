@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 
 export interface RecordedSearchResponse {
   id: string;
+  searchId?: string;
   timestamp: string;
   query?: string;
   found: boolean;
@@ -36,10 +37,32 @@ try {
   inMemorySearchStore = [];
 }
 
+function hasProductFields(obj: any): boolean {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+  return Boolean(
+    obj.stock_code ||
+      obj.stockCode ||
+      obj.product_id ||
+      obj.productId ||
+      obj.retailer_id ||
+      obj.sku ||
+      obj.SKU ||
+      obj.variant_code ||
+      obj.variantCode ||
+      obj.code1 ||
+      obj.item_group_id ||
+      obj.product_name ||
+      obj.productName ||
+      obj.title ||
+      obj.name
+  );
+}
+
 /**
  * Extracts product details and query from a Picky Assist search callback payload
  */
 export function parseSearchCallbackPayload(payload: any): {
+  searchId?: string;
   query?: string;
   found: boolean;
   product?: any;
@@ -49,72 +72,110 @@ export function parseSearchCallbackPayload(payload: any): {
     return { found: false, summary: 'Empty or invalid payload' };
   }
 
-  // Find candidate product object
+  const searchId = payload.searchId || payload.search_id || undefined;
   let product: any = null;
-  let query = payload.query || payload.search || payload.stock_code || payload.stockCode || payload.code1 || payload.identifier;
+  let query =
+    payload.query ||
+    payload.search ||
+    payload.stock_code ||
+    payload.stockCode ||
+    payload.code1 ||
+    payload.identifier;
 
-  // If payload has 'result' that is a string containing JSON
-  let unwrapped = payload;
-  if (typeof payload.result === 'string' && payload.result.trim().startsWith('{')) {
-    try {
-      unwrapped = JSON.parse(payload.result);
-    } catch {
-      // payload.result was not valid JSON, keep as raw string
+  // Unwrap nested result/data/product strings or objects (supports both {...} and [...] JSON strings)
+  let unwrapped: any = payload;
+  let cameFromNestedField = false;
+
+  if (typeof payload.result === 'string') {
+    const trimmedRes = payload.result.trim();
+    if (trimmedRes.startsWith('{') || trimmedRes.startsWith('[')) {
+      try {
+        unwrapped = JSON.parse(trimmedRes);
+        cameFromNestedField = true;
+      } catch {
+        // Keep raw payload if JSON parse fails
+      }
     }
+  } else if (payload.result && typeof payload.result === 'object') {
+    unwrapped = payload.result;
+    cameFromNestedField = true;
   } else if (payload.data && typeof payload.data === 'object') {
     unwrapped = payload.data;
+    cameFromNestedField = true;
   } else if (payload.product && typeof payload.product === 'object') {
     unwrapped = payload.product;
+    cameFromNestedField = true;
   }
 
   // Check array of records
   let records: any[] = [];
   if (Array.isArray(unwrapped)) {
     records = unwrapped;
-  } else if (Array.isArray(unwrapped.records)) {
-    records = unwrapped.records;
-  } else if (Array.isArray(unwrapped.data)) {
-    records = unwrapped.data;
-  } else if (Array.isArray(unwrapped.items)) {
-    records = unwrapped.items;
-  } else if (Array.isArray(unwrapped.result)) {
-    records = unwrapped.result;
+  } else if (unwrapped && typeof unwrapped === 'object') {
+    if (Array.isArray(unwrapped.records)) {
+      records = unwrapped.records;
+    } else if (Array.isArray(unwrapped.data)) {
+      records = unwrapped.data;
+    } else if (Array.isArray(unwrapped.items)) {
+      records = unwrapped.items;
+    } else if (Array.isArray(unwrapped.products)) {
+      records = unwrapped.products;
+    } else if (Array.isArray(unwrapped.result)) {
+      records = unwrapped.result;
+    }
   }
 
-  if (records.length > 0) {
-    product = records[0];
-  } else if (unwrapped.stock_code || unwrapped.stockCode || unwrapped.product_id || unwrapped.code1 || unwrapped.product_name) {
-    product = unwrapped;
-  }
-
-  let found = false;
-  let summary = '';
-
-  if (product && Object.keys(product).length > 0) {
-    found = true;
-    const title = product.product_name || product.title || product.productName || 'Product';
-    const code = product.stock_code || product.stockCode || product.product_id || product.code1 || query || 'item';
-    summary = `Found product '${title}' (${code}) in Picky Assist`;
-    if (!query) query = code;
-  } else if (
-    payload.result === '1' ||
-    payload.result === 1 ||
-    payload.result === true ||
-    payload.result === 'true' ||
-    (typeof payload.result === 'number' && payload.result > 0) ||
-    (typeof payload.total_records === 'number' && payload.total_records > 0)
-  ) {
-    found = true;
-    summary = `Product exists in Picky Assist (${payload.result || payload.total_records} match found)`;
-  } else if (
+  const isExplicitEmptyResult =
     payload.result === '' ||
     payload.result === null ||
     payload.result === '0' ||
     payload.result === 0 ||
     payload.result === false ||
     payload.result === 'false' ||
-    payload.total_records === 0
+    payload.total_records === 0 ||
+    payload.count === 0 ||
+    payload.exists === false ||
+    payload.found === false;
+
+  if (records.length > 0) {
+    product = records[0];
+  } else if (!isExplicitEmptyResult && unwrapped && typeof unwrapped === 'object') {
+    // Only treat root payload as a product if it wasn't just query params + empty result
+    if (cameFromNestedField ? hasProductFields(unwrapped) : Boolean(unwrapped.stock_code || unwrapped.stockCode || unwrapped.product_id || unwrapped.sku || unwrapped.retailer_id || unwrapped.code1 || unwrapped.product_name || unwrapped.productName)) {
+      product = unwrapped;
+    }
+  }
+
+  let found = false;
+  let summary = '';
+
+  if (product && typeof product === 'object' && Object.keys(product).length > 0) {
+    found = true;
+    const title = product.product_name || product.title || product.productName || product.name || 'Product';
+    const code =
+      product.stock_code ||
+      product.stockCode ||
+      product.product_id ||
+      product.sku ||
+      product.code1 ||
+      query ||
+      'item';
+    summary = `Found product '${title}' (${code}) in Picky Assist`;
+    if (!query) query = code;
+  } else if (
+    payload.exists === true ||
+    payload.found === true ||
+    payload.result === '1' ||
+    payload.result === 1 ||
+    payload.result === true ||
+    payload.result === 'true' ||
+    (typeof payload.result === 'number' && payload.result > 0) ||
+    (typeof payload.total_records === 'number' && payload.total_records > 0) ||
+    (typeof payload.count === 'number' && payload.count > 0)
   ) {
+    found = true;
+    summary = `Product exists in Picky Assist (${payload.result || payload.total_records || payload.count || 1} match found)`;
+  } else if (isExplicitEmptyResult) {
     found = false;
     summary = 'Picky Assist returned 0 records (product not found)';
   } else {
@@ -122,18 +183,19 @@ export function parseSearchCallbackPayload(payload: any): {
     summary = 'Search callback received with no matching product data';
   }
 
-  return { query, found, product, summary };
+  return { searchId, query, found, product, summary };
 }
 
 /**
  * Saves an incoming search callback response
  */
 export function saveSearchResponse(payload: any): RecordedSearchResponse {
-  const { query, found, product, summary } = parseSearchCallbackPayload(payload);
+  const { searchId, query, found, product, summary } = parseSearchCallbackPayload(payload);
   const id = `sr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
   const entry: RecordedSearchResponse = {
     id,
+    searchId,
     timestamp: new Date().toISOString(),
     query,
     found,
@@ -156,9 +218,11 @@ export function saveSearchResponse(payload: any): RecordedSearchResponse {
       console.warn('[Search Store] Async file persist note:', err?.message || err);
     });
 
-  // Emit event for any asynchronous awaiter
+  if (searchId) {
+    emitter.emit(`searchId:${searchId}`, entry);
+  }
   if (query) {
-    emitter.emit(`search:${query.toLowerCase().trim()}`, entry);
+    emitter.emit(`search:${String(query).toLowerCase().trim()}`, entry);
   }
   emitter.emit('search:any', entry);
 
@@ -180,30 +244,52 @@ export function getLatestSearchResponses(): RecordedSearchResponse[] {
   return inMemorySearchStore;
 }
 
+function matchesWaitCriteria(
+  entry: RecordedSearchResponse,
+  cleanKey: string,
+  minTimestamp: number,
+  searchId?: string
+): boolean {
+  const entryTs = new Date(entry.timestamp).getTime();
+  if (Number.isNaN(entryTs) || entryTs < minTimestamp) {
+    return false;
+  }
+
+  // If searchId was supplied and the callback echoed a DIFFERENT searchId, do not match
+  if (searchId && entry.searchId && entry.searchId !== searchId) {
+    return false;
+  }
+  if (searchId && entry.searchId === searchId) {
+    return true;
+  }
+
+  // Otherwise match by query identifier, or unlabelled response (e.g. bare {"result":""}) arriving after startedAt
+  if (!entry.query) return true;
+  return String(entry.query).toLowerCase().trim() === cleanKey;
+}
+
 /**
- * Asynchronously waits for a search response to arrive via webhook
+ * Asynchronously waits for a search response to arrive via webhook.
+ * Strictly ignores stale responses recorded before `startedAt`.
  */
 export async function waitForSearchResponse(
   identifier: string,
-  timeoutMs: number = 3500
+  timeoutMs: number = 8000,
+  opts?: { startedAt?: number; searchId?: string }
 ): Promise<RecordedSearchResponse | null> {
   const cleanKey = identifier.toLowerCase().trim();
+  const minTimestamp = opts?.startedAt ?? Date.now();
+  const searchId = opts?.searchId;
 
-  // 1. Check if a very recent response already arrived (in last 4 seconds)
-  const recent = inMemorySearchStore.find((r) => {
-    if (!r.query) return false;
-    const isMatch = r.query.toLowerCase().trim() === cleanKey;
-    const isFresh = Date.now() - new Date(r.timestamp).getTime() < 5000;
-    return isMatch && isFresh;
-  });
+  // 1. Check only entries recorded AFTER this search began (never return stale cache!)
+  const immediate = inMemorySearchStore.find((r) => matchesWaitCriteria(r, cleanKey, minTimestamp, searchId));
+  if (immediate) return immediate;
 
-  if (recent) return recent;
-
-  // 2. Wait for event listener
+  // 2. Wait for event listener + lightweight file poll fallback (handles worker/process separation)
   return new Promise((resolve) => {
     let resolved = false;
 
-    const onSearchResponse = (entry: RecordedSearchResponse) => {
+    const finish = (entry: RecordedSearchResponse | null) => {
       if (!resolved) {
         resolved = true;
         cleanup();
@@ -211,28 +297,45 @@ export async function waitForSearchResponse(
       }
     };
 
-    const timer = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        cleanup();
-        resolve(null);
+    const onSearchResponse = (entry: RecordedSearchResponse) => {
+      if (matchesWaitCriteria(entry, cleanKey, minTimestamp, searchId)) {
+        finish(entry);
       }
+    };
+
+    const pollInterval = setInterval(() => {
+      try {
+        if (fs.existsSync(SEARCH_RESPONSES_FILE)) {
+          const data = fs.readFileSync(SEARCH_RESPONSES_FILE, 'utf-8');
+          const diskList: RecordedSearchResponse[] = JSON.parse(data);
+          const match = diskList.find((r) => matchesWaitCriteria(r, cleanKey, minTimestamp, searchId));
+          if (match) {
+            finish(match);
+          }
+        }
+      } catch {
+        // Ignore transient read/parse races during concurrent write
+      }
+    }, 350);
+
+    const timer = setTimeout(() => {
+      finish(null);
     }, timeoutMs);
 
     const cleanup = () => {
       clearTimeout(timer);
-      emitter.removeListener(`search:${cleanKey}`, onSearchResponse);
-      emitter.removeListener('search:any', onAnyResponse);
-    };
-
-    const onAnyResponse = (entry: RecordedSearchResponse) => {
-      // If query matches or if response arrived without a query tag (e.g. empty result {"result":""})
-      if (!entry.query || entry.query.toLowerCase().trim() === cleanKey) {
-        onSearchResponse(entry);
+      clearInterval(pollInterval);
+      if (searchId) {
+        emitter.removeListener(`searchId:${searchId}`, onSearchResponse);
       }
+      emitter.removeListener(`search:${cleanKey}`, onSearchResponse);
+      emitter.removeListener('search:any', onSearchResponse);
     };
 
-    emitter.once(`search:${cleanKey}`, onSearchResponse);
-    emitter.on('search:any', onAnyResponse);
+    if (searchId) {
+      emitter.on(`searchId:${searchId}`, onSearchResponse);
+    }
+    emitter.on(`search:${cleanKey}`, onSearchResponse);
+    emitter.on('search:any', onSearchResponse);
   });
 }

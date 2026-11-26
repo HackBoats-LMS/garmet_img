@@ -6,9 +6,10 @@ import path from 'path';
 import fs from 'fs';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
-import { uploadGeneratedAsset, uploadToStorage, isStorageConfigured } from '@/lib/storage';
+import { uploadGeneratedAsset, uploadToStorage, isStorageConfigured, verifyStorageHealth } from '@/lib/storage';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
 import { getSetting } from '@/lib/settings';
+import { getMergedHardcodedTemplate } from '@/lib/hardcoded-templates';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -114,20 +115,8 @@ export async function POST(req: NextRequest) {
 
     const userId = reqUserId || (session?.user as any)?.id || 'anonymous_user';
 
-    // Fetch Template from DB (support both cuid ID and slug like 'saree')
-    const template = templateId ? await (async () => {
-      let t = await prisma.garmentTemplate.findUnique({
-        where: { id: templateId },
-        include: { poses: true }
-      });
-      if (!t) {
-        t = await prisma.garmentTemplate.findFirst({
-          where: { slug: templateId },
-          include: { poses: true }
-        });
-      }
-      return t;
-    })() : null;
+    // Fetch Template from Hardcoded Registry (with DB fallback for legacy records)
+    const template = templateId ? await getMergedHardcodedTemplate(templateId) : null;
 
     // Robust Pose Lookup: by ID, by Name, by Preview URL, or static fallback
     const incomingPoseName = (body.poseName || '').trim();
@@ -764,6 +753,22 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
       console.log(`[app/api/generate/route.ts] Standard non-saree pipeline active`);
     }
 
+    if (!body.allowTemporaryStorage) {
+      const storageHealth = await verifyStorageHealth(false);
+      if (!storageHealth.ok) {
+        return NextResponse.json(
+          {
+            error:
+              storageHealth.error ||
+              'Permanent storage (Cloudflare R2) is not configured or unreachable. Configure R2 environment variables on the server before generating.',
+            storageError: true,
+            missingEnvVars: storageHealth.missingEnvVars,
+          },
+          { status: 503 }
+        );
+      }
+    }
+
     const kieRequestBody = buildKieTaskPayload({
       modelId: actualModelStr,
       prompt: activePrompt,
@@ -1002,7 +1007,15 @@ MANDATORY: Follow these user corrections precisely. Ensure referenced swatches (
           let permanentUrl = finalImageUrl;
           const isKieTemp = finalImageUrl.includes('tempfile') || finalImageUrl.includes('aiquickdraw') || finalImageUrl.includes('kie.ai');
 
-          if (isStorageConfigured()) {
+          if (!isStorageConfigured()) {
+            if (isKieTemp) {
+              return NextResponse.json({
+                error: 'Permanent storage (Cloudflare R2 / Cloudinary) is not configured on the server. Refusing to save temporary Kie.ai URL that will expire.',
+                storageError: true,
+                taskId,
+              }, { status: 503 });
+            }
+          } else {
             let uploadSuccess = false;
             for (let rAttempt = 1; rAttempt <= 3; rAttempt++) {
               try {

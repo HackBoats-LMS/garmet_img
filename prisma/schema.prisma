@@ -160,6 +160,10 @@ model Product {
   @@index([createdAt])
   @@index([categoryId, updatedAt])
   @@index([subCategoryId, updatedAt])
+  @@index([syncedAt])
+  @@index([status, quantity])
+  @@index([clothType])
+  @@index([color])
 }
 
 model InventoryLog {

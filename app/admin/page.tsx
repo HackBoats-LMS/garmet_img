@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Layers, Users, ShoppingBag, Plus, ArrowRight, TrendingUp, Cpu } from 'lucide-react';
+import { Layers, Users, ShoppingBag, ArrowRight, TrendingUp, Cpu } from 'lucide-react';
 import { Button } from '@/app/components/ui/Button';
 import { Card } from '@/app/components/ui/Card';
 import { Badge } from '@/app/components/ui/Badge';
@@ -71,12 +71,6 @@ export default function AdminDashboardPage() {
               AI Engine Hub
             </Button>
           </Link>
-          <Link href="/admin/templates/new">
-            <Button size="md">
-              <Plus className="w-4 h-4" />
-              New Template
-            </Button>
-          </Link>
         </div>
       </div>
 
@@ -120,13 +114,8 @@ export default function AdminDashboardPage() {
         {templates.length === 0 && !loading ? (
           <Card className="p-12 text-center">
             <Layers className="w-12 h-12 text-charcoal-light/40 mx-auto" />
-            <h3 className="mt-4 font-display text-lg font-bold text-charcoal">No templates created yet</h3>
-            <p className="mt-2 text-sm text-charcoal-muted">Create your first garment photoshoot template (e.g. Saree, Kurti)</p>
-            <Link href="/admin/templates/new" className="inline-block mt-6">
-              <Button>
-                <Plus className="w-4 h-4" /> Create Template
-              </Button>
-            </Link>
+            <h3 className="mt-4 font-display text-lg font-bold text-charcoal">No templates available</h3>
+            <p className="mt-2 text-sm text-charcoal-muted">Templates are hardcoded in <code className="font-mono text-xs bg-cream px-1.5 py-0.5 rounded">lib/hardcoded-templates.ts</code>.</p>
           </Card>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">

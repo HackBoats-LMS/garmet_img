@@ -56,6 +56,52 @@ async function syncCompletedImageToProduct(
   }
 }
 
+async function persistPermanentGeneratedImage(
+  rawUrl: string,
+  userId: string,
+  orderId: string,
+  poseId: string,
+  taskId: string,
+  provider: string
+): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  const isPermanentAlready =
+    rawUrl.includes('.r2.dev') ||
+    rawUrl.includes('.r2.cloudflarestorage.com') ||
+    rawUrl.includes('res.cloudinary.com') ||
+    rawUrl.includes('cloudinary.com');
+
+  if (isPermanentAlready) {
+    return { ok: true, url: rawUrl };
+  }
+
+  if (!isStorageConfigured()) {
+    return {
+      ok: false,
+      error:
+        'Permanent storage (Cloudflare R2 / Cloudinary) is not configured on the server. Refusing to save temporary link that will expire.',
+    };
+  }
+
+  for (let rAttempt = 1; rAttempt <= 3; rAttempt++) {
+    try {
+      console.log(`[task-status] Uploading ${provider} asset to permanent storage (attempt ${rAttempt}/3)...`);
+      const permanentUrl = await uploadGeneratedAsset(rawUrl, userId, orderId, poseId);
+      console.log(`[task-status] ✅ Asset permanently stored: ${permanentUrl}`);
+      return { ok: true, url: permanentUrl };
+    } catch (cErr: any) {
+      console.warn(`[task-status] Permanent upload attempt ${rAttempt}/3 failed:`, cErr?.message || cErr);
+      if (rAttempt < 3) {
+        await new Promise((r) => setTimeout(r, rAttempt * 1500));
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    error: `Image generated (${taskId}), but failed to save permanently to Cloudflare R2 storage. Please retry.`,
+  };
+}
+
 export async function GET(req: NextRequest) {
   try {
     const session = await auth().catch(() => null);
@@ -204,35 +250,23 @@ export async function GET(req: NextRequest) {
         }
 
           if (finalImageUrl) {
-            let permanentUrl = finalImageUrl;
-            const isKieTemp = finalImageUrl.includes('tempfile') || finalImageUrl.includes('aiquickdraw') || finalImageUrl.includes('kie.ai');
-
-            if (isStorageConfigured()) {
-              let uploadSuccess = false;
-              for (let rAttempt = 1; rAttempt <= 3; rAttempt++) {
-                try {
-                  console.log(`[task-status] Uploading generated asset to R2 (attempt ${rAttempt}/3)...`);
-                  permanentUrl = await uploadGeneratedAsset(finalImageUrl, userId, orderId, poseId);
-                  uploadSuccess = true;
-                  console.log(`[task-status] ✅ Generated asset permanently stored in R2: ${permanentUrl}`);
-                  break;
-                } catch (cErr: any) {
-                  console.warn(`[task-status] R2 upload attempt ${rAttempt}/3 failed:`, cErr?.message || cErr);
-                  if (rAttempt < 3) {
-                    await new Promise(r => setTimeout(r, rAttempt * 1500));
-                  }
-                }
-              }
-
-              if (!uploadSuccess && isKieTemp) {
-                return NextResponse.json({
-                  status: 'failed',
-                  error: 'Image generated, but failed to save permanently to Cloudflare R2 storage. Please retry.',
-                  taskId,
-                  provider: 'kie-ai'
-                });
-              }
+            const persisted = await persistPermanentGeneratedImage(
+              finalImageUrl,
+              userId,
+              orderId,
+              poseId,
+              taskId,
+              'kie-ai'
+            );
+            if (!persisted.ok) {
+              return NextResponse.json({
+                status: 'failed',
+                error: persisted.error,
+                taskId,
+                provider: 'kie-ai',
+              });
             }
+            const permanentUrl = persisted.url;
 
             if (orderId && orderId !== 'order') {
               try {
@@ -336,14 +370,23 @@ export async function GET(req: NextRequest) {
                 }
 
                 if (imageUrl) {
-                  let permanentUrl = imageUrl;
-                  if (isStorageConfigured()) {
-                    try {
-                      permanentUrl = await uploadGeneratedAsset(imageUrl, userId, orderId, poseId);
-                    } catch (cErr) {
-                      console.warn('[task-status] Cloudinary upload fallback:', cErr);
-                    }
+                  const persisted = await persistPermanentGeneratedImage(
+                    imageUrl,
+                    userId,
+                    orderId,
+                    poseId,
+                    taskId,
+                    'segmind'
+                  );
+                  if (!persisted.ok) {
+                    return NextResponse.json({
+                      status: 'failed',
+                      error: persisted.error,
+                      taskId,
+                      provider: 'segmind',
+                    });
                   }
+                  const permanentUrl = persisted.url;
 
                   if (orderId && orderId !== 'order') {
                     try {
@@ -424,14 +467,26 @@ export async function GET(req: NextRequest) {
         imageUrl = output.image_base64.startsWith('data:') ? output.image_base64 : `data:image/png;base64,${output.image_base64}`;
       }
 
-      let permanentUrl = imageUrl;
-      if (imageUrl && isStorageConfigured()) {
-        try {
-          permanentUrl = await uploadGeneratedAsset(imageUrl, userId, orderId, poseId);
-        } catch (cErr) {
-          console.warn('[task-status] Cloudinary upload failed:', cErr);
-        }
+      if (!imageUrl) {
+        return NextResponse.json({ status: 'failed', error: 'No image data found in PiAPI response', taskId, provider: 'piapi' });
       }
+      const persisted = await persistPermanentGeneratedImage(
+        imageUrl,
+        userId,
+        orderId,
+        poseId,
+        taskId,
+        'piapi'
+      );
+      if (!persisted.ok) {
+        return NextResponse.json({
+          status: 'failed',
+          error: persisted.error,
+          taskId,
+          provider: 'piapi',
+        });
+      }
+      const permanentUrl = persisted.url;
 
       if (orderId && orderId !== 'order') {
         try {

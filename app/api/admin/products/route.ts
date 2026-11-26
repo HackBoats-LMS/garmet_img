@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import { addPickyProduct } from '@/lib/picky-assist-push';
@@ -19,66 +20,223 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = req.nextUrl;
-    const search = searchParams.get('search') || '';
+    const search = (searchParams.get('search') || '').trim();
     const categoryId = searchParams.get('categoryId') || '';
     const subCategoryId = searchParams.get('subCategoryId') || '';
+    const categorized = searchParams.get('categorized') || '';
     const status = searchParams.get('status') || '';
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '30');
+    const stockHealth = searchParams.get('stockHealth') || '';
+    const syncStatus = searchParams.get('syncStatus') || '';
+    const missingImage = searchParams.get('missingImage') || '';
+    const missingPrice = searchParams.get('missingPrice') || '';
+    const missingAi = searchParams.get('missingAi') || '';
+    const clothType = (searchParams.get('clothType') || '').trim();
+    const color = (searchParams.get('color') || '').trim();
+    const sort = searchParams.get('sort') || 'newest';
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1') || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '20') || 20));
     const cursorId = searchParams.get('cursor'); // CUID cursor (time-ordered)
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const andConditions: Prisma.ProductWhereInput[] = [];
+
     if (search) {
-      where.OR = [
-        { stockCode: { contains: search, mode: 'insensitive' } },
-        { code1: { contains: search, mode: 'insensitive' } },
-        { productName: { contains: search, mode: 'insensitive' } },
-        { color: { contains: search, mode: 'insensitive' } },
-        { clothType: { contains: search, mode: 'insensitive' } },
-        { productCode: { contains: search, mode: 'insensitive' } },
-        { tags: { has: search } },
-      ];
+      andConditions.push({
+        OR: [
+          { stockCode: { contains: search, mode: 'insensitive' } },
+          { code1: { contains: search, mode: 'insensitive' } },
+          { productName: { contains: search, mode: 'insensitive' } },
+          { color: { contains: search, mode: 'insensitive' } },
+          { clothType: { contains: search, mode: 'insensitive' } },
+          { productCode: { contains: search, mode: 'insensitive' } },
+          { tags: { has: search } },
+        ],
+      });
     }
+
+    if (categorized === 'true') {
+      andConditions.push({ categoryId: { not: null } });
+    } else if (categorized === 'false') {
+      andConditions.push({ categoryId: null });
+    }
+
     if (categoryId === 'uncategorized' || categoryId === 'null') {
-      where.categoryId = null;
+      andConditions.push({ categoryId: null });
     } else if (categoryId) {
-      where.categoryId = categoryId;
+      andConditions.push({ categoryId });
     }
-    if (subCategoryId) where.subCategoryId = subCategoryId;
-    if (status) where.status = status;
+
+    if (subCategoryId) {
+      andConditions.push({ subCategoryId });
+    }
+
+    if (stockHealth === 'low' || status === 'LOW_STOCK') {
+      andConditions.push({ status: 'ACTIVE', quantity: { gt: 0, lte: 3 } });
+    } else if (status) {
+      andConditions.push({ status: status as any });
+    }
+
+    if (syncStatus === 'unsynced') {
+      andConditions.push({ syncedAt: null });
+    } else if (syncStatus === 'modified') {
+      const modifiedRows = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "Product"
+        WHERE "syncedAt" IS NOT NULL AND "updatedAt" > "syncedAt" + INTERVAL '1 second'
+      `;
+      andConditions.push({ id: { in: modifiedRows.map((r) => r.id) } });
+    } else if (syncStatus === 'synced') {
+      const syncedRows = await prisma.$queryRaw<{ id: string }[]>`
+        SELECT id FROM "Product"
+        WHERE "syncedAt" IS NOT NULL AND "updatedAt" <= "syncedAt" + INTERVAL '1 second'
+      `;
+      andConditions.push({ id: { in: syncedRows.map((r) => r.id) } });
+    }
+
+    if (missingImage === 'true') {
+      andConditions.push({ coverImageUrl: null, generatedImages: { equals: Prisma.DbNull } });
+    } else if (missingImage === 'false') {
+      andConditions.push({
+        OR: [
+          { coverImageUrl: { not: null } },
+          { generatedImages: { not: Prisma.DbNull } },
+        ],
+      });
+    }
+
+    if (missingPrice === 'true') {
+      andConditions.push({ retailPrice: null, unitPrice: null });
+    } else if (missingPrice === 'false') {
+      andConditions.push({
+        OR: [{ retailPrice: { not: null } }, { unitPrice: { not: null } }],
+      });
+    }
+
+    if (missingAi === 'true') {
+      andConditions.push({ generatedImages: { equals: Prisma.DbNull } });
+    } else if (missingAi === 'false') {
+      andConditions.push({ generatedImages: { not: Prisma.DbNull } });
+    }
+
+    if (clothType) {
+      andConditions.push({ clothType: { equals: clothType, mode: 'insensitive' } });
+    }
+
+    if (color) {
+      andConditions.push({ color: { equals: color, mode: 'insensitive' } });
+    }
+
+    const where: Prisma.ProductWhereInput = andConditions.length > 0 ? { AND: andConditions } : {};
+
+    let orderBy: Prisma.ProductOrderByWithRelationInput | Prisma.ProductOrderByWithRelationInput[];
+    switch (sort) {
+      case 'updated':
+        orderBy = { updatedAt: 'desc' };
+        break;
+      case 'qty_asc':
+        orderBy = [{ quantity: 'asc' }, { id: 'desc' }];
+        break;
+      case 'qty_desc':
+        orderBy = [{ quantity: 'desc' }, { id: 'desc' }];
+        break;
+      case 'price_asc':
+        orderBy = [{ retailPrice: { sort: 'asc', nulls: 'last' } }, { unitPrice: { sort: 'asc', nulls: 'last' } }];
+        break;
+      case 'price_desc':
+        orderBy = [{ retailPrice: { sort: 'desc', nulls: 'last' } }, { unitPrice: { sort: 'desc', nulls: 'last' } }];
+        break;
+      case 'code_asc':
+        orderBy = { stockCode: 'asc' };
+        break;
+      default:
+        orderBy = { id: 'desc' };
+        break;
+    }
 
     // Use cursor pagination if cursor provided, otherwise fall back to offset
     const useCursor = !!cursorId;
     const take = limit + 1;
 
-    let products;
-    if (useCursor) {
-      products = await prisma.product.findMany({
-        where,
-        include: {
-          category: { select: { id: true, name: true, slug: true } },
-          subCategory: { select: { id: true, name: true, slug: true } },
-          _count: { select: { inventoryLogs: true } },
-        },
-        orderBy: { id: 'desc' },
-        cursor: { id: cursorId },
-        take,
-      });
-    } else {
-      products = await prisma.product.findMany({
-        where,
-        include: {
-          category: { select: { id: true, name: true, slug: true } },
-          subCategory: { select: { id: true, name: true, slug: true } },
-          _count: { select: { inventoryLogs: true } },
-        },
-        orderBy: { id: 'desc' },
-        skip,
-        take: limit,
-      });
-    }
-    const total = await prisma.product.count({ where });
+    const productSelect = {
+      id: true,
+      stockCode: true,
+      code1: true,
+      productName: true,
+      color: true,
+      clothType: true,
+      retailPrice: true,
+      unitPrice: true,
+      dealerPrice: true,
+      quantity: true,
+      length_Size: true,
+      sizeInventory: true,
+      reservedQty: true,
+      soldQty: true,
+      status: true,
+      coverImageUrl: true,
+      generatedImages: true,
+      syncedAt: true,
+      updatedAt: true,
+      category: { select: { id: true, name: true, slug: true } },
+      subCategory: { select: { id: true, name: true, slug: true } },
+    } satisfies Prisma.ProductSelect;
+
+    const [
+      products,
+      total,
+      totalAll,
+      inStockCount,
+      outOfStockCount,
+      lowStockCount,
+      categorizedCount,
+      uncategorizedCount,
+      unsyncedCount,
+      modifiedCountRows,
+      clothTypesRaw,
+      colorsRaw,
+    ] = await Promise.all([
+      useCursor
+        ? prisma.product.findMany({
+            where,
+            select: productSelect,
+            orderBy,
+            cursor: { id: cursorId },
+            take,
+          })
+        : prisma.product.findMany({
+            where,
+            select: productSelect,
+            orderBy,
+            skip,
+            take: limit,
+          }),
+      prisma.product.count({ where }),
+      prisma.product.count(),
+      prisma.product.count({ where: { status: 'ACTIVE' } }),
+      prisma.product.count({ where: { status: 'OUT_OF_STOCK' } }),
+      prisma.product.count({ where: { status: 'ACTIVE', quantity: { gt: 0, lte: 3 } } }),
+      prisma.product.count({ where: { categoryId: { not: null } } }),
+      prisma.product.count({ where: { categoryId: null } }),
+      prisma.product.count({ where: { syncedAt: null } }),
+      prisma.$queryRaw<{ count: number }[]>`
+        SELECT COUNT(*)::int AS count FROM "Product"
+        WHERE "syncedAt" IS NOT NULL AND "updatedAt" > "syncedAt" + INTERVAL '1 second'
+      `,
+      prisma.product.findMany({
+        where: { clothType: { not: null } },
+        distinct: ['clothType'],
+        select: { clothType: true },
+        orderBy: { clothType: 'asc' },
+      }),
+      prisma.product.findMany({
+        where: { color: { not: null } },
+        distinct: ['color'],
+        select: { color: true },
+        orderBy: { color: 'asc' },
+      }),
+    ]);
+
+    const modifiedCount = modifiedCountRows[0]?.count ?? 0;
+    const syncedCount = Math.max(0, totalAll - unsyncedCount - modifiedCount);
 
     // Determine if there's a next page
     const hasNextPage = products.length > limit;
@@ -102,8 +260,11 @@ export async function GET(req: NextRequest) {
         cover = sortedGenList[0];
       }
 
+      const { generatedImages: _gen, ...rest } = p;
+
       return {
-        ...p,
+        ...rest,
+        hasAi: sortedGenList.length > 0,
         title: p.productName,
         friendlyCode: p.code1,
         price: p.retailPrice ?? p.unitPrice,
@@ -113,12 +274,25 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    const uncategorizedCount = await prisma.product.count({ where: { categoryId: null } });
-
-    return NextResponse.json({ 
-      products: formattedProducts, 
-      total, 
+    return NextResponse.json({
+      products: formattedProducts,
+      total,
       uncategorizedCount,
+      stats: {
+        total: totalAll,
+        inStock: inStockCount,
+        outOfStock: outOfStockCount,
+        lowStock: lowStockCount,
+        categorized: categorizedCount,
+        uncategorized: uncategorizedCount,
+        synced: syncedCount,
+        modified: modifiedCount,
+        unsynced: unsyncedCount,
+      },
+      facets: {
+        clothTypes: clothTypesRaw.map((c) => c.clothType).filter(Boolean) as string[],
+        colors: colorsRaw.map((c) => c.color).filter(Boolean) as string[],
+      },
       nextCursor,
       hasNextPage,
       limit,
@@ -222,7 +396,18 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    addPickyProduct(product).catch(console.error);
+    addPickyProduct(product)
+      .then(async (res) => {
+        if (res?.success) {
+          await prisma.product
+            .update({
+              where: { id: product.id },
+              data: { syncedAt: new Date() },
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(console.error);
 
     return NextResponse.json({ product }, { status: 201 });
   } catch (error: any) {

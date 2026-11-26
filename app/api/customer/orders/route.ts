@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
+import { resolveOrEnsureTemplateDbId } from '@/lib/hardcoded-templates';
 
 function mergeAndDeduplicateImages(
   existingImages: Record<string, any> = {},
@@ -171,10 +172,12 @@ export async function POST(req: NextRequest) {
       ? mergeAndDeduplicateImages({}, generatedImages as Record<string, any>)
       : null;
 
+    const resolvedTemplateId = await resolveOrEnsureTemplateDbId(templateId);
+
     const order = await prisma.customerOrder.create({
       data: {
         userId: effectiveUserId,
-        templateId,
+        templateId: resolvedTemplateId,
         productName: productName || null,
         stockCode: stockCode || null,
         description: description || null,

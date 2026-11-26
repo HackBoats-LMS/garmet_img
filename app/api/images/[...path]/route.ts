@@ -1,24 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand } from '@aws-sdk/client-s3';
 import fs from 'fs';
 import path from 'path';
-
-// Security: Never hardcode credentials — always read from environment only
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || '';
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || '';
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || '';
-const BUCKET_NAME = process.env.R2_IMAGES_BUCKET || 'images';
-
-const s3Client = R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
-  ? new S3Client({
-      region: 'auto',
-      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: R2_ACCESS_KEY_ID,
-        secretAccessKey: R2_SECRET_ACCESS_KEY,
-      },
-    })
-  : null;
+import { getS3Client } from '@/lib/storage';
 
 function getMimeType(filename: string): string {
   const ext = path.extname(filename).toLowerCase();
@@ -53,11 +37,18 @@ export async function GET(
       return NextResponse.json({ error: 'Image path required' }, { status: 400 });
     }
 
-    // 1. Try to fetch from Cloudflare R2 (checks images and models buckets)
+    // 1. Try to fetch from Cloudflare R2 (checks generated, images, and models buckets dynamically)
+    const s3Client = getS3Client();
     if (s3Client) {
-      const bucketsToCheck = key.includes('models')
-        ? [process.env.R2_MODELS_BUCKET || 'models', BUCKET_NAME]
-        : [BUCKET_NAME, process.env.R2_MODELS_BUCKET || 'models'];
+      const imagesBucket = (process.env.R2_IMAGES_BUCKET || process.env.R2_BUCKET_NAME || 'images').trim();
+      const generatedBucket = (process.env.R2_GENERATED_BUCKET || process.env.R2_BUCKET_NAME || 'generatedimages').trim();
+      const modelsBucket = (process.env.R2_MODELS_BUCKET || process.env.R2_BUCKET_NAME || 'models').trim();
+      const rawOrder = key.includes('models')
+        ? [modelsBucket, imagesBucket, generatedBucket]
+        : key.includes('generated')
+        ? [generatedBucket, imagesBucket, modelsBucket]
+        : [imagesBucket, generatedBucket, modelsBucket];
+      const bucketsToCheck = Array.from(new Set(rawOrder.filter(Boolean)));
 
       for (const bucket of bucketsToCheck) {
         try {

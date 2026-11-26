@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { auth } from '@/lib/auth';
-import { uploadToStorage } from '@/lib/storage';
+import { getMergedHardcodedTemplate, resolveOrEnsureTemplateDbId } from '@/lib/hardcoded-templates';
 
-// GET /api/admin/templates/[id]
+// GET /api/admin/templates/[id] — Read hardcoded template definition
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await auth();
@@ -12,14 +12,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const { id } = await params;
-    const template = await prisma.garmentTemplate.findUnique({
-      where: { id },
-      include: {
-        imageSlots: { orderBy: { sortOrder: 'asc' } },
-        customOptions: { orderBy: { sortOrder: 'asc' } },
-        poses: { orderBy: { sortOrder: 'asc' } },
-      },
-    });
+    const template = await getMergedHardcodedTemplate(id);
 
     if (!template) {
       return NextResponse.json({ error: 'Template not found' }, { status: 404 });
@@ -31,7 +24,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   }
 }
 
-// PUT /api/admin/templates/[id]
+// PUT /api/admin/templates/[id] — Only allows status & customer model-pick toggles; structural edits are locked
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await auth();
@@ -41,169 +34,57 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const { id } = await params;
     const body = await req.json();
-    const {
-      name,
-      tagline,
-      coverImage,
-      description,
-      garmentType,
-      systemPrompt,
-      negativePrompt,
-      cameraSettings,
-      isActive,
-      allowModelSelection,
-      defaultModelId,
-      allowedModelIds,
-      imageSlots,
-      customOptions,
-      poses,
-    } = body;
+    const { isActive, allowModelSelection, ...rest } = body;
 
-    let finalCoverImage = coverImage;
-    if (coverImage && coverImage.startsWith('data:image/')) {
-      const uploaded = await uploadToStorage(coverImage, { 
-        bucket: 'images',
-        folder: 'templates', 
-        publicId: `template_${id}_cover_${Date.now()}`
-      });
-      finalCoverImage = uploaded.url;
+    // Reject structural modifications (slots, options, poses, prompts, etc.)
+    const disallowedKeys = Object.keys(rest).filter((k) => rest[k] !== undefined);
+    if (disallowedKeys.length > 0 && isActive === undefined && allowModelSelection === undefined) {
+      return NextResponse.json(
+        {
+          error:
+            'Template structure is hardcoded in lib/hardcoded-templates.ts and cannot be modified from the Admin Panel.',
+        },
+        { status: 403 }
+      );
     }
 
-    let finalPoses = poses;
-    if (poses && Array.isArray(poses)) {
-      finalPoses = await Promise.all(poses.map(async (pose: any, i: number) => {
-        let finalPreview = pose.previewImage;
-        if (finalPreview && finalPreview.startsWith('data:image/')) {
-          const uploaded = await uploadToStorage(finalPreview, {
-            bucket: 'images',
-            folder: 'poses',
-            publicId: `template_${id}_pose_${i}_${Date.now()}`
-          });
-          finalPreview = uploaded.url;
-        }
-        return { ...pose, previewImage: finalPreview };
-      }));
+    const updateData: Record<string, boolean> = {};
+    if (typeof isActive === 'boolean') updateData.isActive = isActive;
+    if (typeof allowModelSelection === 'boolean') updateData.allowModelSelection = allowModelSelection;
+
+    if (Object.keys(updateData).length === 0) {
+      return NextResponse.json(
+        { error: 'Only isActive and allowModelSelection toggles can be updated.' },
+        { status: 400 }
+      );
     }
 
-    let finalImageSlots = imageSlots;
-    if (imageSlots && Array.isArray(imageSlots)) {
-      finalImageSlots = await Promise.all(imageSlots.map(async (slot: any, i: number) => {
-        let finalSample = slot.sampleImageUrl;
-        if (finalSample && finalSample.startsWith('data:image/')) {
-          const uploaded = await uploadToStorage(finalSample, {
-            bucket: 'images',
-            folder: 'slots',
-            publicId: `template_${id}_slot_${i}_${Date.now()}`
-          });
-          finalSample = uploaded.url;
-        }
-        return { ...slot, sampleImageUrl: finalSample };
-      }));
-    }
-
-    // Update main template fields
-    const updateData: any = {};
-    if (name !== undefined) updateData.name = name;
-    if (tagline !== undefined) updateData.tagline = tagline;
-    if (finalCoverImage !== undefined) updateData.coverImage = finalCoverImage;
-    if (description !== undefined) updateData.description = description;
-    if (garmentType !== undefined) updateData.garmentType = garmentType;
-    if (systemPrompt !== undefined) updateData.systemPrompt = systemPrompt;
-    if (negativePrompt !== undefined) updateData.negativePrompt = negativePrompt;
-    if (cameraSettings !== undefined) updateData.cameraSettings = cameraSettings;
-    if (isActive !== undefined) updateData.isActive = isActive;
-    if (allowModelSelection !== undefined) updateData.allowModelSelection = allowModelSelection;
-    if (defaultModelId !== undefined) updateData.defaultModelId = defaultModelId;
-    if (allowedModelIds !== undefined) updateData.allowedModelIds = allowedModelIds;
-
-    // Update template
-    const template = await prisma.garmentTemplate.update({
-      where: { id },
+    const dbId = await resolveOrEnsureTemplateDbId(id);
+    await prisma.garmentTemplate.update({
+      where: { id: dbId },
       data: updateData,
     });
 
-    // Replace image slots if provided
-    if (finalImageSlots !== undefined) {
-      await prisma.imageSlot.deleteMany({ where: { templateId: id } });
-      if (finalImageSlots.length > 0) {
-        await prisma.imageSlot.createMany({
-          data: finalImageSlots.map((slot: any, i: number) => ({
-            templateId: id,
-            name: slot.name,
-            description: slot.description || null,
-            sortOrder: slot.sortOrder ?? i,
-            isRequired: slot.isRequired ?? true,
-            sampleImageUrl: slot.sampleImageUrl || null,
-          })),
-        });
-      }
-    }
-
-    // Replace custom options if provided
-    if (customOptions !== undefined) {
-      await prisma.templateOption.deleteMany({ where: { templateId: id } });
-      if (customOptions.length > 0) {
-        await prisma.templateOption.createMany({
-          data: customOptions.map((opt: any, i: number) => ({
-            templateId: id,
-            label: opt.label,
-            optionType: opt.optionType || 'radio',
-            choices: opt.choices || [],
-            sortOrder: opt.sortOrder ?? i,
-          })),
-        });
-      }
-    }
-
-    // Replace poses if provided
-    if (finalPoses !== undefined) {
-      await prisma.poseTemplate.deleteMany({ where: { templateId: id } });
-      if (finalPoses.length > 0) {
-        await prisma.poseTemplate.createMany({
-          data: finalPoses.map((pose: any, i: number) => ({
-            templateId: id,
-            name: pose.name,
-            description: pose.description || null,
-            promptSnippet: pose.promptSnippet || '',
-            purpose: pose.purpose || null,
-            fabricFocus: pose.fabricFocus || null,
-            previewImage: pose.previewImage || null,
-            category: pose.category || 'standing',
-            sortOrder: pose.sortOrder ?? i,
-          })),
-        });
-      }
-    }
-
-    // Return updated template
-    const updated = await prisma.garmentTemplate.findUnique({
-      where: { id },
-      include: {
-        imageSlots: { orderBy: { sortOrder: 'asc' } },
-        customOptions: { orderBy: { sortOrder: 'asc' } },
-        poses: { orderBy: { sortOrder: 'asc' } },
-      },
-    });
-
-    return NextResponse.json({ template: updated });
+    const template = await getMergedHardcodedTemplate(dbId);
+    return NextResponse.json({ template });
   } catch (error: any) {
     console.error('[Admin Template PUT]', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-// DELETE /api/admin/templates/[id]
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  try {
-    const session = await auth();
-    if ((session?.user as any)?.role !== 'admin') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const { id } = await params;
-    await prisma.garmentTemplate.delete({ where: { id } });
-    return NextResponse.json({ success: true });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+// DELETE /api/admin/templates/[id] — Disabled (templates are hardcoded)
+export async function DELETE() {
+  const session = await auth();
+  if ((session?.user as any)?.role !== 'admin') {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  return NextResponse.json(
+    {
+      error:
+        'Deleting templates from the Admin Panel is disabled. Templates are hardcoded in lib/hardcoded-templates.ts.',
+    },
+    { status: 403 }
+  );
 }
